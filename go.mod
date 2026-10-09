@@ -11,6 +11,7 @@ require (
 	github.com/urfave/cli/v2 v2.27.7
 	golang.org/x/sync v0.22.0
 	golang.org/x/sys v0.47.0
+	golang.org/x/term v0.45.0
 	modernc.org/sqlite v1.59.0
 )
 
