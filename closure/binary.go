@@ -25,11 +25,24 @@ func inStore(path string) bool {
 	return strings.HasPrefix(path, storeDir+"/")
 }
 
+// inRealStore reports whether the path is inside the store directory as
+// it resolves through its symbolic links. The store directory is compared
+// both as written and as resolved, so that a store reached through a link
+// (on some machines /nix is one) does not refuse its own paths. If the
+// store directory does not resolve, it is compared as written only.
+func inRealStore(path string) bool {
+	if real, err := filepath.EvalSymlinks(storeDir); err == nil {
+		return strings.HasPrefix(path, real+"/")
+	}
+	return false
+}
+
 // Binary takes the PATH of a rollout. A path inside StoreDir is taken as
 // written; any other is resolved through its symbolic links and has to
-// end inside StoreDir. It returns the binary and the store path it is in
-// (/nix/store/<name>). The binary has to be a regular file, through its
-// symbolic links.
+// end inside StoreDir. A path inside StoreDir is refused too when, through
+// its symbolic links, it ends outside it. It returns the binary and the
+// store path it is in (/nix/store/<name>). The binary has to be a regular
+// file, through its symbolic links.
 //
 // Every error names the path as it was given and says what is wrong
 // with it.
@@ -38,7 +51,8 @@ func Binary(path string) (binary, storePath string, err error) {
 		return "", "", errors.New(`the path of the binary is empty`)
 	}
 	binary = filepath.Clean(path)
-	if !filepath.IsAbs(binary) || !inStore(binary) {
+	inside := filepath.IsAbs(binary) && inStore(binary)
+	if !inside {
 		abs, err := filepath.Abs(path)
 		if err != nil {
 			return "", "", fmt.Errorf("%s: %w", path, err)
@@ -84,6 +98,20 @@ func Binary(path string) (binary, storePath string, err error) {
 		return "", "", fmt.Errorf("%s is a directory, not a binary", path)
 	case !info.Mode().IsRegular():
 		return "", "", fmt.Errorf("%s is not a regular file", path)
+	}
+	if inside {
+		// The binary is taken as written, but a link on the way may lead
+		// out of the store: the file the link ends at has to be in it.
+		resolved, err := filepath.EvalSymlinks(binary)
+		if err != nil {
+			return "", "", fmt.Errorf("%s: %w", path, err)
+		}
+		if !inStore(resolved) && !inRealStore(resolved) {
+			if resolved == binary {
+				return "", "", fmt.Errorf("%s is not inside %s", path, storeDir)
+			}
+			return "", "", fmt.Errorf("%s resolves to %s, which is not inside %s", path, resolved, storeDir)
+		}
 	}
 	return binary, storePath, nil
 }

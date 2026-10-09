@@ -16,7 +16,11 @@ import (
 //	<store>/aaaa-web/bin/web        a regular file
 //	<store>/aaaa-web/bin/tool       a symbolic link to <store>/bbbb-tool/bin/tool
 //	<store>/aaaa-web/bin/gone       a symbolic link to nothing
+//	<store>/aaaa-web/bin/leak       a symbolic link to <root>/work/elsewhere
+//	<store>/aaaa-web/bin/etc        a symbolic link to <root>/nix/etc
+//	<store>/aaaa-web/bin/rel        a relative symbolic link to <store>/bbbb-tool/bin/tool
 //	<store>/bbbb-tool/bin/tool      a regular file
+//	<store>/eeee-linked/bin         a symbolic link to <root>/nix/etc
 //	<root>/nix/etc/passwd           a regular file outside the store
 //	<root>/work/result              a symbolic link to <store>/aaaa-web
 //	<root>/work/elsewhere           a regular file outside the store
@@ -34,6 +38,7 @@ func fakeStore(t *testing.T) (root, store string) {
 	for _, dir := range []string{
 		filepath.Join(store, "aaaa-web", "bin"),
 		filepath.Join(store, "bbbb-tool", "bin"),
+		filepath.Join(store, "eeee-linked"),
 		filepath.Join(root, "nix", "etc"),
 		filepath.Join(root, "work"),
 	} {
@@ -54,6 +59,10 @@ func fakeStore(t *testing.T) (root, store string) {
 	for link, target := range map[string]string{
 		filepath.Join(store, "aaaa-web", "bin", "tool"): filepath.Join(store, "bbbb-tool", "bin", "tool"),
 		filepath.Join(store, "aaaa-web", "bin", "gone"): filepath.Join(store, "cccc-gone", "bin", "gone"),
+		filepath.Join(store, "aaaa-web", "bin", "leak"): filepath.Join(root, "work", "elsewhere"),
+		filepath.Join(store, "aaaa-web", "bin", "etc"):  filepath.Join(root, "nix", "etc"),
+		filepath.Join(store, "aaaa-web", "bin", "rel"):  filepath.Join("..", "..", "bbbb-tool", "bin", "tool"),
+		filepath.Join(store, "eeee-linked", "bin"):      filepath.Join(root, "nix", "etc"),
 		filepath.Join(root, "work", "result"):           filepath.Join(store, "aaaa-web"),
 		filepath.Join(root, "work", "link"):             filepath.Join(root, "work", "elsewhere"),
 		filepath.Join(root, "work", "dangling"):         filepath.Join(root, "work", "nothing"),
@@ -89,6 +98,9 @@ func TestBinary(t *testing.T) {
 		{"a link inside the store to another store path", web + "/bin/tool", web + "/bin/tool", web},
 		// Through the result link the path is resolved all the way.
 		{"through the result link to a link", "result/bin/tool", store + "/bbbb-tool/bin/tool", store + "/bbbb-tool"},
+		// A link inside the store to another store path, through a relative
+		// link, is taken as written too.
+		{"a relative link inside the store to another store path", web + "/bin/rel", web + "/bin/rel", web},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -133,6 +145,13 @@ func TestBinaryRefuses(t *testing.T) {
 		{"a relative path inside nothing", "bin/web", "does not exist"},
 		{"dots that leave the store", web + "/../../etc/passwd", "is not inside " + store},
 		{"dots that leave the store for nothing", web + "/../../etc/shadow", "does not exist"},
+		// A path inside the store that leaves it through a link is refused,
+		// with the place it resolves to.
+		{"a file inside the store that links to a file outside", web + "/bin/leak", "resolves to " + root + "/work/elsewhere, which is not inside " + store},
+		{"a store path whose bin links to a directory outside", store + "/eeee-linked/bin/passwd", "resolves to " + root + "/nix/etc/passwd, which is not inside " + store},
+		// The directory check comes before the check of the store: the
+		// link is a directory, so it is refused as one.
+		{"a link inside the store to a directory outside it", web + "/bin/etc", "is a directory, not a binary"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
