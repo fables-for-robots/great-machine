@@ -25,6 +25,10 @@ type sim struct {
 	preparing  map[wire.ID]uint64
 	activating map[wire.ID]uint64
 	failed     map[wire.ID]Failure
+	// absent: who left during the rollout without being done, and when.
+	// It holds the rollout open for grace, which is 0 unless a test sets it.
+	absent map[wire.ID]time.Time
+	grace  time.Duration
 
 	// held: the commands of a decision stay on their way until deliver and
 	// acknowledge are called. Otherwise decide answers them at once.
@@ -45,6 +49,7 @@ func newSim(t *testing.T, stable uint64, members ...fleet.Member) *sim {
 		preparing:  map[wire.ID]uint64{},
 		activating: map[wire.ID]uint64{},
 		failed:     map[wire.ID]Failure{},
+		absent:     map[wire.ID]time.Time{},
 	}
 	for _, m := range members {
 		s.members = append(s.members, &m)
@@ -61,6 +66,8 @@ func (s *sim) begin(generation uint64, parallel int) {
 		r.ID = s.rollout.ID + 1
 	}
 	s.rollout = r
+	// Who left before it was made did not leave during it.
+	clear(s.absent)
 }
 
 func (s *sim) member(id wire.ID) *fleet.Member {
@@ -73,10 +80,16 @@ func (s *sim) member(id wire.ID) *fleet.Member {
 }
 
 // leave takes the zathras with the name out of the fleet, and returns it.
+// One that leaves a rollout under way without being done is absent.
 func (s *sim) leave(name string) fleet.Member {
 	m := s.member(id(name))
 	if m == nil {
 		s.t.Fatalf("%s is not there", name)
+	}
+	st := m.State
+	done := st.Generation == s.rollout.Generation && st.Phase == wire.PhaseRunning && st.RunningFor >= stableAfter
+	if s.rollout.State.UnderWay() && !done {
+		s.absent[m.ID] = s.now
 	}
 	s.members = slices.DeleteFunc(s.members, func(o *fleet.Member) bool { return o == m })
 	delete(s.preparing, m.ID)
@@ -87,6 +100,7 @@ func (s *sim) leave(name string) fleet.Member {
 
 func (s *sim) join(m fleet.Member) {
 	s.members = append(s.members, &m)
+	delete(s.absent, m.ID)
 }
 
 // decide calls Decide with the service as it is, checks what no decision
@@ -100,9 +114,11 @@ func (s *sim) decide() Decision {
 		Preparing:      maps.Clone(s.preparing),
 		Activating:     maps.Clone(s.activating),
 		Failed:         maps.Clone(s.failed),
+		Absent:         maps.Clone(s.absent),
 		StableAfter:    stableAfter,
 		PrepareTimeout: prepareTimeout,
 		RetryAfter:     retryAfter,
+		AbsentGrace:    s.grace,
 	}
 	for _, m := range s.members {
 		in.Members = append(in.Members, *m)
@@ -466,5 +482,75 @@ func TestPlaySupersede(t *testing.T) {
 	}
 	if got := s.activated(3); !slices.Equal(got, fiveNames) {
 		t.Errorf("activated for 3 in the order %v, want %v", got, fiveNames)
+	}
+}
+
+// All of them lose draal at once in the middle of the rollout, and are back
+// twenty seconds later with what they ran: the rollout is not completed
+// while they are away, and goes on one at a time when they are back.
+func TestPlayAllLeaveAndComeBack(t *testing.T) {
+	s := newSim(t, 1, five()...)
+	s.grace = absentGrace
+	s.begin(2, 1)
+	var gone []fleet.Member
+	s.play(func(step int) {
+		switch step {
+		case 4:
+			if n := len(s.activated(2)); n == 0 || n == 5 {
+				t.Fatalf("%d were sent activate before they left, want some and not all", n)
+			}
+			for _, name := range fiveNames {
+				gone = append(gone, s.leave(name))
+			}
+		case 5, 6:
+			if s.rollout.State != wire.RolloutActivating {
+				t.Fatalf("the rollout is %s while they are away, want activating", s.rollout.State)
+			}
+			if step == 6 {
+				for _, m := range gone {
+					s.join(m)
+				}
+			}
+		}
+	})
+	if s.rollout.State != wire.RolloutCompleted {
+		t.Fatalf("the rollout is %s (%s), want completed", s.rollout.State, s.rollout.Reason)
+	}
+	if got, want := s.generations(), "[web-1=2 web-2=2 web-3=2 web-4=2 web-5=2]"; got != want {
+		t.Errorf("the fleet runs %s, want %s", got, want)
+	}
+	if s.most != 1 {
+		t.Errorf("at most %d were restarting at once, want 1", s.most)
+	}
+	// decide has checked that nobody was sent activate for a generation it
+	// runs already; so everyone was sent it once.
+	if got := s.activated(2); !slices.Equal(got, fiveNames) {
+		t.Errorf("activated in the order %v, want %v: by name, each once", got, fiveNames)
+	}
+}
+
+// One leaves for good: the rollout completes when the grace has passed.
+func TestPlayOneLeavesForGood(t *testing.T) {
+	s := newSim(t, 1, five()...)
+	s.grace = absentGrace
+	s.begin(2, 1)
+	var left, completed time.Time
+	s.play(func(step int) {
+		if step == 2 {
+			s.leave("web-5")
+			left = s.now
+		}
+		if s.rollout.State == wire.RolloutCompleted {
+			completed = s.now
+		}
+	})
+	if s.rollout.State != wire.RolloutCompleted {
+		t.Fatalf("the rollout is %s (%s), want completed", s.rollout.State, s.rollout.Reason)
+	}
+	if got, want := s.generations(), "[web-1=2 web-2=2 web-3=2 web-4=2]"; got != want {
+		t.Errorf("the fleet runs %s, want %s", got, want)
+	}
+	if end := left.Add(absentGrace); completed.Before(end) || !completed.Before(end.Add(10*time.Second)) {
+		t.Errorf("completed %v after web-5 left, want at the first decision from %v on", completed.Sub(left), absentGrace)
 	}
 }

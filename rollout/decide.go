@@ -34,10 +34,16 @@ type Input struct {
 	// Activating: an activate that was sent and that no report shows yet.
 	Activating map[wire.ID]uint64
 	// Failed: the last failure of a zathras, if it had one.
-	Failed         map[wire.ID]Failure
+	Failed map[wire.ID]Failure
+	// Absent: the zathrases that left since this rollout was made, without
+	// being done, and when each left, by the clock of Now and of
+	// Rollout.Created. The caller removes one when it is back. Each holds
+	// the rollout open for AbsentGrace after it left.
+	Absent         map[wire.ID]time.Time
 	StableAfter    time.Duration // 30 seconds
 	PrepareTimeout time.Duration // 30 minutes
 	RetryAfter     time.Duration // 30 seconds
+	AbsentGrace    time.Duration // 2 minutes
 }
 
 // Command is something to send to a zathras: prepare the generation, or
@@ -160,8 +166,11 @@ func (d *decider) activating() {
 			return
 		}
 	}
-	// When every connected zathras is done, the rollout is completed.
-	if d.out.Awaited == 0 {
+	// When every connected zathras is done, the rollout is completed: not
+	// while one that left during it without being done may still come back.
+	if until, ok := d.absent(); ok {
+		d.recheck(until)
+	} else if d.out.Awaited == 0 {
 		d.out.State = wire.RolloutCompleted
 		return
 	}
@@ -247,6 +256,32 @@ func (d *decider) busy(m fleet.Member) bool {
 	_, preparing := d.in.Preparing[m.ID]
 	_, activating := d.in.Activating[m.ID]
 	return preparing || activating
+}
+
+// absent says whether a zathras of Absent still holds the rollout open,
+// and until when the first of them does. One that is connected is not
+// absent, and one that left AbsentGrace ago or longer holds nothing.
+func (d *decider) absent() (time.Time, bool) {
+	var until time.Time
+	held := false
+	if d.in.AbsentGrace <= 0 {
+		return until, held
+	}
+	for z, left := range d.in.Absent {
+		end := left.Add(d.in.AbsentGrace)
+		if !d.in.Now.Before(end) || d.connected(z) {
+			continue
+		}
+		if !held || end.Before(until) {
+			until, held = end, true
+		}
+	}
+	return until, held
+}
+
+// connected says whether the zathras is one of the members.
+func (d *decider) connected(z wire.ID) bool {
+	return slices.ContainsFunc(d.members, func(m fleet.Member) bool { return m.ID == z })
 }
 
 // failure returns the command for the target that m refused or failed

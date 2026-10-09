@@ -1,8 +1,10 @@
 package rollout
 
 import (
+	"maps"
 	"math/rand/v2"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -939,6 +941,154 @@ func TestNoRollout(t *testing.T) {
 	})
 }
 
+// A zathras that left during the rollout without being done holds its
+// completion for AbsentGrace: zathrases that lose draal all at once do not
+// complete the rollout and come back to be moved all at once.
+func TestAbsent(t *testing.T) {
+	left := now.Add(-30 * time.Second)
+	until := left.Add(absentGrace)
+
+	t.Run("one that left holds the rollout open, and the recheck is when it stops", func(t *testing.T) {
+		in := input(newRollout(wire.RolloutActivating, 2, 1), 1, member("web-a", running(2, hour)))
+		in.Absent[id("web-b")] = left
+		check(t, Decide(in), Decision{Prepared: 1, Activated: 1, Recheck: until})
+		in.Now = until.Add(-time.Nanosecond)
+		check(t, Decide(in), Decision{Prepared: 1, Activated: 1, Recheck: until})
+	})
+
+	t.Run("completed at the end of the grace, and after", func(t *testing.T) {
+		in := input(newRollout(wire.RolloutActivating, 2, 1), 1, member("web-a", running(2, hour)))
+		in.Absent[id("web-b")] = left
+		for _, at := range []time.Time{until, until.Add(time.Nanosecond), until.Add(hour)} {
+			in.Now = at
+			check(t, Decide(in), Decision{State: wire.RolloutCompleted, Prepared: 1, Activated: 1})
+		}
+	})
+
+	t.Run("with no members activating stays", func(t *testing.T) {
+		in := input(newRollout(wire.RolloutActivating, 2, 1), 1)
+		in.Absent[id("web-a")] = left
+		check(t, Decide(in), Decision{Recheck: until})
+		delete(in.Absent, id("web-a"))
+		check(t, Decide(in), Decision{State: wire.RolloutCompleted})
+	})
+
+	t.Run("preparing moves to activating, not to completed", func(t *testing.T) {
+		in := input(newRollout(wire.RolloutPreparing, 2, 1), 1,
+			member("web-a", running(2, hour)),
+			member("web-b", running(2, hour)),
+		)
+		in.Absent[id("web-c")] = left
+		check(t, Decide(in), Decision{
+			State:     wire.RolloutActivating,
+			Prepared:  2,
+			Activated: 2,
+			Recheck:   until,
+		})
+	})
+
+	t.Run("preparing with no members moves to activating", func(t *testing.T) {
+		in := input(newRollout(wire.RolloutPreparing, 2, 1), 1)
+		in.Absent[id("web-a")] = left
+		check(t, Decide(in), Decision{State: wire.RolloutActivating, Recheck: until})
+	})
+
+	t.Run("preparing with the first batch, and the recheck", func(t *testing.T) {
+		in := input(newRollout(wire.RolloutPreparing, 2, 1), 1, ready()...)
+		in.Absent[id("web-d")] = left
+		check(t, Decide(in), Decision{
+			Commands: []Command{activate("web-a", 2)},
+			State:    wire.RolloutActivating,
+			Prepared: 3,
+			Awaited:  3,
+			Recheck:  until,
+		})
+	})
+
+	t.Run("one that is connected is not absent, whatever Absent says", func(t *testing.T) {
+		in := input(newRollout(wire.RolloutActivating, 2, 1), 1,
+			member("web-a", running(2, hour)),
+			member("web-b", running(2, hour)),
+		)
+		in.Absent[id("web-b")] = left
+		check(t, Decide(in), Decision{State: wire.RolloutCompleted, Prepared: 2, Activated: 2})
+	})
+
+	t.Run("the recheck is the earliest end of several", func(t *testing.T) {
+		in := input(newRollout(wire.RolloutActivating, 2, 1), 1, member("web-a", running(2, hour)))
+		in.Absent[id("web-b")] = left
+		in.Absent[id("web-c")] = left.Add(-20 * time.Second)
+		in.Absent[id("web-d")] = left.Add(10 * time.Second)
+		in.Absent[id("web-e")] = now.Add(-hour) // its grace is over
+		in.Absent[id("web-a")] = left.Add(-time.Minute)
+		for range 20 {
+			check(t, Decide(in), Decision{Prepared: 1, Activated: 1, Recheck: until.Add(-20 * time.Second)})
+		}
+	})
+
+	t.Run("and earlier than the one of a zathras under way", func(t *testing.T) {
+		m := ready()
+		m[0] = member("web-a", running(2, 10*time.Second))
+		in := input(newRollout(wire.RolloutActivating, 2, 1), 1, m...)
+		in.Absent[id("web-d")] = now.Add(5*time.Second - absentGrace)
+		check(t, Decide(in), Decision{Prepared: 3, Awaited: 3, Recheck: now.Add(5 * time.Second)})
+	})
+
+	t.Run("an earlier recheck that is due anyway wins", func(t *testing.T) {
+		m := ready()
+		m[0] = member("web-a", running(2, 10*time.Second))
+		in := input(newRollout(wire.RolloutActivating, 2, 1), 1, m...)
+		in.Absent[id("web-d")] = left
+		in.Absent[id("web-e")] = left.Add(time.Second)
+		check(t, Decide(in), Decision{Prepared: 3, Awaited: 3, Recheck: now.Add(20 * time.Second)})
+	})
+
+	t.Run("a failure halts all the same", func(t *testing.T) {
+		in := input(newRollout(wire.RolloutActivating, 2, 1), 1,
+			member("web-a", running(2, hour)),
+			member("web-b", backoff(2)),
+		)
+		in.Absent[id("web-c")] = left
+		check(t, Decide(in), Decision{
+			State:     wire.RolloutHalted,
+			Reason:    "web-b: exited with status 1 after 2.1s",
+			Prepared:  2,
+			Activated: 1,
+			Awaited:   1,
+		})
+	})
+
+	t.Run("and so does the prepare timeout", func(t *testing.T) {
+		in := input(newRollout(wire.RolloutPreparing, 2, 1), 1, old()...)
+		in.Absent[id("web-d")] = t0.Add(prepareTimeout - time.Second)
+		in.Now = t0.Add(prepareTimeout)
+		check(t, Decide(in), Decision{
+			State:   wire.RolloutHalted,
+			Reason:  "still preparing after 30m0s",
+			Awaited: 3,
+		})
+	})
+
+	t.Run("with AbsentGrace zero the entries are ignored", func(t *testing.T) {
+		in := input(newRollout(wire.RolloutActivating, 2, 1), 1, member("web-a", running(2, hour)))
+		in.Absent[id("web-b")] = now
+		in.AbsentGrace = 0
+		check(t, Decide(in), Decision{State: wire.RolloutCompleted, Prepared: 1, Activated: 1})
+	})
+
+	t.Run("outside a rollout under way Absent is not looked at", func(t *testing.T) {
+		for _, state := range []wire.RolloutState{wire.RolloutCompleted, wire.RolloutHalted} {
+			in := input(newRollout(state, 2, 1), 2,
+				member("web-a", running(2, hour)),
+				member("web-n"),
+			)
+			want := Decide(in)
+			in.Absent[id("web-b")] = left
+			check(t, Decide(in), want)
+		}
+	})
+}
+
 // scenarios is an input of every kind, each with zathrases that report an
 // exit, a restart time and a sample.
 func scenarios() map[string]Input {
@@ -975,6 +1125,15 @@ func scenarios() map[string]Input {
 		sample(member("web-c")),
 		sample(member("web-d", prepared(2))),
 	)
+	held := input(newRollout(wire.RolloutActivating, 2, 1), 1,
+		sample(member("web-a", running(2, hour), crashed)),
+		sample(member("web-c", running(1, hour), prepared(2))),
+		sample(member("web-e")),
+	)
+	held.Absent[id("web-a")] = now.Add(-time.Minute - 50*time.Second)
+	held.Absent[id("web-b")] = now.Add(-30 * time.Second)
+	held.Absent[id("web-d")] = now.Add(-time.Minute)
+	held.Absent[id("web-f")] = now.Add(-hour)
 	completed.Failed[id("web-c")] = Failure{Generation: 2, Reason: "preload: 503", At: now.Add(-time.Second)}
 	halted := input(newRollout(wire.RolloutHalted, 3, 1), 2,
 		sample(member("web-a", running(3, hour))),
@@ -986,6 +1145,7 @@ func scenarios() map[string]Input {
 		"activating": activating,
 		"failing":    failing,
 		"completing": completing,
+		"held":       held,
 		"completed":  completed,
 		"halted":     halted,
 	}
@@ -1045,6 +1205,7 @@ func TestDeterminism(t *testing.T) {
 
 			given := make([]fleet.Member, len(in.Members))
 			copy(given, in.Members)
+			absent := maps.Clone(in.Absent)
 			random := rand.New(rand.NewPCG(1, 2))
 			for range 50 {
 				shuffled := in
@@ -1053,13 +1214,24 @@ func TestDeterminism(t *testing.T) {
 				random.Shuffle(len(shuffled.Members), func(i, j int) {
 					shuffled.Members[i], shuffled.Members[j] = shuffled.Members[j], shuffled.Members[i]
 				})
+				// Absent is made again in another order: what it is made of
+				// decides, not the order of a map.
+				ids := slices.Sorted(maps.Keys(in.Absent))
+				random.Shuffle(len(ids), func(i, j int) { ids[i], ids[j] = ids[j], ids[i] })
+				shuffled.Absent = map[wire.ID]time.Time{}
+				for _, z := range ids {
+					shuffled.Absent[z] = in.Absent[z]
+				}
 				if got := Decide(shuffled); !reflect.DeepEqual(got, want) {
-					t.Fatalf("with the members in another order:\n got %+v\nwant %+v", got, want)
+					t.Fatalf("with the members and Absent in another order:\n got %+v\nwant %+v", got, want)
 				}
 			}
 			// Decide leaves what it is given as it was.
 			if !reflect.DeepEqual(in.Members, given) {
 				t.Error("Decide changed the order of the members it was given")
+			}
+			if !maps.Equal(in.Absent, absent) {
+				t.Error("Decide changed Absent")
 			}
 		})
 	}

@@ -19,6 +19,7 @@ const (
 	stableAfter    = 30 * time.Second
 	prepareTimeout = 30 * time.Minute
 	retryAfter     = 30 * time.Second
+	absentGrace    = 2 * time.Minute
 )
 
 var (
@@ -148,7 +149,7 @@ func newRollout(state wire.RolloutState, generation uint64, parallel int) *wire.
 }
 
 // input returns what Decide is given a minute after t0, with the durations
-// of the spec and no command on its way.
+// of the spec, no command on its way and nobody absent.
 func input(r *wire.RolloutInfo, stable uint64, members ...fleet.Member) Input {
 	return Input{
 		Now:            now,
@@ -158,9 +159,11 @@ func input(r *wire.RolloutInfo, stable uint64, members ...fleet.Member) Input {
 		Preparing:      map[wire.ID]uint64{},
 		Activating:     map[wire.ID]uint64{},
 		Failed:         map[wire.ID]Failure{},
+		Absent:         map[wire.ID]time.Time{},
 		StableAfter:    stableAfter,
 		PrepareTimeout: prepareTimeout,
 		RetryAfter:     retryAfter,
+		AbsentGrace:    absentGrace,
 	}
 }
 
