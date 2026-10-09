@@ -127,6 +127,9 @@ func New(cfg Config) http.Handler {
 	}
 	h.mux.HandleFunc("/api/services/{service}/rollouts", h.get(h.rollouts))
 	h.mux.HandleFunc("/api/zathras/{id}/history", h.get(h.history))
+	h.mux.HandleFunc("/api/watch", h.get(h.watch))
+	h.mux.HandleFunc("/api/zathras/{id}/logs", h.get(h.logs))
+	h.mux.HandleFunc("/api/zathras/{id}/shell", h.get(h.shell))
 	h.mux.HandleFunc("/api/", h.noSuchPath)
 	h.mux.HandleFunc("/", h.page)
 	return h
