@@ -306,7 +306,7 @@ func (a *Agent) handle(ctx context.Context, s node.Stream) {
 	var req wire.Request
 	if err := wire.Read(s, &req); err != nil {
 		if err != io.EOF {
-			wire.WriteError(s, wire.Errorf(wire.CodeBadRequest, "reading the request: %s", strings.ToValidUTF8(err.Error(), "�")))
+			wire.WriteError(s, wire.Errorf(wire.CodeBadRequest, "reading the request: %s", strings.ToValidUTF8(err.Error(), "\uFFFD")))
 			s.CloseWrite()
 			io.Copy(io.Discard, s) // until draal has read the answer and closed
 		}

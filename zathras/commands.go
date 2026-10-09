@@ -82,5 +82,5 @@ func (a *Agent) activate(req *wire.Activate) error {
 // is no valid UTF-8 is refused by whoever reads it, and an error may quote
 // anything.
 func reason(err error) string {
-	return strings.ToValidUTF8(err.Error(), "�")
+	return strings.ToValidUTF8(err.Error(), "\uFFFD")
 }

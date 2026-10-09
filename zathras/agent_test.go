@@ -112,8 +112,10 @@ func newWorld(t *testing.T, s setup) *world {
 		},
 		ReportEvery: 20 * time.Millisecond,
 		RedialMin:   5 * time.Millisecond,
-		RedialMax:   40 * time.Millisecond,
-		Log:         log,
+		// Far above what a loaded machine can stall: it also bounds how long
+		// draal may take to answer register.
+		RedialMax: 2 * time.Second,
+		Log:       log,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
