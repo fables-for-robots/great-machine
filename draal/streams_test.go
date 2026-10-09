@@ -94,8 +94,10 @@ func TestTheDefaultsOfStreams(t *testing.T) {
 func TestAConnectionHasAtMostMaxStreams(t *testing.T) {
 	cfg := testConfig(t) // MaxStreams is the default, 64
 	w := startWorld(t, cfg)
+	// Counted on a connection of its own: the stream it asks on would hold
+	// a place of op for a moment after it was closed.
+	before := goroutines(t, w.dial(operatorID))
 	op := w.dial(operatorID)
-	before := goroutines(t, op)
 	watch := &wire.Request{Watch: &wire.WatchRequest{}}
 
 	var held []node.Stream
@@ -128,6 +130,7 @@ func TestAConnectionHasAtMostMaxStreams(t *testing.T) {
 		s.Close()
 	}
 	eventually(t, "the watchers to end", func() bool { return w.watchers() == 1 })
+	op.Close()
 	settled(t, before)
 }
 
