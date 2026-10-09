@@ -4,9 +4,11 @@ go 1.26.3
 
 require (
 	github.com/amber-store/jaccard-store v0.7.0
+	github.com/creack/pty v1.1.24
 	github.com/fxamacker/cbor/v2 v2.9.2
 	github.com/tmc/go-iroh v0.3.0
 	github.com/urfave/cli/v2 v2.27.7
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -20,6 +22,5 @@ require (
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	golang.org/x/crypto v0.56.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 )
