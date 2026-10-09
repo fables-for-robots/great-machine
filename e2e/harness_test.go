@@ -65,6 +65,7 @@ type harness struct {
 
 	mu        sync.Mutex
 	addr      netip.AddrPort // where draal listens now
+	draal     *draal.Draal   // the draal that runs now
 	stopDraal func()
 }
 
@@ -166,6 +167,7 @@ func (h *harness) startDraal() {
 	var once sync.Once
 	h.mu.Lock()
 	h.addr = l.LocalAddr()
+	h.draal = d
 	h.stopDraal = func() {
 		once.Do(func() {
 			cancel()
