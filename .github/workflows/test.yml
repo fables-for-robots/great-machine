@@ -8,9 +8,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # Every `run` step runs in the flake's bare shell, which has the Go
-    # and the sqlc that the dev shell has. A step added here needs no
-    # setup of its own for them.
+    # Every `run` step runs in the flake's bare shell, which has the Go,
+    # the sqlc and the Node that the dev shell has. A step added here
+    # needs no setup of its own for them.
     defaults:
       run:
         shell: nix develop .#bare --command bash -e {0}
@@ -35,11 +35,30 @@ jobs:
       # fails here.
       - name: sqlc
         run: sqlc diff
+      # The page: its dependencies as package-lock.json names them, the
+      # type check, and the build into web/dist. A build leaves nothing
+      # that git sees: web/dist is ignored but for its placeholder, which
+      # the build keeps.
+      - name: ui
+        run: |
+          cd ui
+          npm ci
+          npm run check
+          npm run build
+          test -z "$(git status --porcelain)"
+      # `test` above ran without the page, as the Go module has to build
+      # and pass without it. The packages that serve the page run once
+      # more now that web/dist holds it.
+      - name: test with the page
+        run: go test -count=1 ./web/... ./cli/ ./e2e/
       - name: pid1
         run: scripts/test-pid1.sh
-      # Steps that test more are added above this line. The last step
-      # builds the program as a release does. gonixgo runs a program
-      # while Nix evaluates, which Nix allows only when asked.
+      # Steps that test more are added above this line. The last steps
+      # build the program as a release does: Nix builds the page by
+      # itself and puts it into the program, whatever the steps above
+      # left in web/dist, which git ignores and Nix therefore does not
+      # see. gonixgo runs a program while Nix evaluates, which Nix allows
+      # only when asked.
       - name: nix build
         run: |
           nix build --option allow-unsafe-native-code-during-evaluation true
