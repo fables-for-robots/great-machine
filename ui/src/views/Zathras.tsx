@@ -3,6 +3,7 @@ import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from
 import { isID, isZeroTime, type Zathras as ZathrasInfo } from "../api/types";
 import { PhaseBadge } from "../components/Badge";
 import Figures from "../components/Figures";
+import Log from "../components/Log";
 import Notice from "../components/Notice";
 import { ago, dateTime, duration, exit, generation, storeName, until } from "../format";
 import { findService, findZathras, fleet, freshAt, now, received } from "../state/fleet";
@@ -207,6 +208,7 @@ export default function Zathras() {
               <StatePanel zathras={z()} stable={findService(params.service)?.stable} />
             </div>
             <Figures id={params.id} present={live() !== undefined} connected={live()?.connected} sample={live()?.state.sample} />
+            <Log id={params.id} present={live() !== undefined} connected={live()?.connected} />
           </>
         )}
       </Match>
