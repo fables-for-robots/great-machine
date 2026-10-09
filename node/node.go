@@ -46,9 +46,16 @@ type Stream interface {
 	// read lets its Write return before it calls Close.
 	//
 	// Either way a Write of the peer fails, at once or when it next
-	// waits, a Read of this side fails, and every later Write of this
-	// side fails. Close may be called after CloseWrite and more than once.
+	// waits, a Read of this side fails, every later Write of this side
+	// fails, and Done is closed on both sides. Close may be called after
+	// CloseWrite and more than once.
 	Close() error
+	// Done is closed when this side can send no more on the stream: the
+	// peer has closed it with Close, this side has ended what it sends
+	// with CloseWrite or Close, or the connection has ended. It is how a
+	// side that neither reads nor writes at the moment learns that the
+	// peer has closed the stream: nothing else tells it.
+	Done() <-chan struct{}
 }
 
 // Conn is a connection to a peer. Both sides open streams and accept them.

@@ -45,10 +45,10 @@ func (s *stream) CloseWrite() error {
 	return s.s.CloseWrite()
 }
 
-// Close tells the peer to stop sending, which fails its Write, and ends
-// what this side sends: with the end of the stream after what was
-// written, which the peer reads as io.EOF, or, when a Write has not
-// returned, with a reset.
+// Close tells the peer to stop sending, which fails its Write and closes
+// its Done, and ends what this side sends: with the end of the stream
+// after what was written, which the peer reads as io.EOF, or, when a
+// Write has not returned, with a reset.
 //
 // Close of go-iroh's stream ends one direction only, sends the end behind
 // all that was written, and does not wake a Write that waits for the peer
@@ -75,6 +75,14 @@ func (s *stream) Close() error {
 		_ = s.s.Close()
 	}
 	return nil
+}
+
+// Done is the end of the context of go-iroh's stream, which is that of
+// the direction this side sends in: go-iroh cancels it when the peer
+// tells this side to stop sending, which its Close does, when this side
+// ends or resets what it sends, and when the connection ends.
+func (s *stream) Done() <-chan struct{} {
+	return s.s.Context().Done()
 }
 
 // conn is a Conn over a connection of go-iroh. release, when it is set,

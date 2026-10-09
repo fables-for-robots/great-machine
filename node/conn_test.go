@@ -478,6 +478,59 @@ func testConn(t *testing.T, pair connPair) {
 		}
 	})
 
+	t.Run("Done of a stream is closed when the peer closes the stream", func(t *testing.T) {
+		client, server := pair(t)
+		opened, accepted := open(t, client, server, "request")
+		// This side neither reads nor writes: Done alone can tell it.
+		select {
+		case <-opened.Done():
+			t.Fatal("Done is closed and nobody closed the stream")
+		case <-accepted.Done():
+			t.Fatal("Done of the peer is closed and nobody closed the stream")
+		case <-time.After(notYet):
+		}
+		if err := accepted.Close(); err != nil {
+			t.Fatalf("the peer's Close: %v", err)
+		}
+		wait(t, accepted.Done(), "Done of the side that closed")
+		waitFor(t, soon, opened.Done(), "Done of the other side")
+	})
+
+	t.Run("Done of a stream is closed when the peer closes it under a Write that waits", func(t *testing.T) {
+		client, server := pair(t)
+		opened, accepted := open(t, client, server, "request")
+		go accepted.Write(make([]byte, 4<<20)) // nobody reads it
+		go opened.Write(make([]byte, 4<<20))   // nor this
+		select {
+		case <-opened.Done():
+			t.Fatal("Done is closed and nobody closed the stream")
+		case <-time.After(notYet):
+		}
+		if err := accepted.Close(); err != nil {
+			t.Fatalf("the peer's Close: %v", err)
+		}
+		waitFor(t, soon, opened.Done(), "Done of the other side")
+	})
+
+	t.Run("Done of a stream is closed by CloseWrite and by the end of the connection", func(t *testing.T) {
+		client, server := pair(t)
+		opened, accepted := open(t, client, server, "request")
+		if err := opened.CloseWrite(); err != nil {
+			t.Fatalf("CloseWrite: %v", err)
+		}
+		wait(t, opened.Done(), "Done after CloseWrite")
+		// The peer can still send, so its Done is open.
+		select {
+		case <-accepted.Done():
+			t.Fatal("Done of the peer is closed by a CloseWrite of this side")
+		case <-time.After(notYet):
+		}
+		if err := client.Close(); err != nil {
+			t.Fatalf("Close of the connection: %v", err)
+		}
+		waitFor(t, soon, accepted.Done(), "Done of the peer after the end of the connection")
+	})
+
 	for _, who := range []string{"the side that dialed", "the side that accepted"} {
 		t.Run("Close of the connection by "+who, func(t *testing.T) {
 			client, server := pair(t)
