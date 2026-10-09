@@ -19,6 +19,7 @@ func (d *Draal) Serve(ctx context.Context, l node.Listener) error {
 	ctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Go(func() { d.reap(ctx) })
+	wg.Go(func() { d.reconcile(ctx) })
 	var err error
 	for {
 		var conn node.Conn
