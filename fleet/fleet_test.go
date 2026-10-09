@@ -212,6 +212,38 @@ func TestHistoryIsTrimmedByTime(t *testing.T) {
 	}
 }
 
+// A zathras chooses the times of its samples: however close they are, a
+// member keeps no more than history / 2s * 2 of them, the newest.
+func TestHistoryIsCappedByCount(t *testing.T) {
+	r := New(15 * time.Minute)
+	const most = 15 * 60 / 2 * 2
+	epoch := r.Join(member(1, "web", "web-1"))
+	const flood = 100_000
+	for i := range flood {
+		r.Report(id(1), epoch, sampled(t0.Add(time.Duration(i)), float64(i)), t0)
+	}
+	got := r.History(id(1))
+	if len(got) != most {
+		t.Fatalf("%d samples are kept after a flood of %d, want %d", len(got), flood, most)
+	}
+	if first, last := got[0].CPU, got[len(got)-1].CPU; first != flood-most || last != flood-1 {
+		t.Errorf("the samples kept are %v to %v, want the newest: %d to %d", first, last, flood-most, flood-1)
+	}
+}
+
+// A sample that is not after the newest one kept is ignored.
+func TestAnOlderSampleIsIgnored(t *testing.T) {
+	r := New(15 * time.Minute)
+	epoch := r.Join(member(1, "web", "web-1"))
+	r.Report(id(1), epoch, sampled(t0.Add(time.Minute), 1), t0)
+	r.Report(id(1), epoch, sampled(t0, 2), t0)
+	r.Report(id(1), epoch, sampled(t0.Add(time.Minute), 3), t0)
+	r.Report(id(1), epoch, sampled(t0.Add(2*time.Minute), 4), t0)
+	if got, want := cpus(r.History(id(1))), []float64{1, 4}; !slices.Equal(got, want) {
+		t.Errorf("History = %v, want %v", got, want)
+	}
+}
+
 func TestJoinReplacesAndStartsANewEpoch(t *testing.T) {
 	r := New(15 * time.Minute)
 	first := r.Join(member(1, "web", "web-1"))

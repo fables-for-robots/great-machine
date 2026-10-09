@@ -32,6 +32,7 @@ type entry struct {
 // Registry is the members there are. It is safe for concurrent use.
 type Registry struct {
 	history time.Duration
+	most    int // samples kept of a member
 
 	mu      sync.Mutex
 	members map[wire.ID]*entry
@@ -39,10 +40,14 @@ type Registry struct {
 	subs    map[chan struct{}]struct{}
 }
 
-// New returns a registry that keeps the samples of the last history.
+// New returns a registry that keeps the samples of the last history, and
+// of a member no more than history / 2s * 2 (at least 2): twice as many as
+// a zathras that samples every 2 seconds sends in that time, however its
+// samples are timed.
 func New(history time.Duration) *Registry {
 	return &Registry{
 		history: history,
+		most:    max(int(history/(2*time.Second))*2, 2),
 		members: map[wire.ID]*entry{},
 		subs:    map[chan struct{}]struct{}{},
 	}
@@ -63,7 +68,7 @@ func (r *Registry) Join(m Member) (epoch uint64) {
 	}
 	r.epoch++
 	e := &entry{member: m, epoch: r.epoch}
-	e.keep(m.State.Sample, r.history)
+	e.keep(m.State.Sample, r.history, r.most)
 	r.members[m.ID] = e
 	r.notify()
 	return e.epoch
@@ -82,7 +87,7 @@ func (r *Registry) Report(id wire.ID, epoch uint64, st wire.State, now time.Time
 	}
 	e.member.State = st
 	e.member.Reported = now
-	e.keep(st.Sample, r.history)
+	e.keep(st.Sample, r.history, r.most)
 	r.notify()
 	return true
 }
@@ -101,28 +106,27 @@ func (r *Registry) Leave(id wire.ID, epoch uint64) bool {
 	return true
 }
 
-// keep adds s to the samples, unless it is nil or the sample that was
-// added last (a zathras reports its latest sample with every report, and
+// keep adds s to the samples, unless it is nil or not after the newest
+// sample kept (a zathras reports its latest sample with every report, and
 // reports more often than it samples), and drops the samples that are
-// older than history before the newest. The times compared are all the
-// zathras' own, so its clock may be wrong.
-func (e *entry) keep(s *wire.Sample, history time.Duration) {
+// older than history before the newest, and the oldest beyond most. The
+// times compared are all the zathras' own, so its clock may be wrong.
+func (e *entry) keep(s *wire.Sample, history time.Duration, most int) {
 	if s == nil {
 		return
 	}
-	if n := len(e.samples); n > 0 && e.samples[n-1].At.Equal(s.At) {
+	if n := len(e.samples); n > 0 && !s.At.After(e.samples[n-1].At) {
 		return
 	}
 	e.samples = append(e.samples, *s)
 	oldest := s.At.Add(-history)
-	drop := 0
+	drop := max(len(e.samples)-most, 0)
 	for drop < len(e.samples) && e.samples[drop].At.Before(oldest) {
 		drop++
 	}
-	if drop > 0 {
-		// A new slice, so that what was dropped is freed.
-		e.samples = slices.Clone(e.samples[drop:])
-	}
+	// What was dropped is freed when append next moves the samples to a
+	// new array; the array stays within a small multiple of what is kept.
+	e.samples = e.samples[drop:]
 }
 
 // Get returns the member with the ID, and false when there is none.
