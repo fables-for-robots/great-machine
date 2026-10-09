@@ -16,3 +16,8 @@
 *.sqlite-shm
 
 .DS_Store
+
+# the build of the page, which web embeds; the placeholder keeps the
+# directory there for go:embed
+/web/dist/*
+!/web/dist/.gitkeep
