@@ -366,6 +366,7 @@ func (r *runner) backoff(exit wire.Exit, before func(st *wire.State)) {
 		r.delay = min(2*r.delay, s.cfg.BackoffMax)
 	}
 	at := exit.At.Add(r.delay)
+	s.say("%s; starting it again in %s", describe(exit), r.delay)
 	s.update(func(st *wire.State) {
 		if before != nil {
 			before(st)
@@ -375,7 +376,6 @@ func (r *runner) backoff(exit wire.Exit, before func(st *wire.State)) {
 		st.LastExit = &exit
 		st.RestartAt = at
 	})
-	s.say("%s; starting it again in %s", describe(exit), r.delay)
 	r.restartT = time.NewTimer(time.Until(at))
 	r.restartC = r.restartT.C
 }

@@ -298,8 +298,10 @@ func TestOutputGoesToTheRingAndToTheCopies(t *testing.T) {
 	h.activate(2, last)
 	h.wrote(logring.Stdout, "no line feed")
 	h.wrote(logring.Stderr, "none here either")
+	// The service is started again after its backoff, and writes again:
+	// the copies begin with what the first run wrote, and may hold more.
 	eventually(t, "the copies of the last lines", func() bool {
-		return stdout.String() == "to stdout\nno line feed" && stderr.String() == "to stderr\nnone here either"
+		return strings.HasPrefix(stdout.String(), "to stdout\nno line feed") && strings.HasPrefix(stderr.String(), "to stderr\nnone here either")
 	})
 
 	// The supervisor's own lines, in the contract's words.
