@@ -77,6 +77,10 @@ type silent struct{}
 func (silent) Found(int, int)        {}
 func (silent) Pushed(string, uint64) {}
 
+// pushing is called when the work on one store path begins, and what it
+// returns when that work has ended. The tests replace it.
+var pushing = func(storePath string) (done func()) { return func() {} }
+
 // item is one store path and the reference it is pushed as.
 type item struct {
 	path string
@@ -233,6 +237,8 @@ func absent(ctx context.Context, c *client.Client, items []item) ([]item, error)
 // it removes however the push ends. It returns the size of the pack that
 // was uploaded: 0 when the server had a pack of the same content already.
 func one(ctx context.Context, c *client.Client, it item, tempDir string) (size uint64, err error) {
+	defer pushing(it.path)()
+
 	dir, err := os.MkdirTemp(tempDir, "great-machine-push-*")
 	if err != nil {
 		return 0, fmt.Errorf("temporary store: %w", err)
