@@ -107,7 +107,9 @@ type Shell interface {
 	// comes behind the output, so Wait returns only once Read has reached
 	// the end.
 	Wait(ctx context.Context) (int, error)
-	// Close ends the session, and the shell if it runs.
+	// Close ends the session, and the shell if it runs. It ends a Read
+	// and a Write that wait, each with an error, and returns at once. It
+	// may be called from another goroutine, and more than once.
 	Close() error
 }
 

@@ -206,7 +206,8 @@ func (d *Draal) respond(ctx context.Context, peer wire.ID, req *wire.Request, se
 }
 
 // serveShell relays a shell session between the stream of an operator and
-// the Shell of the Controller.
+// the Shell of the Controller. The session ends when the shell does, and
+// when the operator closes the stream, whatever waits then.
 func (d *Draal) serveShell(ctx context.Context, cancel context.CancelFunc, s node.Stream, req wire.ShellRequest) {
 	sh, err := d.Shell(ctx, req.Zathras, req)
 	if err != nil {
@@ -217,6 +218,27 @@ func (d *Draal) serveShell(ctx context.Context, cancel context.CancelFunc, s nod
 	if err := wire.Write(s, &wire.Response{Shell: &wire.ShellOutput{}}); err != nil {
 		return
 	}
+	// An operator that closes the stream is not always seen by the
+	// reading of the input: that waits in a Write to a zathras whose
+	// shell takes no input, while the shell prints nothing that could be
+	// written to the operator. Done of the stream says it then. Done is
+	// closed as well when draal ends what it sends, behind the exit
+	// status or an error: answered is closed before that, and from then
+	// on the session is over and the input is read to the operator's end
+	// of the stream.
+	answered := make(chan struct{})
+	go func() {
+		select {
+		case <-s.Done():
+			select {
+			case <-answered:
+			default:
+				sh.Close()
+				cancel()
+			}
+		case <-ctx.Done():
+		}
+	}()
 	// Input, until the operator ends the stream, which ends the session.
 	go func() {
 		defer cancel()
@@ -251,7 +273,9 @@ func (d *Draal) serveShell(ctx context.Context, cancel context.CancelFunc, s nod
 			break
 		}
 		if err != nil {
+			sh.Close() // ends a Write of input that waits for the zathras
 			wire.WriteError(s, err)
+			close(answered)
 			s.CloseWrite()
 			<-ctx.Done()
 			return
@@ -264,6 +288,7 @@ func (d *Draal) serveShell(ctx context.Context, cancel context.CancelFunc, s nod
 	} else {
 		wire.Write(s, &wire.Response{Shell: &wire.ShellOutput{Exit: &status}})
 	}
+	close(answered)
 	s.CloseWrite()
 	<-ctx.Done()
 }
