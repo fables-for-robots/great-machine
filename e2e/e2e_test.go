@@ -206,6 +206,19 @@ func TestAPeerThatIsNoOperatorIsRefused(t *testing.T) {
 	if wire.CodeOf(err) != wire.CodeUnauthorized {
 		t.Errorf("Rollout = %v, want unauthorized", err)
 	}
+	if _, err := stranger.Rollback(ctx, wire.RollbackRequest{Service: service}); wire.CodeOf(err) != wire.CodeUnauthorized {
+		t.Errorf("Rollback = %v, want unauthorized", err)
+	}
+	// Of a zathras that is connected.
+	if _, err := stranger.Logs(ctx, h.pods[0].id, false); wire.CodeOf(err) != wire.CodeUnauthorized {
+		t.Errorf("Logs = %v, want unauthorized", err)
+	}
+	if sh, err := stranger.Shell(ctx, h.pods[0].id, wire.ShellRequest{Cols: 80, Rows: 24}); wire.CodeOf(err) != wire.CodeUnauthorized {
+		if sh != nil {
+			sh.Close()
+		}
+		t.Errorf("Shell = %v, want unauthorized", err)
+	}
 	if svc := serviceOf(h.fleetWhere("the fleet", func(wire.Fleet) bool { return true })); svc == nil || svc.Rollout != nil {
 		t.Errorf("after a refused rollout the service is %+v, want it without a rollout", svc)
 	}
