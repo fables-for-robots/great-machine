@@ -34,6 +34,8 @@ It is done when:
 - a service that dies within 30 seconds of its start is restarted with
   exponential backoff, and a draal that is down or unreachable stops no
   service;
+- the health check of a zathras passes while its service runs and at no
+  other time, so that a pod is ready only then;
 - the web page and the TUI both show every connected zathras with its
   status and its CPU, memory, disk and network figures, the last 400 lines
   its service wrote, and a shell in its container.
@@ -102,6 +104,7 @@ act as an operator over iroh.
 | `--preload-url URL` | `GREAT_MACHINE_PRELOAD_URL` | `http://127.0.0.1:9889/v1/preload` | the preload endpoint of the sidecar |
 | `--shell PATH` | `GREAT_MACHINE_SHELL` | `/bin/sh` | the program of a shell session |
 | `--stop-timeout D` | `GREAT_MACHINE_STOP_TIMEOUT` | `2m` | how long a service has to end after SIGTERM |
+| `--health-addr ADDR` | `GREAT_MACHINE_HEALTH_ADDR` | `:9890` | where the health check listens; empty for none |
 
 ### Operator commands
 
@@ -425,6 +428,28 @@ shell: SIGHUP to its process group, then SIGKILL.
 A shell is in the container of zathras: it sees the store, the files and
 the processes the service sees.
 
+### 7.7 Health check
+
+zathras listens for HTTP on `--health-addr`, by default on port 9890 of
+every address: the kubelet asks at the address of the pod, not on loopback.
+`GET /healthz` answers by the phase of the service (5.3):
+
+| Phase | Answer |
+|---|---|
+| `running` | `200`, with `running` as its body |
+| `idle`, `stopping`, `backoff` | `503`, with the phase as its body |
+
+- The check fails before the first `activate`, while the service is being
+  stopped, while it waits to be started again after it ended, and while
+  zathras shuts down.
+- It passes as soon as the process was started, and says nothing about
+  what the service does. A service that has a check of its own is probed
+  at its own port instead.
+- Whether draal can be reached changes nothing.
+- **It is a readiness probe.** As a liveness probe it would have the
+  kubelet restart the container of a service that stays down, and with the
+  container go the backoff of zathras, its ring of lines and its identity.
+
 ## 8. draal
 
 ### 8.1 What it keeps
@@ -510,6 +535,7 @@ Every package is at the top level of the module; there is no `internal/`.
 | `supervisor` | starts, stops and restarts the service; backoff | `reaper`, `logring` |
 | `preload` | the client of the sidecar's preload endpoint | |
 | `ptyshell` | shell sessions on a pseudo-terminal | `reaper` |
+| `health` | the HTTP health check | |
 | `zathras` | the init: the above, and the connection to draal | `wire`, `node` |
 | `db`, `db/dbq` | migrations, queries, what sqlc makes of them | |
 | `fleet` | the connected zathrases, their reports and samples | `wire` |
@@ -547,7 +573,8 @@ iroh, and are tested without it.
   pod, and of draal.
 - **`deploy/pod.yaml`** is a whole pod: the sidecar as jaccard-nfs-nix-store
   documents it, and the app container with `great-machine zathras`,
-  `/nix/store` mounted with `HostToContainer` propagation.
+  `/nix/store` mounted with `HostToContainer` propagation, and a readiness
+  probe on the health check of zathras.
   **`deploy/draal.yaml`** runs draal with a volume for its data.
 - **CI.** `test.yml` runs vet, the tests, `sqlc diff` and the type check
   and build of the page. `release.yml`, on a tag `v*`, builds and pushes
@@ -581,8 +608,8 @@ Tests use the package `testing` of the standard library.
   preparing, batches, `parallel` 0, a failure in each phase, superseding,
   rollback, a zathras that joins or goes at every point, and a reconciler
   that is made anew in the middle, as after a restart of draal.
-- **`logring`, `stats`, `wire`, `authz`** as units; `stats` from files of
-  the two formats as fixtures.
+- **`logring`, `stats`, `wire`, `authz`, `health`** as units; `stats` from
+  files of the two formats as fixtures, `health` with every phase.
 - **`ptyshell`** with a real shell: input, output, a change of size, the
   exit status, the end of the stream.
 - **`push`** against a jaccard-store server in the test's process over a
@@ -593,7 +620,9 @@ Tests use the package `testing` of the standard library.
   loopback interface, with a fake preload endpoint and real child
   processes: a rollout from the operator client to `completed`; one that
   halts on a binary that exits; logs, a shell and the fleet through the
-  operator client and through HTTP; a peer that is no operator, refused.
+  operator client and through HTTP; a peer that is no operator, refused;
+  the health check of a zathras, which fails before the rollout, passes
+  when the service runs and fails again when the service has exited.
 - **As the first process**: a test that runs zathras as PID 1 of a
   container and checks that orphans are reaped and that SIGTERM ends the
   service, run on Linux by a script as jaccard-nfs-nix-store has one.
@@ -627,7 +656,8 @@ Three stages, each of which ends with something that works by itself:
 ## 17. Not in this design
 
 - Tokens of clamp, and any authentication of the web page.
-- Health checks beyond a service that has run for 30 seconds.
+- Checks of what a service does. draal and the health check of zathras go
+  by whether its process runs, and for how long.
 - Environment and secrets of a service: they are those of the pod.
 - Rollouts and rollbacks from the web page or the TUI.
 - Removing a service from draal.
