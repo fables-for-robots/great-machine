@@ -48,7 +48,7 @@
           version = "0";
           src = ./ui;
           nodejs = nodejs pkgs;
-          npmDepsHash = "sha256-ECumm71nRjrSIqwIfZ2ZZ2sFGM6J3IPH48R4TS0Ips4=";
+          npmDepsHash = "sha256-iF9vMOHv9JOptMwCe4LclyvzZbTkk8c1x3Sz2dl0ctI=";
           # vite.config.ts writes the build here instead of ../web/dist,
           # which is outside what a derivation may write.
           env.GREAT_MACHINE_UI_DIST = "dist";

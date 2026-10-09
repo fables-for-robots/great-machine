@@ -36,14 +36,15 @@ jobs:
       - name: sqlc
         run: sqlc diff
       # The page: its dependencies as package-lock.json names them, the
-      # type check, and the build into web/dist. A build leaves nothing
-      # that git sees: web/dist is ignored but for its placeholder, which
-      # the build keeps.
+      # type check, the unit tests, and the build into web/dist. A build
+      # leaves nothing that git sees: web/dist is ignored but for its
+      # placeholder, which the build keeps.
       - name: ui
         run: |
           cd ui
           npm ci
           npm run check
+          npm test
           npm run build
           test -z "$(git status --porcelain)"
       # `test` above ran without the page, as the Go module has to build

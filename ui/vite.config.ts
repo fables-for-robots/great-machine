@@ -1,6 +1,7 @@
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { defineConfig, type Plugin } from "vite";
+import type { Plugin } from "vite";
+import { defineConfig } from "vitest/config";
 import solid from "vite-plugin-solid";
 
 // Where the build goes: web/dist, which the Go package web embeds. The
@@ -44,6 +45,12 @@ export default defineConfig({
     assetsInlineLimit: 0,
     sourcemap: false,
     target: "es2022",
+  },
+  // The unit tests are of what has no part in the document: they run in
+  // Node as it is. (vite-plugin-solid would ask for jsdom otherwise.)
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
   },
   server: {
     // draal, or `go run ./web/demo`, on its default address. A request is
