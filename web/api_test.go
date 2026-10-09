@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -162,6 +163,32 @@ func TestAnInternalErrorSaysNothingAndItsTextStaysInTheLog(t *testing.T) {
 			t.Errorf("GET %s = %q, want nothing of the error's text in it", path, a.body)
 		}
 		if !strings.Contains(logged.String(), "permission denied") || !strings.Contains(logged.String(), "level=ERROR") {
+			t.Errorf("GET %s: the log is %q, want the error in it", path, logged.String())
+		}
+	}
+}
+
+func TestARefusalWithACodeDraalDoesNotKnowSaysNothing(t *testing.T) {
+	var logged bytes.Buffer
+	c := &fake{
+		rollouts: func(string) ([]wire.RolloutInfo, error) {
+			return nil, wire.Errorf(wire.Code("weird"), "the secret of a zathras")
+		},
+		history: func(wire.ID) ([]wire.Sample, error) {
+			return nil, fmt.Errorf("asking the zathras: %w", wire.Errorf(wire.Code("teapot"), "the secret of a zathras"))
+		},
+	}
+	srv := serve(t, Config{Controller: c, Log: slog.New(slog.NewTextHandler(&logged, nil))})
+	for _, path := range []string{"/api/zathras/" + string(zathrasA) + "/history", "/api/services/web/rollouts"} {
+		logged.Reset()
+		a := ask(t, srv, http.MethodGet, path, "")
+		if msg := wantRefusal(t, a, http.StatusInternalServerError, wire.CodeInternal); msg != "draal failed to answer; its log says why" {
+			t.Errorf("GET %s: the message is %q", path, msg)
+		}
+		if strings.Contains(a.body, "secret") {
+			t.Errorf("GET %s = %q, want nothing of the error's text in it", path, a.body)
+		}
+		if !strings.Contains(logged.String(), "the secret of a zathras") || !strings.Contains(logged.String(), "level=ERROR") {
 			t.Errorf("GET %s: the log is %q, want the error in it", path, logged.String())
 		}
 	}

@@ -54,14 +54,16 @@ func (h *handler) writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // refusalOf makes of an error of the controller what the browser is told.
-// A *wire.Error that is not internal is passed on as it is. An internal
-// one, whoever made it, and every other error is logged, and the page is
-// told that draal failed and no more: draal makes such errors of what
-// its database said, a zathras can answer one with any text, and neither
-// is the business of a page.
+// A refusal is passed on as it is when its code is one that has an HTTP
+// status of its own (statusOf). An internal one, one with a code draal
+// does not know, and every other error is logged, and the page is told
+// that draal failed and no more: draal makes such errors of what its
+// database said, a zathras can answer one with any text, and neither is
+// the business of a page. A code draal does not know can only have come
+// from a zathras.
 func (h *handler) refusalOf(r *http.Request, err error) *wire.Error {
 	var e *wire.Error
-	if errors.As(err, &e) && e.Code != wire.CodeInternal {
+	if errors.As(err, &e) && statusOf(e.Code) != http.StatusInternalServerError {
 		return e
 	}
 	if r.Context().Err() != nil {
