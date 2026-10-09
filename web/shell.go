@@ -116,8 +116,14 @@ func (in *shellInput) tell(ch chan struct{}) {
 // put puts in what was typed, behind what waits. With no room for it, it
 // waits for room, for at most WriteWait, and returns false when there
 // was none in that time. A message is no longer than readLimit, so there
-// is room for it at the latest when nothing waits.
+// is room for it at the latest when nothing waits. Once it has returned
+// false it takes nothing more.
 func (in *shellInput) put(data []byte) bool {
+	if in.full.Err() != nil {
+		// A message was given up before this one. What was typed after
+		// a hole must not reach the shell.
+		return false
+	}
 	var late <-chan time.Time
 	for {
 		in.mu.Lock()

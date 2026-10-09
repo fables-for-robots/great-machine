@@ -563,6 +563,29 @@ func TestShellInputNeverHoldsMoreThanItsBound(t *testing.T) {
 	}
 }
 
+// Once a message of what was typed has been given up, nothing more of what
+// was typed is taken: what comes after the hole must not reach the shell,
+// which would get the beginning and the end without the middle.
+func TestShellInputTakesNothingAfterItGaveAMessageUp(t *testing.T) {
+	h := New(Config{Controller: &fake{}, Dist: testDist(), Log: quiet, WriteWait: 100 * time.Millisecond}).(*handler)
+	in := newShellInput(h)
+	defer in.end()
+	in.message(websocket.MessageBinary, make([]byte, readLimit-10))
+	in.message(websocket.MessageBinary, []byte("MIDDLE-THAT-DOES-NOT-FIT"))
+	if in.full.Err() == nil {
+		t.Fatal("the message that found no room was not given up")
+	}
+	// There would be room for these three bytes.
+	in.message(websocket.MessageBinary, []byte("end"))
+	data, _ := in.take()
+	if len(data) != readLimit-10 || bytes.HasSuffix(data, []byte("end")) {
+		t.Fatalf("the shell would be given %d bytes, ending in %q: the end without the middle, want only the %d bytes before the message that was given up", len(data), data[max(0, len(data)-3):], readLimit-10)
+	}
+	if in.put([]byte("x")) {
+		t.Error("a message was taken after one was given up")
+	}
+}
+
 // A shell that takes nothing: what is typed waits, up to its bound, and
 // the page waits behind it. When that has lasted WriteWait the session
 // ends, and says why; not before, and with nothing dropped from the
