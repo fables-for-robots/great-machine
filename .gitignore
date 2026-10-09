@@ -17,7 +17,8 @@
 
 .DS_Store
 
-# the build of the page, which web embeds; the placeholder keeps the
-# directory there for go:embed
+# the page: its dependencies, and its build but for the placeholder that
+# keeps web/dist there for go:embed
+/ui/node_modules/
 /web/dist/*
 !/web/dist/.gitkeep

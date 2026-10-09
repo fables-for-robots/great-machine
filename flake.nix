@@ -28,6 +28,36 @@
         fromEnv
       else
         self.shortRev or self.dirtyShortRev or "dev";
+
+      # The Node that builds the page, in the derivation and in the
+      # shells: the same one, so that `npm ci` in a shell and the
+      # derivation read package-lock.json alike.
+      nodejs = pkgs: pkgs.nodejs_24;
+
+      # The page: ui/ built by Vite. Its output is what web/dist holds
+      # after `npm run build`: index.html, assets/ and the placeholder.
+      #
+      # npmDepsHash is the hash of the dependencies package-lock.json
+      # names. After any change of ui/package-lock.json:
+      #   nix run nixpkgs#prefetch-npm-deps ui/package-lock.json
+      # prints the new one. With a stale hash the build fails and names
+      # the right one in its "got:" line.
+      ui = pkgs:
+        pkgs.buildNpmPackage {
+          pname = "great-machine-ui";
+          version = "0";
+          src = ./ui;
+          nodejs = nodejs pkgs;
+          npmDepsHash = "sha256-ECumm71nRjrSIqwIfZ2ZZ2sFGM6J3IPH48R4TS0Ips4=";
+          # vite.config.ts writes the build here instead of ../web/dist,
+          # which is outside what a derivation may write.
+          env.GREAT_MACHINE_UI_DIST = "dist";
+          installPhase = ''
+            runHook preInstall
+            cp -r dist $out
+            runHook postInstall
+          '';
+        };
     in {
 
       # Evaluating a gonixgo package runs `gonixgo resolve` through
@@ -41,21 +71,39 @@
           # system, unless a package of another system is asked for, as
           # the Linux image is on a Mac: then --impure tells which machine
           # evaluates, and its nixpkgs runs the resolver.
-          goEnv = gonixgo.lib.mkGoEnv {
-            inherit pkgs;
-            evalPkgs = if builtins ? currentSystem
-            && builtins.currentSystem != system then
-              nixpkgs.legacyPackages.${builtins.currentSystem}
-            else
-              null;
-          };
+          evalPkgs = if builtins ? currentSystem && builtins.currentSystem
+          != system then
+            nixpkgs.legacyPackages.${builtins.currentSystem}
+          else
+            null;
+          goEnv = gonixgo.lib.mkGoEnv { inherit pkgs evalPkgs; };
+
+          # The source gonixgo builds: the repository with the build of
+          # the page at web/dist, where the package web embeds it.
+          #
+          # gonixgo asks `go list` while Nix evaluates which files a
+          # package embeds, so this source has to exist then: Nix builds
+          # it, and the page before it, during evaluation, on the machine
+          # that evaluates. That is why both come from that machine's
+          # nixpkgs. The files of the page are the same wherever they are
+          # built, and gonixgo copies the files of each package out of
+          # this source, so the derivations of the program do not depend
+          # on what machine evaluated them.
+          src = let
+            p = if evalPkgs != null then evalPkgs else pkgs;
+            page = ui p;
+          in p.runCommand "great-machine-src" { } ''
+            cp -r ${./.} $out
+            chmod -R u+w $out
+            cp -r ${page}/. $out/web/dist/
+          '';
 
           # The one program: draal, zathras and the operator's commands.
           # Without cgo it is linked statically on Linux, and runs in an
           # image that has no libc and whose /nix/store is another one.
           great-machine = goEnv.buildGoApplication {
             pname = "great-machine";
-            src = ./.;
+            inherit src;
             subPackages = [ "cmd/great-machine" ];
             CGO_ENABLED = 0;
             ldflags = [
@@ -67,6 +115,7 @@
           busybox = pkgs.pkgsStatic.busybox;
         in {
           default = great-machine;
+          ui = ui pkgs;
         } // nixpkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           # The image of the app container of a pod, and of draal:
           #   nix build .#image && docker load < result
@@ -114,17 +163,22 @@
         default = pkgs.mkShell {
           hardeningDisable = [ "all" ];
 
-          packages = with pkgs; [ go sqlc self.packages.${system}.default ];
+          packages = with pkgs; [
+            go
+            sqlc
+            (nodejs pkgs)
+            self.packages.${system}.default
+          ];
         };
 
-        # The same tools without the built program. The default shell
+        # The same tools without the built program and the built page. The default shell
         # cannot be entered while the module does not resolve, for example
         # after a `go get` that left go.sum behind; this one can, to run
         # `go mod tidy`. It needs no evaluation option.
         bare = pkgs.mkShell {
           hardeningDisable = [ "all" ];
 
-          packages = with pkgs; [ go sqlc ];
+          packages = with pkgs; [ go sqlc (nodejs pkgs) ];
         };
       });
     };
