@@ -9,8 +9,8 @@
 - Consumes:
   - `scripts/test-page.sh --image IMAGE` (Task 5): starts the image's `draal` with another store over `/nix/store`, and fails unless it answers `GET /` and `GET /s/web` on the loopback address of the container with a page.
   - `packages.<linux>.image` (stage 1), whose program is `packages.<system>.default`, which since Task 4 is built from the repository with the page at `web/dist`. Nothing in the flake changes here.
-  - `--web-addr` / `GREAT_MACHINE_WEB_ADDR` with its default `127.0.0.1:8080`, `--web-host` / `GREAT_MACHINE_WEB_HOST`, the log line `web page` with its `hosts=`, and the two warnings (Task 5).
-  - Of `web` (Tasks 1 and 2), as the contract has them: the table "The host name" and its refusal, 403 with a plain line that names the host, says why and says what to use; 403 as a refusal with the code `unauthorized` for a WebSocket of another origin; 501 with a plain line when the page is not built. The README describes these lines and does not quote them.
+  - `--web-addr` / `GREAT_MACHINE_WEB_ADDR` with its default `127.0.0.1:8080`, the log line `web page`, and the two warnings (Task 5).
+  - Of `web` (Tasks 1 and 2), as the contract has them: the page is answered under any host name; 403 as a refusal with the code `unauthorized` for a WebSocket whose `Origin` is not the host it is opened on; 501 with a plain line when the page is not built. The README describes these and quotes none.
   - The routes `/`, `/s/:service`, `/s/:service/z/:id` (the tasks of the page); `go run ./web/demo` (Task 3); the scripts `dev`, `check`, `build` of `ui/package.json`, `packages.<system>.ui` and the procedure of `npmDepsHash` (Task 4).
 - Produces: nothing a later task uses. A person finds out whether a program has the page from what its draal logs at its start (the warning `the web page was not built into this program`) and from what it answers (501); `great-machine version` prints what it printed.
 
@@ -203,7 +203,7 @@ with
 
 ````markdown
 ```sh
-great-machine draal --data DIR --jaccard-server ID --jaccard-prefix P [--operator ID]... [--web-addr ADDR] [--web-host NAME]...
+great-machine draal --data DIR --jaccard-server ID --jaccard-prefix P [--operator ID]... [--web-addr ADDR]
 ```
 ````
 
@@ -229,7 +229,6 @@ with
 | `--jaccard-server ID` | `JACCARD_SERVER` | required | the jaccard-store server that closures are pushed to |
 | `--jaccard-prefix P` | `JACCARD_PREFIX` | required | what is put before the name of a store path to make its reference; the same value the sidecars are given |
 | `--web-addr ADDR` | `GREAT_MACHINE_WEB_ADDR` | `127.0.0.1:8080` | where [the web page](#the-web-page) listens, as `HOST:PORT`; empty for no web page |
-| `--web-host NAME` | `GREAT_MACHINE_WEB_HOST` | none | a host name under which the web page is answered besides IP addresses and `localhost`, for a draal behind a proxy that authenticates; may be repeated, and the variable takes several with commas between them |
 | `--bind IP:PORT` | `GREAT_MACHINE_BIND` | every address, a port the system picks | the UDP address of the iroh endpoint |
 ````
 
@@ -243,10 +242,9 @@ nobody can act as an operator.
 with
 
 ````markdown
-At start draal logs its endpoint ID, and the URL of its web page with
-the host names of `--web-host`. Without `--operator` it warns that nobody
-can act as an operator. An address for the web page that is taken ends
-the command with 1.
+At start draal logs its endpoint ID, and the URL of its web page. Without
+`--operator` it warns that nobody can act as an operator. An address for
+the web page that is taken ends the command with 1.
 ````
 
 Replace
@@ -295,51 +293,29 @@ kubectl port-forward deployment/draal 8080:8080
 then `http://localhost:8080/`.
 
 **The page has no authentication, and whoever can reach its port has a
-shell in every container.** What stands in the way is where it listens,
-and the name it is asked under:
+shell in every container.** It answers under any host name: `localhost`,
+an IP address, or whatever name a tunnel, a forward or a proxy gives it.
 
-- **Loopback.** The default address is `127.0.0.1:8080`. An address that
-  is not loopback, such as `:8080`, is allowed, and draal warns about it
-  at its start. Do not put a Service or an Ingress in front of the port.
-- **The host name.** draal answers a request by the name it was asked
-  under, the `Host` of the request without its port:
-
-  | asked as | answered |
-  | --- | --- |
-  | a loopback IP address, or `localhost` | always |
-  | another IP address | when draal does not listen on loopback |
-  | a name given with `--web-host` | always |
-  | any other name | never, wherever draal listens |
-
-  Capitals and a dot at the end of a name make no difference. Everything
-  else is refused with `403` and a line that names the host that was
-  asked for, says why, and says what to use: the URL on loopback, or an
-  IP address or `--web-host`. draal logs the first such refusal as a
-  warning.
-
-  The reason for the last row: a name that draal was not told is a name
-  anyone can point at draal's address. A web site does that with a name
-  of its own while its page is open in the operator's browser (DNS
-  rebinding), and its page is then of the same origin as draal's and may
-  open a shell. An IP address cannot be pointed anywhere.
+- **It listens on loopback by default**, `127.0.0.1:8080`, where only the
+  machine itself, or the pod, reaches it. An address that is not
+  loopback, such as `:8080`, is allowed, and draal warns about it at its
+  start. Do not put a Service or an Ingress in front of the port.
 - **The origin.** A WebSocket, which is how the page gets the fleet, the
   logs and the shell, is refused with `403` when the page that opens it
   was not loaded from the host it is opened on. That keeps another web
-  site that is open in the same browser from opening a shell.
+  site that is open in the same browser from opening one directly.
+- **A limit that is known and was accepted.** The rule of the origin
+  does not hold against a web site that points a name of its own at
+  draal's address (DNS rebinding): its page is then of the same origin as
+  draal's, and gets a socket as draal's own page does. So the port should
+  be reachable only by people and machines that are trusted, and the
+  browser that is used for the page is best not used for browsing
+  elsewhere while the port is reachable from it.
 
-**Behind a proxy.** `--web-host NAME` is for a draal behind a proxy that
-authenticates whoever it lets through, and passes requests on under the
-name it is reached by:
-
-```sh
-great-machine draal … --web-addr 127.0.0.1:8080 --web-host draal.example.com
-```
-
-The name is a host name without a port. The proxy is then all the
-authentication there is. **A proxy that does not authenticate, or one
-that rewrites `Host` to `127.0.0.1`, puts a shell in every container on
-the network it listens on**: the first lets anyone in under the name, and
-the second makes every request look like one from the machine itself.
+**Behind a proxy.** A proxy in front of draal has to authenticate whoever
+it lets through: it is then all the authentication there is. It may pass
+requests on under any name. A proxy that does not authenticate puts a
+shell in every container on the network it listens on.
 
 `--web-addr ""` (or an empty `GREAT_MACHINE_WEB_ADDR`) turns the page off:
 nothing listens.
@@ -392,11 +368,11 @@ with
   has a shell in every container.
 - **The web page has no authentication.** Whoever can reach its port can
   read every log and has a shell in every container, though no rollout.
-  It listens on loopback unless told otherwise, answers to no host name
-  but `localhost` and those it was given with `--web-host`, and is reached
-  through `kubectl port-forward`: see [The web page](#the-web-page). The
-  port must not be exposed by a Service, and a proxy in front of it has
-  to authenticate.
+  It listens on loopback unless told otherwise, answers under any host
+  name, and is reached through `kubectl port-forward`: see
+  [The web page](#the-web-page). The port must not be exposed by a
+  Service, a proxy in front of it has to authenticate, and it should be
+  reachable only by people and machines that are trusted.
 - **Registration is open.** Any peer that knows the endpoint ID of draal
   can register as a zathras of any service. It is then listed with the
   others, is sent the path and the arguments of what the service runs,
@@ -548,7 +524,7 @@ grep -c "(#the-web-page)" README.md
 grep -n "^## The web page\|^### The page\|web-addr" README.md
 ```
 
-Expected: one line from the first command, the sentence about the terminal UI (`A terminal UI that shows the same is planned, and is not there yet.`); `4` from the second, the lines that link to the section; and from the third the heading `## The web page` between `### Operator commands` and `## Rollout`, the heading `### The page` under `## Development`, and `--web-addr` in the usage line of draal, in its table and in the section of the page. `grep -n web-host README.md` finds `--web-host` in the usage line, in the table, in the table of host names and under **Behind a proxy**, and in the section on security.
+Expected: one line from the first command, the sentence about the terminal UI (`A terminal UI that shows the same is planned, and is not there yet.`); `4` from the second, the lines that link to the section; and from the third the heading `## The web page` between `### Operator commands` and `## Rollout`, the heading `### The page` under `## Development`, and `--web-addr` in the usage line of draal, in its table and in the section of the page. `grep -c 'web-host' README.md deploy/draal.yaml` counts `0` in both: there is no such flag.
 
 Then do what the README says, as a reader would. Build the page and the program, start draal and open the page:
 
@@ -559,25 +535,16 @@ nix build --option allow-unsafe-native-code-during-evaluation true
   --jaccard-prefix nix/
 ```
 
-Expected: among what it logs, `msg="web page" addr=127.0.0.1:8080 url=http://127.0.0.1:8080/` and no warning about the page. Open the URL in a browser: the view of the services, which says that there is no service yet. Then, in another terminal, the refusals the README describes:
+Expected: among what it logs, `msg="web page" addr=127.0.0.1:8080 url=http://127.0.0.1:8080/` and no warning about the page. Open the URL in a browser: the view of the services, which says that there is no service yet. Then, in another terminal, what the README says of the host name and of the origin:
 
 ```bash
-curl -si -H 'Host: draal.example.com' http://127.0.0.1:8080/ | head -n 12
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: draal.example.com' http://127.0.0.1:8080/
 curl -si -H 'Origin: http://evil.example.com' -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
   -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
   http://127.0.0.1:8080/api/watch | head -n 1
 ```
 
-Expected: `HTTP/1.1 403 Forbidden` with a plain line that names `draal.example.com`, says why it is refused and what to use (the URL on loopback, or `--web-host`); and `HTTP/1.1 403 Forbidden`, whose body is the refusal `{"error":{"code":"unauthorized",…}}`. The first also left a warning in what draal logs. Stop draal with Ctrl-C (it logs `stopping` and ends with status 0).
-
-Then the name a proxy would pass on. Start the same draal with `--web-host Draal.Example.COM` added, and:
-
-```bash
-curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: draal.example.com' http://127.0.0.1:8080/
-curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: other.example.com' http://127.0.0.1:8080/
-```
-
-Expected: the line of the log `msg="web page" addr=127.0.0.1:8080 url=http://127.0.0.1:8080/ hosts=draal.example.com`, then `200` and `403`. Stop draal, and `rm result`.
+Expected: `200`, the page under a name that is not draal's own; and `HTTP/1.1 403 Forbidden`, the socket of a page of another origin. Stop draal with Ctrl-C (it logs `stopping` and ends with status 0), and `rm result`.
 
 If what `web` answers reads differently from what the section "The web page" says of it, the README is what gets corrected, in this step.
 

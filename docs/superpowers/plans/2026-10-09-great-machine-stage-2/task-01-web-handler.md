@@ -1,10 +1,10 @@
 ### Task 1: web, the handler without sockets
 
 **Files:**
-- Create: `web/web.go`, `web/host.go`, `web/page.go`, `web/api.go`
+- Create: `web/web.go`, `web/loopback.go`, `web/page.go`, `web/api.go`
 - Create: `web/dist/.gitkeep` (empty; the placeholder that keeps the embedded directory there)
 - Modify: `.gitignore` (the build of the page is ignored but for the placeholder)
-- Test: `web/fake_test.go`, `web/page_test.go`, `web/host_test.go`, `web/api_test.go`
+- Test: `web/fake_test.go`, `web/page_test.go`, `web/loopback_test.go`, `web/api_test.go`
 
 **Interfaces:**
 - Consumes (code that exists):
@@ -16,7 +16,7 @@
   - A refusal is `{"error": {"code": "...", "message": "..."}}` with the status 400 (`bad-request`), 403 (`unauthorized`), 404 (`not-found`), 503 (`unavailable`), 500 (`internal`), and 405 with the code `bad-request` and `Allow: GET` for a method that is not `GET`. An `internal` refusal, whoever made it (an error of the controller that is no `*wire.Error`, and a `*wire.Error` with the code `internal`), has the fixed message `draal failed to answer; its log says why`; its text is logged and not sent.
   - An endpoint ID in a path is 64 characters of `0-9a-f`. Capitals are refused with 400 and not folded: `wire.ID` is lower case, and the page has its IDs from draal.
   - Every answer has `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`. `'unsafe-inline'` is in `style-src` alone, because xterm.js makes `<style>` elements from script (four places in `@xterm/xterm` 6.0.0) and sets `style` attributes, and has no nonce: without it Chrome reports eight `style-src-elem` violations when a terminal is opened. `connect-src 'self'` covers the page's WebSockets (`ws:` from a page over `http:`, `wss:` from one over `https:`).
-  - The host name, as the contract's table has it: a loopback IP address or `localhost` is answered always; another IP address when `Loopback` is false; a name of `Config.Hosts` always; any other name never. Names are compared in lower case and without a dot at the end; `Hosts` given with a port, in capitals or with a dot are taken as they were meant, and what is no name among them is left out. What is refused is answered 403 with one plain line, for every path, the API included; the first refusal is logged at Warn and the following at Debug.
+  - The page and the API are answered under every host name, on every address: nothing looks at the `Host` of a request to decide whether to answer it (Review Focus 1: the page reached under another name, through a tunnel, a forward or a proxy that keeps the outside host name, works as under localhost). `Config` has no `Loopback` and no `Hosts`. `web.IsLoopback` is in `web/loopback.go`; the handler does not use it, `cli` does for its warning at start.
   - A file of the page is sent by `http.ServeContent` from the file as the `fs.FS` gives it (nothing is copied when it can be sought, as an embedded file can); an extension that is not in the handler's table is `application/octet-stream`.
   - Every answer has 2 minutes to be written (`http.ResponseController.SetWriteDeadline`; the unexported field `handler.answerWait`, which a test makes short). Task 2 takes the deadline off a connection that becomes a WebSocket.
   - `Config.MaxSockets` is 256 when zero; the handler's count of open sockets (`handler.sockets`) is Task 2's to keep.
@@ -291,7 +291,7 @@ func readAnswer(conn net.Conn) (int, string, bool) {
 }
 ```
 
-The page, `web/page_test.go`:
+The page (`TestPageIsAnsweredUnderEveryHostName` is the test of Review Focus 1 for this task), `web/page_test.go`:
 
 ```go
 package web
@@ -309,6 +309,8 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/fables-for-robots/great-machine/wire"
 )
 
 func TestPageServesItsFilesAndIndexForEveryOtherPath(t *testing.T) {
@@ -344,6 +346,31 @@ func TestPageServesItsFilesAndIndexForEveryOtherPath(t *testing.T) {
 		}
 		if got := a.header.Get("Cache-Control"); got != tt.cache {
 			t.Errorf("GET %s has Cache-Control %q, want %q", tt.path, got, tt.cache)
+		}
+	}
+}
+
+// Review Focus 1: the page reached under another name, through a tunnel,
+// a forward or a proxy that keeps the outside host name. It works as
+// under localhost: nothing looks at the Host of a request to decide
+// whether to answer it.
+func TestPageIsAnsweredUnderEveryHostName(t *testing.T) {
+	srv := serve(t, Config{Controller: &fake{rollouts: func(string) ([]wire.RolloutInfo, error) { return nil, nil }}})
+	for _, host := range []string{
+		"localhost:8080", "127.0.0.1", "[::1]:8080",
+		"192.168.1.5:8080", "10.0.0.7",
+		"draal.example", "DRAAL.Example.:8443", "tunnel-3f9a.trycloudflare.example",
+		"localhost.example.com", "attacker.example:8080",
+	} {
+		for path, want := range map[string]string{
+			"/":                          "<!doctype html><title>the page</title>",
+			"/s/web":                     "<!doctype html><title>the page</title>",
+			"/assets/index-1a2b.js":      "console.log('page')",
+			"/api/services/web/rollouts": `{"rollouts":[]}` + "\n",
+		} {
+			if a := ask(t, srv, http.MethodGet, path, host); a.status != http.StatusOK || a.body != want {
+				t.Errorf("GET %s as %s = %d %q, want 200 %q", path, host, a.status, a.body, want)
+			}
 		}
 	}
 }
@@ -515,7 +542,7 @@ func TestBuiltSaysWhatTheEmbeddedBuildAnswers(t *testing.T) {
 }
 
 func TestEveryAnswerHasTheSecurityHeaders(t *testing.T) {
-	built := serve(t, Config{Loopback: true})
+	built := serve(t, Config{})
 	unbuilt := serve(t, Config{Dist: fstest.MapFS{}})
 	tests := []struct {
 		name   string
@@ -527,7 +554,6 @@ func TestEveryAnswerHasTheSecurityHeaders(t *testing.T) {
 		{"a method the page has not", ask(t, built, http.MethodPost, "/", ""), http.StatusMethodNotAllowed},
 		{"a path the API has not", ask(t, built, http.MethodGet, "/api/nothing", ""), http.StatusNotFound},
 		{"a refusal of the API", ask(t, built, http.MethodGet, "/api/zathras/x/history", ""), http.StatusBadRequest},
-		{"a host that is refused", ask(t, built, http.MethodGet, "/", "example.com"), http.StatusForbidden},
 		{"a page that was not built", ask(t, unbuilt, http.MethodGet, "/", ""), http.StatusNotImplemented},
 	}
 	const policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; " +
@@ -550,194 +576,12 @@ func TestEveryAnswerHasTheSecurityHeaders(t *testing.T) {
 }
 ```
 
-The host name (this is the test of Review Focus 1), `web/host_test.go`:
+`IsLoopback`, `web/loopback_test.go`:
 
 ```go
 package web
 
-import (
-	"bytes"
-	"context"
-	"fmt"
-	"log/slog"
-	"net"
-	"net/http"
-	"strings"
-	"testing"
-)
-
-// hostRows is the table of the contract, "The host name", row by row:
-// a Host, and whether it is answered by a server on loopback and by one
-// that is not. Both servers were told the names of testHosts.
-var hostRows = []struct {
-	host           string
-	loopback, open bool
-}{
-	// A loopback IP address, or localhost: always.
-	{"127.0.0.1:8080", true, true},
-	{"127.0.0.1", true, true},
-	{"127.0.0.1.", true, true},
-	{"localhost:8080", true, true},
-	{"localhost", true, true},
-	{"LOCALHOST", true, true},
-	{"LocalHost.:8080", true, true},
-	{"[::1]:8080", true, true},
-	{"[::1]", true, true},
-	{"127.0.0.2", true, true}, // all of 127.0.0.0/8 is loopback
-	{"127.255.255.254:1", true, true},
-
-	// Another IP address: when the server does not listen on loopback.
-	{"192.168.1.5:8080", false, true},
-	{"10.0.0.7", false, true},
-	{"0.0.0.0:8080", false, true},
-	{"[::]:8080", false, true},
-	{"[fe80::1]:8080", false, true},
-	{"[2001:db8::1]", false, true},
-
-	// A name of Hosts: always, whatever its capitals and with a dot.
-	{"proxy.example", true, true},
-	{"proxy.example:443", true, true},
-	{"PROXY.Example", true, true},
-	{"proxy.example.", true, true},
-	{"proxy.example.:8443", true, true},
-	{"named.example", true, true}, // was given with a port
-	{"upper.example", true, true}, // was given in capitals
-
-	// Any other name: never. It could be anyone's.
-	{"example.com", false, false},
-	{"example.com:8080", false, false},
-	{"attacker.example", false, false},
-	{"localhost.example.com", false, false},
-	{"127.0.0.1.example.com", false, false},
-	{"127.0.0.1.example.com:8080", false, false},
-	{"sub.proxy.example", false, false},
-	{"proxy.example.attacker.example", false, false},
-	{"xproxy.example", false, false},
-	// What some read as an address and is not written as one.
-	{"127.1", false, false},
-	{"2130706433", false, false}, // 127.0.0.1 as one number
-	{"0x7f.0.0.1", false, false},
-	{"010.0.0.7", false, false},
-
-	// What is no Host.
-	{"::1", false, false},         // IPv6 without brackets
-	{"[127.0.0.1]", false, false}, // brackets are for IPv6
-	{"[localhost]", false, false},
-	{"[::1%lo0]:80", false, false}, // a zone is none of a Host
-	{"[::1", false, false},
-	{"[::1]8080", false, false},
-	{"localhost:", false, false},
-	{"localhost:80a", false, false},
-	{"localhost:123456", false, false},
-	{".", false, false},
-	// A user part or a path smuggled in.
-	{"localhost@example.com", false, false},
-	{"example.com@localhost", false, false},
-	{"user:pw@127.0.0.1:8080", false, false},
-	{"localhost/example.com", false, false},
-	{"127.0.0.1:8080/x", false, false},
-	{"localhost#example.com", false, false},
-	{"localhost example.com", false, false},
-	{"localhost,example.com", false, false},
-}
-
-// testHosts is Config.Hosts as a caller may give it: with a dot at the
-// end, with a port, in capitals, and with what is no name at all, which
-// is left out and breaks nothing.
-var testHosts = []string{"Proxy.Example.", "named.example:8443", "UPPER.EXAMPLE", "", "not a name", "a/b"}
-
-// Review Focus 1: the page asked for under a name that is not its own.
-// The answer is a refusal that says why and what to use, and not an
-// empty page; and a name draal was not told is refused on every address,
-// which is what keeps a page of another site from reaching draal under a
-// name of its own (DNS rebinding).
-func TestPageAnswersToItsOwnHostNamesAlone(t *testing.T) {
-	for _, loopback := range []bool{true, false} {
-		page := New(Config{Controller: &fake{}, Dist: testDist(), Log: quiet, Loopback: loopback, Hosts: testHosts})
-		srv := serveHandler(t, context.Background(), page)
-		_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
-		for _, tt := range hostRows {
-			want := tt.open
-			if loopback {
-				want = tt.loopback
-			}
-			if got := page.(*handler).answersTo(tt.host); got != want {
-				t.Errorf("loopback %v: answersTo(%q) = %v, want %v", loopback, tt.host, got, want)
-			}
-			// And through a server, for every path alike. Go's server
-			// refuses some of the hosts itself, with 400: such a request
-			// does not reach the handler, which is as good.
-			for _, path := range []string{"/", "/s/web", "/assets/index-1a2b.js", "/api/services/web/rollouts", "/api/watch"} {
-				status, body, ok := rawGet(t, srv.Listener.Addr().String(), path, tt.host)
-				if !ok {
-					continue
-				}
-				switch {
-				case want && status == http.StatusForbidden:
-					t.Errorf("loopback %v: GET %s with the host %q = 403 %q, want it answered", loopback, path, tt.host, body)
-				case !want && status != http.StatusForbidden && status != http.StatusBadRequest:
-					t.Errorf("loopback %v: GET %s with the host %q = %d, want 403", loopback, path, tt.host, status)
-				case !want && status == http.StatusForbidden:
-					// The line names the host, says why, and what to use.
-					wants := []string{"great-machine", fmt.Sprintf("%q", tt.host), "no authentication", "could be anyone's", "--web-host NAME"}
-					if loopback {
-						wants = append(wants, "loopback", "http://127.0.0.1:"+port+"/")
-					} else {
-						wants = append(wants, "IP address")
-					}
-					for _, w := range wants {
-						if !strings.Contains(body, w) {
-							t.Errorf("loopback %v: GET %s with the host %q = %q, want %q in it", loopback, path, tt.host, body, w)
-						}
-					}
-					if strings.Count(strings.TrimSpace(body), "\n") != 0 {
-						t.Errorf("loopback %v: GET %s with the host %q = %q, want one line", loopback, path, tt.host, body)
-					}
-				}
-			}
-		}
-		// A request without a Host, as HTTP/1.0 allows.
-		if status, body, _ := rawGet(t, srv.Listener.Addr().String(), "/", ""); status != http.StatusForbidden {
-			t.Errorf("loopback %v: GET / without a host = %d %q, want 403", loopback, status, body)
-		}
-	}
-}
-
-func TestWithoutHostsNoNameButLocalhostIsAnswered(t *testing.T) {
-	for _, loopback := range []bool{true, false} {
-		srv := serve(t, Config{Loopback: loopback})
-		for host, want := range map[string]int{
-			"localhost:8080":   http.StatusOK,
-			"127.0.0.1":        http.StatusOK,
-			"proxy.example":    http.StatusForbidden,
-			"draal.internal":   http.StatusForbidden,
-			"attacker.example": http.StatusForbidden,
-		} {
-			if a := ask(t, srv, http.MethodGet, "/", host); a.status != want {
-				t.Errorf("loopback %v: GET / with the host %q = %d, want %d", loopback, host, a.status, want)
-			}
-		}
-	}
-}
-
-// A page that asks in a loop under a name that is refused does not fill
-// the log: the first refusal is a warning, the following are for
-// debugging.
-func TestFirstRefusalOfAHostIsAWarningAndTheFollowingAreNot(t *testing.T) {
-	var logged bytes.Buffer
-	srv := serve(t, Config{Loopback: true, Log: slog.New(slog.NewTextHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug}))})
-	for range 5 {
-		if a := ask(t, srv, http.MethodGet, "/", "attacker.example"); a.status != http.StatusForbidden {
-			t.Fatalf("GET / as attacker.example = %d, want 403", a.status)
-		}
-	}
-	if warned, debugged := strings.Count(logged.String(), "level=WARN"), strings.Count(logged.String(), "level=DEBUG"); warned != 1 || debugged != 4 {
-		t.Errorf("five refusals were logged as %d warnings and %d lines for debugging, want 1 and 4:\n%s", warned, debugged, logged.String())
-	}
-	if !strings.Contains(logged.String(), "host=attacker.example") {
-		t.Errorf("the log does not name the host:\n%s", logged.String())
-	}
-}
+import "testing"
 
 func TestIsLoopback(t *testing.T) {
 	tests := []struct {
@@ -978,10 +822,15 @@ The handler, its configuration and the headers of every answer, `web/web.go`:
 // iroh protocol, and can show what that one can show; it can roll nothing
 // out and nothing back.
 //
-// The page has no authentication. What stands in its place is that draal
-// listens on loopback, that the handler then answers only to a host name
-// that is loopback, and that a WebSocket is refused to a page of another
-// origin.
+// The page has no authentication, and the handler answers under every
+// host name, on every address: whoever can reach its port has a shell in
+// every container. What there is: draal listens on loopback unless it is
+// told otherwise, and a WebSocket is refused to a page that was not
+// loaded from the host it opens the socket on, which keeps a page of
+// another site in the same browser from opening one directly. That does
+// not hold against a site that points a name of its own at draal's
+// address (DNS rebinding): its page is then of the origin it asks. This
+// is known and was decided so; the spec's section 4 records it.
 package web
 
 import (
@@ -1022,14 +871,6 @@ const contentSecurityPolicy = "default-src 'self'; " +
 type Config struct {
 	// Controller is what the API answers from: a *draal.Draal.
 	Controller draal.Controller
-	// Loopback says that the server listens on a loopback address. The
-	// handler then answers only requests whose host name is a loopback
-	// address, localhost or one of Hosts. Without it, it also answers to
-	// every other IP address, and to no other name.
-	Loopback bool
-	// Hosts are the host names the page answers to besides: the names
-	// under which a proxy that draal was put behind passes requests on.
-	Hosts []string
 	// Dist is the build of the page. nil: the one that is embedded.
 	Dist fs.FS
 	// Each of these has a default when it is zero:
@@ -1081,14 +922,12 @@ const answerWait = 2 * time.Minute
 type handler struct {
 	cfg   Config
 	log   *slog.Logger
-	built bool            // the build has an index.html
-	hosts map[string]bool // Config.Hosts, as names are compared
+	built bool // the build has an index.html
 	mux   *http.ServeMux
 	// answerWait is answerWait; the tests make it short.
 	answerWait time.Duration
 
-	refusedHost atomic.Bool  // a request was refused for its host name, and that was logged
-	sockets     atomic.Int64 // how many WebSockets are open
+	sockets atomic.Int64 // how many WebSockets are open
 	// inputWaits is how many readers of sockets wait for a shell to take
 	// its input. The tests look at it.
 	inputWaits atomic.Int64
@@ -1101,17 +940,9 @@ func New(cfg Config) http.Handler {
 		cfg:   cfg,
 		log:   cfg.Log,
 		built: hasIndex(cfg.Dist, indexFile),
-		hosts: map[string]bool{},
 		mux:   http.NewServeMux(),
 
 		answerWait: answerWait,
-	}
-	for _, name := range cfg.Hosts {
-		// A name as --web-host has it. One that was given with a port or
-		// in capitals is taken as it was meant.
-		if host, _, ok := splitHost(name); ok && host != "" {
-			h.hosts[host] = true
-		}
 	}
 	h.mux.HandleFunc("/api/services/{service}/rollouts", h.get(h.rollouts))
 	h.mux.HandleFunc("/api/zathras/{id}/history", h.get(h.history))
@@ -1120,9 +951,8 @@ func New(cfg Config) http.Handler {
 	return h
 }
 
-// ServeHTTP answers a request: with the headers every answer has, within
-// the time an answer has, and only when it was asked under a name the
-// page answers to.
+// ServeHTTP answers a request, under whatever host name it was asked:
+// with the headers every answer has, and within the time an answer has.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// A connection that becomes a WebSocket has this deadline taken off.
 	// A ResponseWriter that has no deadlines is one of a test.
@@ -1132,23 +962,17 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("X-Frame-Options", "DENY")
 	header.Set("Referrer-Policy", "no-referrer")
-	if !h.answersTo(r.Host) {
-		h.refuseHost(w, r)
-		return
-	}
 	h.mux.ServeHTTP(w, r)
 }
 ```
 
-The host name, `web/host.go`:
+`IsLoopback`, `web/loopback.go`:
 
 ```go
 package web
 
 import (
-	"fmt"
 	"net"
-	"net/http"
 	"net/netip"
 	"strings"
 )
@@ -1156,6 +980,10 @@ import (
 // IsLoopback says whether addr, as --web-addr has it (host:port), names
 // a loopback address: an IP that is one, or localhost. An empty host
 // (":8080") is every address and is not loopback.
+//
+// The handler asks this of nothing: it answers under every host name.
+// It is for the command, which warns at start about an address that is
+// not loopback.
 func IsLoopback(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -1166,116 +994,6 @@ func IsLoopback(addr string) bool {
 	}
 	ip, err := netip.ParseAddr(host)
 	return err == nil && ip.Zone() == "" && ip.IsLoopback()
-}
-
-// splitHost takes a Host apart: an IPv4 address, an IPv6 address in
-// brackets or a name, each with or without a port, and nothing else
-// around it. It returns the host as hosts are compared, in lower case
-// and without a dot at its end, and its IP address if it is one. It
-// returns false for what is no such Host.
-func splitHost(hostport string) (host string, ip netip.Addr, ok bool) {
-	host, port := hostport, ""
-	bracketed := strings.HasPrefix(hostport, "[")
-	switch {
-	case bracketed:
-		end := strings.IndexByte(hostport, ']')
-		if end < 0 {
-			return "", ip, false
-		}
-		host, port = hostport[1:end], hostport[end+1:]
-	case strings.Count(hostport, ":") == 1:
-		i := strings.IndexByte(hostport, ':')
-		host, port = hostport[:i], hostport[i:]
-	case strings.Contains(hostport, ":"):
-		return "", ip, false // an IPv6 address without brackets is no Host
-	}
-	if port != "" && !validPort(port) {
-		return "", ip, false
-	}
-	if bracketed {
-		// Brackets are for IPv6 alone, and a zone is none of a Host.
-		ip, err := netip.ParseAddr(host)
-		if err != nil || !ip.Is6() || ip.Zone() != "" {
-			return "", ip, false
-		}
-		return ip.String(), ip, true
-	}
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	if host == "" || strings.ContainsAny(host, "@/?#\\ ,[]%") {
-		return "", ip, false
-	}
-	// What is no address in the one form everybody reads as an address
-	// (four numbers) is a name here, whatever a browser makes of it.
-	if ip, err := netip.ParseAddr(host); err == nil {
-		return ip.String(), ip, true
-	}
-	return host, ip, true
-}
-
-// validPort says whether port is a colon and one to five digits.
-func validPort(port string) bool {
-	if len(port) < 2 || len(port) > 6 || port[0] != ':' {
-		return false
-	}
-	for _, c := range port[1:] {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-// answersTo says whether a request with the Host is answered:
-//
-//   - a loopback IP address or localhost: always;
-//   - another IP address: when the server does not listen on loopback;
-//   - a name of Config.Hosts: always;
-//   - any other name: never.
-//
-// The last line is what keeps the page of another site from reading
-// draal and opening a shell through a name of its own that it points at
-// draal's address while it is open in the operator's browser (DNS
-// rebinding): the browser sends the name it was given, the page is of
-// the same origin as draal's under it, and only draal can tell that the
-// name is not its own. An IP address cannot be pointed anywhere.
-func (h *handler) answersTo(hostport string) bool {
-	host, ip, ok := splitHost(hostport)
-	switch {
-	case !ok:
-		return false
-	case h.hosts[host]:
-		return true
-	case ip.IsValid():
-		return ip.IsLoopback() || !h.cfg.Loopback
-	default:
-		return host == "localhost"
-	}
-}
-
-// refuseHost answers a request that was asked under a name the page does
-// not answer to: who forwards a port or runs a proxy is told what
-// happened and what to use, and sees no empty page.
-func (h *handler) refuseHost(w http.ResponseWriter, r *http.Request) {
-	// The first is worth a warning. A page that asks again and again is
-	// not to fill the log.
-	level := h.log.Debug
-	if h.refusedHost.CompareAndSwap(false, true) {
-		level = h.log.Warn
-	}
-	level("a request under a host name the page does not answer to was refused", "host", r.Host, "remote", r.RemoteAddr)
-
-	use := "Open it by the IP address of draal's machine, or start draal with --web-host NAME for the name a proxy passes requests on under."
-	if h.cfg.Loopback {
-		url := "http://127.0.0.1:PORT/, with the port of draal's --web-addr"
-		if addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
-			url = "http://" + addr.String() + "/"
-		}
-		use = "draal listens on loopback: open " + url + " on its machine, or forward a port to that address and open it as " +
-			"http://127.0.0.1:PORT/ or http://localhost:PORT/; or start draal with --web-host NAME for the name a proxy passes requests on under."
-	}
-	http.Error(w, fmt.Sprintf(
-		"great-machine: this page was asked for as %q, and it does not answer to that: it has no authentication, "+
-			"and a name that draal was not told could be anyone's. %s", r.Host, use), http.StatusForbidden)
 }
 ```
 
@@ -1589,5 +1307,5 @@ Expected: no output.
 
 ```bash
 git add .gitignore web/
-git commit -m "Web: the page and the JSON of the API, answered to the page's own host names alone"
+git commit -m "Web: the page and the JSON of the API, answered under any host name"
 ```

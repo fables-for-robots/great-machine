@@ -15,7 +15,7 @@
 **Interfaces:**
 - Consumes:
   - Task 4: the skeleton in `ui/` (`npm ci`, the scripts `dev`, `check`, `build`; `tsconfig.json` strict with `noUncheckedIndexedAccess`; `vite.config.ts` with `assetsInlineLimit: 0`; `index.html` with `#root`), `packages.<system>.ui` with `npmDepsHash` in `flake.nix`, the step `ui` of CI.
-  - Tasks 1 and 2: `GET /api/watch` (WebSocket: text messages, each a `Fleet`, the first at once), the refusal format `{"error":{"code":…,"message":…}}`, the 403 of the host rule as a plain line, and the content security policy `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; …`, under which no `data:` URI and no other host is allowed.
+  - Tasks 1 and 2: `GET /api/watch` (WebSocket: text messages, each a `Fleet`, the first at once), the refusal format `{"error":{"code":…,"message":…}}`, and the content security policy `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; …`, under which no `data:` URI and no other host is allowed.
   - Task 3: `go run ./web/demo [--addr …] [--dist DIR] [--empty]`.
   - The design system of Fables for Robots: its tokens, and its mark `Icon_White.png`.
 - Produces:
@@ -1379,8 +1379,8 @@ test("a refusal becomes its code and its message", () => {
   expect(e.status).toBe(404);
 });
 
-test("the plain line of the host rule is shown as its text", () => {
-  const line = 'great-machine: this page was asked for as "example.com", and it answers on loopback only.\n';
+test("a plain line that is no refusal is shown as its text", () => {
+  const line = "the proxy in front of draal lets nobody in without a session.\n";
   const e = errorOf(403, line);
   expect(e.code).toBe("http");
   expect(e.message).toBe(line.trim());
@@ -1469,7 +1469,7 @@ import { isRefusal, type RolloutList, type SampleList } from "./types";
 /** Why a request was not answered with what was asked for. */
 export class ApiError extends Error {
   /** The code of a refusal ("not-found", "unavailable", …); "http" for
-   *  an answer that is no refusal, as the plain line of the host rule;
+   *  an answer that is no refusal, as a line of a proxy in front of draal;
    *  "network" when there was no answer. */
   readonly code: string;
   /** The HTTP status; 0 when there was no answer. */

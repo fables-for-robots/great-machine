@@ -13,7 +13,7 @@
   - `github.com/coder/websocket` v1.8.14: `websocket.Accept`, `(*Conn).Read`, `Write`, `Ping`, `Close`, `CloseNow`, `SetReadLimit`. Of this library: every method but `Read` may be called from several goroutines; a `Read` or a `Write` whose context ends closes the connection; `Ping` needs a `Read` that runs; `CloseRead` closes the socket with a policy violation when a data message comes, so it is not used here, where what the page sends is to be ignored; `Close` waits up to 5 seconds to write its frame and 5 more for the page's, and the library hands out no way to cut a connection, so the handler keeps the `net.Conn` the library takes over (the type `taken`).
 - Produces:
   - `GET /api/watch`, `GET /api/zathras/{id}/logs[?follow=1]`, `GET /api/zathras/{id}/shell[?cols=&rows=&term=]` as WebSockets, as the plan's Interfaces have them.
-  - Before the upgrade, as JSON refusals: 400 for what is no endpoint ID, for `follow` that is not `1`, `true`, `0`, `false` or empty, for `cols` or `rows` outside 1 to 1000, for a `term` that is not up to 64 of `A-Za-z0-9._+-`, and for a request that is no upgrade; 403 with the code `unauthorized` for an `Origin` whose host (with its port) is not the request's `Host`. No `Origin` is accepted.
+  - Before the upgrade, as JSON refusals: 400 for what is no endpoint ID, for `follow` that is not `1`, `true`, `0`, `false` or empty, for `cols` or `rows` outside 1 to 1000, for a `term` that is not up to 64 of `A-Za-z0-9._+-`, and for a request that is no upgrade; 403 with the code `unauthorized` for an `Origin` whose host (with its port) is not the request's `Host`. No `Origin` is accepted. This is all that is asked of a socket's origin, under whatever name the request came (Review Focus 1: a page under any name gets its sockets when it was loaded from the host it asks, and a page of another origin gets none). It does not keep out a site that points a name of its own at draal's address (DNS rebinding): `TestPageOfANameThatWasPointedAtDraalIsAnsweredAndGetsASocket` states that such a page is answered, which is the person's decision, recorded in the spec's section 4.
   - After the upgrade: the text message `{"error": {"code": ..., "message": ...}}` is the last one, and the close after it is normal (1000). A log without `follow` and a shell that has ended (`{"exit": N}`) close with 1000 too. A server whose requests' context is cancelled closes its sockets with 1001 (going away). A socket that did not take a message within `WriteWait`, or answered no ping, is cut without a close frame (the page sees 1006). A message of the page of more than 64 KiB closes the socket with 1009.
   - The close of a socket takes at most 1 second (`closeWait`), or `WriteWait` if that is shorter: the close frame is written, the page has the rest of that time to answer it, and the connection is cut. The handler of every socket has returned within that time of the end of its request's context, whatever the page does.
   - At most `Config.MaxSockets` sockets are open. One more is refused before the upgrade with 503 `unavailable`; the count goes down on every way a socket ends.
@@ -268,42 +268,44 @@ func linesOf(lines []wire.LogLine, more <-chan wire.LogLine, calls chan<- contex
 func TestSocketIsOpenedByItsOwnPageAlone(t *testing.T) {
 	w := newWatcher()
 	w.fleets <- fleetOf("web")
-	open := serveSockets(t, Config{Controller: &fake{watch: w.watch}, Hosts: []string{"draal.example"}})
-	loopback := serveSockets(t, Config{Controller: &fake{watch: w.watch}, Loopback: true})
-	host := strings.TrimPrefix(open.URL, "http://")
-	loopHost := strings.TrimPrefix(loopback.URL, "http://")
-	_, port, _ := strings.Cut(loopHost, ":")
+	srv := serveSockets(t, Config{Controller: &fake{watch: w.watch}})
+	address := strings.TrimPrefix(srv.URL, "http://")
+	_, port, _ := strings.Cut(address, ":")
 
 	tests := []struct {
 		name   string
-		srv    *httptest.Server
 		host   string // the Host of the request; "": the server's address
 		origin string // "": none, as a program that is no browser
 		status int
 	}{
-		{"no origin", open, "", "", http.StatusSwitchingProtocols},
-		{"the same origin", open, "", "http://" + host, http.StatusSwitchingProtocols},
-		{"the same origin, in capitals", open, "draal.example:8080", "http://DRAAL.example:8080", http.StatusSwitchingProtocols},
-		{"the same origin over TLS in front", open, "draal.example", "https://draal.example", http.StatusSwitchingProtocols},
-		{"another origin", open, "", "http://evil.example", http.StatusForbidden},
-		{"the same host on another port", open, "draal.example:8080", "http://draal.example:9090", http.StatusForbidden},
-		{"the same host without the port", open, "draal.example:8080", "http://draal.example", http.StatusForbidden},
-		{"an origin that is none", open, "", "null", http.StatusForbidden},
-		{"an origin without a host", open, "", "file://", http.StatusForbidden},
+		{"no origin", "", "", http.StatusSwitchingProtocols},
+		{"no origin, under a name", "draal.example", "", http.StatusSwitchingProtocols},
 
-		{"loopback, its own page", loopback, "", "http://" + loopHost, http.StatusSwitchingProtocols},
-		{"loopback, its own page by name", loopback, "localhost:" + port, "http://localhost:" + port, http.StatusSwitchingProtocols},
-		// The attack the rule is there for: a page of evil.example, open
-		// in the operator's browser, opens a WebSocket to 127.0.0.1. The
-		// browser lets it, and sends the page's origin.
-		{"loopback, a page of another site", loopback, "", "http://evil.example", http.StatusForbidden},
-		// The same page under a name it has pointed at 127.0.0.1 (DNS
-		// rebinding): its origin is the host now, and the host is not
-		// loopback. This is the rule of Review Focus 1 doing its part.
-		{"loopback, a page of another site by a name of its own", loopback, "evil.example:" + port, "http://evil.example:" + port, http.StatusForbidden},
-		// And a page of another program on this machine.
-		{"loopback, a page of another port", loopback, "", "http://127.0.0.1:1", http.StatusForbidden},
-		{"loopback, localhost is not 127.0.0.1", loopback, "", "http://localhost:" + port, http.StatusForbidden},
+		// A page under any name gets its sockets when it was loaded from
+		// the host it asks: Review Focus 1.
+		{"its own page by address", "", "http://" + address, http.StatusSwitchingProtocols},
+		{"its own page by localhost", "localhost:" + port, "http://localhost:" + port, http.StatusSwitchingProtocols},
+		{"its own page by another address", "192.168.1.5:8080", "http://192.168.1.5:8080", http.StatusSwitchingProtocols},
+		{"its own page by IPv6", "[::1]:8080", "http://[::1]:8080", http.StatusSwitchingProtocols},
+		{"its own page under a name", "draal.example:8080", "http://draal.example:8080", http.StatusSwitchingProtocols},
+		{"its own page under a name, in capitals", "draal.example:8080", "http://DRAAL.example:8080", http.StatusSwitchingProtocols},
+		{"its own page through a proxy with TLS", "draal.example", "https://draal.example", http.StatusSwitchingProtocols},
+		{"its own page through a tunnel", "tunnel-3f9a.trycloudflare.example", "https://tunnel-3f9a.trycloudflare.example", http.StatusSwitchingProtocols},
+
+		// What the rule is there for: a page of evil.example, open in the
+		// operator's browser, opens a WebSocket to 127.0.0.1 or to draal's
+		// name. The browser lets it, and sends the page's origin.
+		{"a page of another site", "", "http://evil.example", http.StatusForbidden},
+		{"a page of another site, draal under a name", "draal.example", "https://evil.example", http.StatusForbidden},
+		{"a page of another site, draal by localhost", "localhost:" + port, "http://evil.example:" + port, http.StatusForbidden},
+		// And a page of another program on the same machine.
+		{"a page of another port", "", "http://127.0.0.1:1", http.StatusForbidden},
+		{"the same host on another port", "draal.example:8080", "http://draal.example:9090", http.StatusForbidden},
+		{"the same host without the port", "draal.example:8080", "http://draal.example", http.StatusForbidden},
+		{"localhost is not 127.0.0.1", "", "http://localhost:" + port, http.StatusForbidden},
+		{"a name is not its subdomain", "draal.example", "https://x.draal.example", http.StatusForbidden},
+		{"an origin that is none", "", "null", http.StatusForbidden},
+		{"an origin without a host", "", "file://", http.StatusForbidden},
 	}
 	for _, tt := range tests {
 		opts := &websocket.DialOptions{Host: tt.host, HTTPHeader: http.Header{}}
@@ -311,7 +313,7 @@ func TestSocketIsOpenedByItsOwnPageAlone(t *testing.T) {
 			opts.HTTPHeader.Set("Origin", tt.origin)
 		}
 		for _, path := range []string{"/api/watch", "/api/zathras/" + string(zathrasA) + "/logs", "/api/zathras/" + string(zathrasA) + "/shell"} {
-			c, status := dialWith(t, tt.srv, path, opts)
+			c, status := dialWith(t, srv, path, opts)
 			if status != tt.status {
 				t.Errorf("%s: %s was answered %d, want %d", tt.name, path, status, tt.status)
 			}
@@ -334,48 +336,52 @@ func TestSocketIsOpenedByItsOwnPageAlone(t *testing.T) {
 	}
 }
 
-// A name draal was not told could be anyone's. With draal on an address
-// that is not loopback, a page of attacker.example whose name was pointed
-// at that address (DNS rebinding) has the origin the request is sent to,
-// so the rule of the Origin lets it in. The rule of the host name does
-// not: it gets no fleet and no shell. The same page of a name draal was
-// told, and one asked for by the IP address, are draal's own.
-func TestPageOfANameThatWasPointedAtDraalGetsNoSocket(t *testing.T) {
+// THIS IS NOT A PROTECTION, AND IS NOT MEANT TO BE ONE. A page of a name
+// that was pointed at draal's address IS answered, and gets its sockets,
+// a shell among them.
+//
+// A web site can point a name of its own at draal's address while its
+// page is open in the browser of someone who can reach draal's port (DNS
+// rebinding). The browser then asks draal under that name, the page's
+// origin is the host it asks, and the rule of the Origin, which is all
+// there is, lets it in: draal answers under any host name and cannot
+// tell that name from one of its own. The person who ordered
+// great-machine was told this and decided that the page answers under
+// any host name, on every address, loopback included; the spec's section
+// 4 records it. Who changes this test changes that decision.
+func TestPageOfANameThatWasPointedAtDraalIsAnsweredAndGetsASocket(t *testing.T) {
 	w := newWatcher()
 	w.fleets <- fleetOf("web")
-	asked := make(chan wire.ShellRequest, 16)
-	srv := serveSockets(t, Config{Controller: &fake{watch: w.watch, shell: shells(newFakeShell(), asked)}, Hosts: []string{"draal.example"}})
-	address := strings.TrimPrefix(srv.URL, "http://")
-	_, port, _ := strings.Cut(address, ":")
-	for host, want := range map[string]int{
-		"attacker.example:" + port: http.StatusForbidden,
-		"attacker.example":         http.StatusForbidden,
-		"draal.example:" + port:    http.StatusSwitchingProtocols,
-		address:                    http.StatusSwitchingProtocols,
-	} {
-		for _, path := range []string{"/api/watch", shellPath} {
-			c, status := dialWith(t, srv, path, &websocket.DialOptions{Host: host, HTTPHeader: http.Header{"Origin": {"http://" + host}}})
-			if status != want {
-				t.Errorf("%s as a page of %s was answered %d, want %d", path, host, status, want)
-			}
-			if c == nil {
-				continue
-			}
-			// Its own page gets what it asked for: the handler asks the
-			// controller, which is waited for before the socket is closed.
-			if path == shellPath {
-				await(t, "the controller to be asked for a shell", asked)
-			} else {
-				await(t, "the controller to be asked to watch", w.calls)
-			}
-			c.CloseNow()
-		}
+	asked := make(chan wire.ShellRequest, 1)
+	srv := serveSockets(t, Config{Controller: &fake{watch: w.watch, shell: shells(newFakeShell(), asked)}})
+	_, port, _ := strings.Cut(strings.TrimPrefix(srv.URL, "http://"), ":")
+	rebound := "attacker.example:" + port
+
+	if a := ask(t, srv, http.MethodGet, "/", rebound); a.status != http.StatusOK {
+		t.Errorf("GET / as %s = %d, want the page", rebound, a.status)
 	}
-	// A refusal is sent before the handler returns: nothing of the pages
-	// that were refused can reach the controller now.
-	if watched, shells := len(w.calls), len(asked); watched != 0 || shells != 0 {
-		t.Errorf("the controller was asked to watch %d times and for %d shells by pages that are not its own", watched, shells)
+	opts := func() *websocket.DialOptions {
+		return &websocket.DialOptions{Host: rebound, HTTPHeader: http.Header{"Origin": {"http://" + rebound}}}
 	}
+	c := mustDial(t, srv, "/api/watch", opts())
+	await(t, "the controller to be asked to watch", w.calls)
+	var f wire.Fleet
+	nextText(t, c, &f)
+	if len(f.Services) != 1 || f.Services[0].Name != "web" {
+		t.Errorf("the page of %s read the fleet %+v, want the one of web", rebound, f)
+	}
+	mustDial(t, srv, shellPath, opts())
+	await(t, "the controller to be asked for a shell", asked)
+}
+
+// mustDial is dialWith for a socket that is to be opened.
+func mustDial(t *testing.T, srv *httptest.Server, path string, opts *websocket.DialOptions) *websocket.Conn {
+	t.Helper()
+	c, status := dialWith(t, srv, path, opts)
+	if c == nil {
+		t.Fatalf("the socket %s was refused with %d", path, status)
+	}
+	return c
 }
 
 // At most MaxSockets sockets are open at a time. One more is refused
@@ -1691,17 +1697,9 @@ func New(cfg Config) http.Handler {
 		cfg:   cfg,
 		log:   cfg.Log,
 		built: hasIndex(cfg.Dist, indexFile),
-		hosts: map[string]bool{},
 		mux:   http.NewServeMux(),
 
 		answerWait: answerWait,
-	}
-	for _, name := range cfg.Hosts {
-		// A name as --web-host has it. One that was given with a port or
-		// in capitals is taken as it was meant.
-		if host, _, ok := splitHost(name); ok && host != "" {
-			h.hosts[host] = true
-		}
 	}
 	h.mux.HandleFunc("/api/services/{service}/rollouts", h.get(h.rollouts))
 	h.mux.HandleFunc("/api/zathras/{id}/history", h.get(h.history))
@@ -1804,6 +1802,11 @@ func (t *taken) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // every page open one to every host: the same-origin policy does not
 // hold for them. Without this, any page the operator has open could ask
 // 127.0.0.1 for a shell.
+//
+// The Host is not looked at beyond this: a page under any name is
+// draal's own when it was loaded from the host it asks. So this does not
+// keep out a site that points a name of its own at draal's address (DNS
+// rebinding), which is known and was decided so (the spec's section 4).
 func sameOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {

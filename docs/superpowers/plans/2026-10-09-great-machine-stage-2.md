@@ -4,17 +4,17 @@
 
 **Goal:** draal serves a web page that shows every service and every connected zathras with its state, its figures over the last 15 minutes and the last 400 lines of its log, and gives a shell in its container.
 
-**Architecture:** A package `web` puts an HTTP API in front of `draal.Controller`, the interface the iroh protocol already answers from: JSON for what is asked once, WebSockets for the fleet, the logs and the shell. The page is a single-page application in SolidJS, built by Vite into `web/dist` and embedded in the program with `go:embed`. It has no authentication: it listens on loopback and answers only under a host name that nobody else can point at it. Before any of that, one task mends stage 1's streams, so that a shell that is closed from a browser tab is gone from the container.
+**Architecture:** A package `web` puts an HTTP API in front of `draal.Controller`, the interface the iroh protocol already answers from: JSON for what is asked once, WebSockets for the fleet, the logs and the shell. The page is a single-page application in SolidJS, built by Vite into `web/dist` and embedded in the program with `go:embed`. It has no authentication: it listens on loopback unless told otherwise, and answers under any host name. Before any of that, one task mends stage 1's streams, so that a shell that is closed from a browser tab is gone from the container.
 
 **Tech Stack:** Go 1.26 with `github.com/coder/websocket`; SolidJS, TypeScript and Vite, with vitest for unit tests; xterm.js for the shell; Nix with gonixgo for the program and `buildNpmPackage` for the page.
 
-**Spec:** `docs/superpowers/specs/2026-10-09-great-machine-design.md`, sections 3 (`--web-addr`, `--web-host`), 4 (the page has no authentication), 7.6, 8.2, 8.3, 9, 12 and 14. The spec was brought in line with what this plan settled: the rule of the host name and `--web-host` (sections 3 and 4), the end of a shell session (7.6), what the HTTP API answers (8.3), the page's tests (14) and gonixgo's embedding (15). Stage 1 is merged; its plan and the ledger of its execution are beside this file. The terminal UI (stage 3) gets a plan of its own.
+**Spec:** `docs/superpowers/specs/2026-10-09-great-machine-design.md`, sections 3 (`--web-addr`), 4 (the page has no authentication), 7.6, 8.2, 8.3, 9, 12 and 14. The spec was brought in line with what this plan settled: that the page answers under any host name (section 4), the end of a shell session (7.6), what the HTTP API answers (8.3), the page's tests (14) and gonixgo's embedding (15). Stage 1 is merged; its plan and the ledger of its execution are beside this file. The terminal UI (stage 3) gets a plan of its own.
 
 ## Global Constraints
 
 - Everything stage 1's plan constrains still holds: one module and one program, no `internal/` directory, no cgo, `log/slog`, the standard library's `testing` alone for Go tests, every waiting time a field of a `Config`, nothing built left behind, work on a branch.
 - The HTTP API can roll nothing out and nothing back. It calls `Store`, `Rollout` and `Rollback` of the controller nowhere.
-- The page has no authentication. `--web-addr` (`GREAT_MACHINE_WEB_ADDR`) is `127.0.0.1:8080` unless given, and empty means no web page. The server answers a request only under a name that nobody else can point at it: a loopback address or `localhost`, any other IP address when it listens beyond loopback, and the names it was given with `--web-host`. A WebSocket is refused when its `Origin` is not the host it was asked on.
+- The page has no authentication. `--web-addr` (`GREAT_MACHINE_WEB_ADDR`) is `127.0.0.1:8080` unless given, and empty means no web page. **The server answers under any host name, on every address**: it does not look at the `Host` of a request to decide whether to answer. A WebSocket is refused when its `Origin` is not the host it was asked on. That keeps a page of another site from opening a socket; it does not keep out a site that points a name of its own at draal's address (DNS rebinding). The person who ordered the project decided so: whoever can reach the port is trusted, and so is what they browse.
 - **The page asks nothing of any other host.** Fonts, scripts, styles and images are in the build. It works under the content security policy the server sends, which allows no other origin and no inline script.
 - The page is SolidJS with TypeScript in strict mode, built by Vite. It follows the Fables for Robots design system.
 - The sources of the page are in `ui/`, which a `go.mod` of its own keeps out of the Go module. Its build goes to `web/dist`, which `web` embeds. **The Go module builds and its tests pass without that build**; draal then serves one line that says the page was not built.
@@ -25,7 +25,7 @@
 
 What the spec implies and a person will meet, and the task whose tests pin it:
 
-1. **The page asked for under a name draal was not told**, through a tunnel, a forward or a proxy that keeps the outside host name. The answer is a refusal that says why and what to use, and not an empty page; and a web site that points a name of its own at draal gets nothing. Task 1.
+1. **The page reached under another name**, through a tunnel, a forward or a proxy that keeps the outside host name. It works as under `localhost`, its sockets included, and a page of another origin still gets no socket. Tasks 1 and 2.
 2. **A zathras that goes while its log, its shell or its charts are open.** The page says that it is gone and stops asking; the socket ends with a reason and not in silence. Tasks 2 and 6 for the sockets, 9 and 10 for the page.
 3. **draal restarted while the page is open.** The page says that the connection is lost, tries again with pauses that grow, and is back on the view it was on. Task 7.
 4. **Nothing to show:** no service yet, a service without a zathras, a zathras without samples (no cgroup v2), a service without a rollout. Every view says what is missing; none is blank and none shows `NaN` or `undefined`. Tasks 8 and 9.
@@ -47,7 +47,7 @@ ui/src/state/        the fleet as the page holds it
 ui/src/views/        services, a service, a zathras
 ui/src/components/   what the views are made of
 ui/src/styles/       the design system's tokens and the page's styles
-cli/draal.go         --web-addr, --web-host
+cli/draal.go         --web-addr
 cli/web.go           the server beside the iroh endpoint, and its end
 scripts/test-page.sh asks a program, or an image, for the page
 e2e/                 tests of the whole through HTTP
@@ -119,14 +119,6 @@ package web
 type Config struct {
 	// Controller is what the API answers from: a *draal.Draal.
 	Controller draal.Controller
-	// Loopback says that the server listens on a loopback address. The
-	// handler then answers only requests whose host name is a loopback
-	// address, localhost or one of Hosts. Without it, it also answers to
-	// every other IP address, and to no other name.
-	Loopback bool
-	// Hosts are the host names the page answers to besides: the names
-	// under which a proxy that draal was put behind passes requests on.
-	Hosts []string
 	// Dist is the build of the page. nil: the one that is embedded.
 	Dist fs.FS
 	// Each of these has a default when it is zero:
@@ -147,7 +139,8 @@ func Built() bool
 
 // IsLoopback says whether addr, as --web-addr has it (host:port), names
 // a loopback address: an IP that is one, or localhost. An empty host
-// (":8080") is every address and is not loopback.
+// (":8080") is every address and is not loopback. The command warns at
+// its start about an address that is none; the handler does not ask.
 func IsLoopback(addr string) bool
 ```
 
@@ -256,28 +249,10 @@ or a `blob:` URI: the build of the page inlines no file. When the page is
 not built, every path outside `/api/` is answered with status 501 and one
 line of plain text that says so and how it is built.
 
-**The host name.** A request is answered by the name it was asked under,
-its `Host` without the port:
-
-| `Host` | Answered |
-|---|---|
-| a loopback IP address, or `localhost` | always |
-| another IP address | when the server does not listen on loopback |
-| a name of `Hosts` | always |
-| any other name | never |
-
-Names are compared without regard to capitals and to a dot at the end.
-Everything else is answered 403 with a plain line that names the host it
-was asked for, says why, and says what to use: the URL on loopback, or
-`--web-host`. The first such refusal is logged as a warning and the
-following ones for debugging.
-
-The reason for the last row, which holds on every address: a name that
-draal was not told is a name anyone can point at draal's address. A web
-site does that with a name of its own while its page is open in the
-operator's browser (DNS rebinding), and its page is then of the same
-origin as draal's and may open a shell. An IP address cannot be pointed
-anywhere.
+**The host name** is not looked at. The page and the API are answered
+under whatever `Host` a request has, on every address, so that a tunnel,
+a forward or a proxy may reach draal under any name. What that leaves
+open is in the Global Constraints, and is the person's decision.
 
 ### web/demo
 
@@ -304,7 +279,6 @@ not part of the program.
 | Flag | Variable | Default | Meaning |
 |---|---|---|---|
 | `--web-addr ADDR` | `GREAT_MACHINE_WEB_ADDR` | `127.0.0.1:8080` | where the web page listens; empty for no web page |
-| `--web-host NAME` | `GREAT_MACHINE_WEB_HOST` | | a host name under which the web page is answered besides IP addresses and `localhost`; may be given more than once, and the variable takes several with commas |
 
 - The server starts after the iroh endpoint is bound and before `Serve`,
   and logs `web page` with `addr=` (what was bound) and `url=` (the host
@@ -317,12 +291,6 @@ not part of the program.
 - An address that is not loopback is allowed and warned about at start:
   the page has no authentication, and whoever reaches it has a shell in
   every container.
-- A `--web-host` is a host name without a port: letters, digits, hyphens
-  and dots, at most 253 characters, kept in lower case and without a dot
-  at its end. Anything else is a mistake of usage, with status 2. The
-  names are logged at start. They are for a draal behind a proxy that
-  authenticates, which passes requests on under the name it is reached
-  by.
 - The HTTP server has a time for the header of a request and one for a
   connection that is idle, and none that would cut a WebSocket.
 - On shutdown the HTTP server is stopped first: the context of its
@@ -381,11 +349,11 @@ of their numbers; "needs" names the tasks a task stands on.
 | # | Task | Delivers | Needs |
 |---|---|---|---|
 | 0 | [A stream that is closed](2026-10-09-great-machine-stage-2/task-00-stream-close.md) | in stage 1's code: `Close` of a stream ends a `Write` that waits, so that a shell session ends on both sides and leaves no process in the container | |
-| 1 | [web: the handler](2026-10-09-great-machine-stage-2/task-01-web-handler.md) | the embedded page and its files, the host rule, the headers, rollouts and history as JSON, refusals | |
+| 1 | [web: the handler](2026-10-09-great-machine-stage-2/task-01-web-handler.md) | the embedded page and its files, the headers, rollouts and history as JSON, refusals | |
 | 2 | [web: the sockets](2026-10-09-great-machine-stage-2/task-02-web-sockets.md) | the fleet, a log and a shell over WebSockets; the origin rule; slow pages, the limit of sockets, input that waits for the shell | 0, 1 |
 | 3 | [web/demo](2026-10-09-great-machine-stage-2/task-03-web-demo.md) | a made-up fleet behind the real API, for developing the page | 1, 2 |
 | 4 | [The skeleton of the page and its build](2026-10-09-great-machine-stage-2/task-04-page-build.md) | `ui/`, the page's derivation, the source gonixgo builds, Node in the shells, CI | 1 |
-| 5 | [cli](2026-10-09-great-machine-stage-2/task-05-cli.md) | `--web-addr` and `--web-host`, the server beside the iroh endpoint and its end, `scripts/test-page.sh` | 1, 2, 4 |
+| 5 | [cli](2026-10-09-great-machine-stage-2/task-05-cli.md) | `--web-addr`, the server beside the iroh endpoint and its end, `scripts/test-page.sh` | 1, 2, 4 |
 | 6 | [e2e through HTTP](2026-10-09-great-machine-stage-2/task-06-e2e-http.md) | the fleet, a rollout, a log and a shell through HTTP against a real draal and real zathrases | 0, 1, 2 |
 | 7 | [The page: its foundation](2026-10-09-great-machine-stage-2/task-07-page-foundation.md) | the design system's tokens and fonts, the frame, the routes, the types of the API, the fleet and its reconnecting, what is shown of numbers and times | 3, 4 |
 | 8 | [The page: the services and a service](2026-10-09-great-machine-stage-2/task-08-page-services.md) | the first two views, with a rollout under way and the last rollouts | 7 |
@@ -400,12 +368,14 @@ system. The tasks copy them from there.
 
 ## Decisions taken while this plan was written
 
-The spec as it was approved did not have these. Each is in the spec now,
-and each is the person's to overrule before the plan is carried out.
+The spec as it was approved did not have these. Each is in the spec now.
+The person who ordered the project read them on 2026-10-09 before the
+plan was carried out, made the first one differently from what the plan
+proposed, and accepted the others.
 
 | Decision | Why | What it costs |
 |---|---|---|
-| **A host name draal was not told is refused on every address, and `--web-host NAME` tells it one.** The spec had the rule of the host name on loopback only. | A review showed that a draal on `0.0.0.0:8080` gave a shell to any web site the operator had open: the site points a name of its own at draal's address (DNS rebinding), and its page is then of draal's own origin. | One more flag. A draal behind a proxy with a name of its own needs `--web-host` with that name, and says so in its refusal. |
+| **The page answers under any host name, on every address.** The spec had: on loopback, only under a loopback address or `localhost`. | The person's decision, 2026-10-09, when this plan was read. A review had shown that the spec's rule left a draal on `0.0.0.0` open to any web site in the operator's browser (the site points a name of its own at draal's address, DNS rebinding, and its page is then of draal's origin), and the plan first answered with a stricter rule and a flag `--web-host`. The person chose no rule at all: a tunnel or a proxy under any name works with nothing to configure. | DNS rebinding reaches the page, on loopback too: a web site that is open in the browser of someone who can reach the port can read the fleet and open a shell. The README says so. |
 | **Task 0 changes stage 1's streams**: `node.Stream.Close` breaks the stream off when a `Write` of its own side waits, and `node.Stream` has a new method `Done`. | A shell whose program took no input, with more typed than the stream holds, could not be ended: the process stayed in the container. A browser tab makes that easy to do. `Close` alone did not mend it: a side that neither reads nor writes was never told that the other had closed. | The interface of `node.Stream` grows by one method. A side that closes in the middle of its own `Write` may lose what the peer had not read; every request and answer of the protocol closes after its writes, and is as before. |
 | **What is typed into a shell waits for the shell**: draal holds 64 KiB of it and reads no more from the page until the shell has taken some; after 10 seconds without any taken it ends the session. | The page's reader must never wait in a write to the shell (it would not see the page go), and a paste of megabytes into a program that reads must still arrive whole. | A program that takes no input for 10 seconds while more than 64 KiB wait loses its session, with a reason that says so. |
 | **Limits of a server that may be reached by many**: 256 WebSockets at a time, 2 minutes for an idle connection, 2 minutes for an answer that is no WebSocket. | The page may be put on an address that is not loopback. | A 257th socket is refused. |
@@ -437,12 +407,13 @@ what the twelve tasks leave:
   over go-iroh v0.3.0 on loopback and over `nodetest`, and pass after it;
   the new ones also ran on Linux (arm64, in a container).
 - The Go side was then read by a reviewer who had not written it and who
-  wrote tests that failed: two defects of security (a shell through DNS
-  rebinding; the text of internal errors in the browser), a shell
+  wrote tests that failed: the text of internal errors in the browser, a
+  shell through DNS rebinding (which the person then decided to leave
+  open: see the decisions above), a shell
   handler that never returned, a shutdown that waited for pages that do
-  not answer, and smaller ones. All are mended in the tasks as they are
-  here, and the reviewer's tests are among theirs in the form that holds
-  the rule.
+  not answer, and smaller ones. All but the rebinding are mended in the
+  tasks as they are here, and the reviewer's tests are among theirs in
+  the form that holds the rule.
 - The page was looked at in Chrome against `web/demo`, served by the Go
   handler under its content security policy: every view, light and dark,
   1440 and 390 pixels wide, with no error and no violation in the
@@ -464,8 +435,7 @@ carried out:
 - Firefox and Safari.
 - The image with the whole page, the image for amd64, and both GitHub
   workflows with their new steps.
-- `kubectl port-forward` to a pod, and a proxy in front of draal with
-  `--web-host`.
+- `kubectl port-forward` to a pod, and a proxy in front of draal.
 - The tests of `web` and `cli` on Linux, and anything over a relay.
 
 One test of stage 1, `TestRolloutOfABinaryThatExitsHaltsAndIsRolledBack`,

@@ -6,11 +6,11 @@
 
 **Interfaces:**
 - Consumes:
-  - Tasks 1 and 2: `web.New(web.Config{Controller: <the harness's *draal.Draal>, Loopback: true, Log: quiet})` and the HTTP API as the plan's Interfaces have it.
+  - Tasks 1 and 2: `web.New(web.Config{Controller: <the harness's *draal.Draal>, Log: quiet})` and the HTTP API as the plan's Interfaces have it.
   - `(*pod).cut()` of the harness, which closes the connection a zathras has to draal, and `alive(pid int) bool`.
   - The harness of `e2e/harness_test.go`: `start(t, options{zathrases: n}) *harness`, `h.rollout(args ...string) wire.RolloutInfo`, `h.await(info, state) wire.Fleet`, `h.pods[i].id`, `h.pods[i].name`, `h.opKey`, `serviceOf`, `rolloutOf`, `zathrasesOf`, `runs`, `eventually`, and the constants `deadline`, `service` and `quiet`.
   - `github.com/coder/websocket` as the client.
-- Produces: the "through HTTP" half of the spec's section 14. `(*harness).web() *page` serves the HTTP API of the harness's draal on an `httptest.Server`; `(*page).get(path, host)` and `(*page).socket(path)` ask it, the socket with the `Origin` of the page as a browser sends it. Beyond the happy paths: a zathras whose connection is cut while its log and its shell are open ends both sockets with `unavailable` (Review Focus 2 through the real relay); a shell socket that the page closes, or leaves, ends the process in the container, which the test finds by the process ID the shell printed and watches with `alive`; the same for a shell whose program takes no input while the page types megabytes.
+- Produces: the "through HTTP" half of the spec's section 14. `(*harness).web() *page` serves the HTTP API of the harness's draal on an `httptest.Server`; `(*page).get(path, host)` and `(*page).socket(path)` ask it, the socket with the `Origin` of the page as a browser sends it. `TestHTTPUnderAnotherHostName` (Review Focus 1): under another host name the API is answered, and the fleet and a shell are given to a page whose `Origin` is that name; a page of another origin is refused both sockets with 403. Beyond the happy paths: a zathras whose connection is cut while its log and its shell are open ends both sockets with `unavailable` (Review Focus 2 through the real relay); a shell socket that the page closes, or leaves, ends the process in the container, which the test finds by the process ID the shell printed and watches with `alive`; the same for a shell whose program takes no input while the page types megabytes.
 
 This task does not depend on Task 5.
 
@@ -43,7 +43,7 @@ import (
 const absent = wire.ID("00000000000000000000000000000000000000000000000000000000000000aa")
 
 // page is the web page's side of a harness: the HTTP API in front of
-// its draal, as draal serves it on loopback, and a client of it.
+// its draal, as draal serves it, and a client of it.
 type page struct {
 	t      *testing.T
 	srv    *httptest.Server
@@ -59,7 +59,7 @@ func (h *harness) web() *page {
 	h.mu.Unlock()
 	p := &page{
 		t:      h.t,
-		srv:    httptest.NewServer(web.New(web.Config{Controller: d, Loopback: true, Log: quiet})),
+		srv:    httptest.NewServer(web.New(web.Config{Controller: d, Log: quiet})),
 		client: &http.Client{Transport: &http.Transport{}, Timeout: deadline},
 	}
 	h.t.Cleanup(func() {
@@ -329,29 +329,79 @@ func TestHTTPOfAZathrasThatIsNotConnected(t *testing.T) {
 	refused(t, "the shell", p.socket("/api/zathras/"+string(absent)+"/shell"), wire.CodeUnavailable)
 }
 
-func TestHTTPUnderAnotherHostNameIsRefused(t *testing.T) {
+// Review Focus 1: the page reached under another name, as through a
+// tunnel or a proxy that keeps the outside host name. It works as under
+// localhost, its sockets included, when the page was loaded from the
+// host it asks; a page of another origin still gets no socket.
+func TestHTTPUnderAnotherHostName(t *testing.T) {
 	t.Parallel()
 	h := start(t, options{zathrases: 1})
 	p := h.web()
-	for _, path := range []string{"/", "/api/services/" + service + "/rollouts", "/api/zathras/" + string(h.pods[0].id) + "/history", "/api/watch"} {
-		status, body := p.get(path, "draal.example.com")
-		if status != http.StatusForbidden || !strings.Contains(string(body), "draal.example.com") || !strings.Contains(string(body), "loopback") {
-			t.Errorf("GET %s as draal.example.com = %d %q, want 403 and why", path, status, body)
+	const name = "draal.example.com"
+	for _, path := range []string{"/api/services/" + service + "/rollouts", "/api/zathras/" + string(h.pods[0].id) + "/history"} {
+		if status, body := p.get(path, name); status != http.StatusOK {
+			t.Errorf("GET %s as %s = %d %q, want 200", path, name, status, body)
 		}
 	}
-	// And a socket that a page of another site opens.
+	// The page itself: built into the program or not, it is not refused.
+	if status, body := p.get("/", name); status != http.StatusOK && status != http.StatusNotImplemented {
+		t.Errorf("GET / as %s = %d %q, want the page, or that it was not built", name, status, body)
+	}
+
+	dial := func(path, origin string) (*websocket.Conn, int) {
+		ctx, cancel := context.WithTimeout(t.Context(), deadline)
+		defer cancel()
+		c, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(p.srv.URL, "http")+path, &websocket.DialOptions{
+			HTTPClient: p.client,
+			Host:       name,
+			HTTPHeader: http.Header{"Origin": {origin}},
+		})
+		if err != nil {
+			if resp == nil {
+				t.Fatalf("opening the socket %s: %v", path, err)
+			}
+			return nil, resp.StatusCode
+		}
+		c.SetReadLimit(-1)
+		t.Cleanup(func() { c.CloseNow() })
+		return c, http.StatusSwitchingProtocols
+	}
+	// The page of that name reads the fleet and has a shell.
+	watch, status := dial("/api/watch", "https://"+name)
+	if watch == nil {
+		t.Fatalf("the fleet as the page of %s was refused with %d", name, status)
+	}
+	var f wire.Fleet
+	if m := read(watch); m.err != nil || json.Unmarshal(m.data, &f) != nil || len(zathrasesOf(f)) != 1 {
+		t.Errorf("the page of %s was sent %q (%v), want the fleet", name, m.data, m.err)
+	}
+	shell := "/api/zathras/" + string(h.pods[0].id) + "/shell?term=dumb"
+	sh, status := dial(shell, "https://"+name)
+	if sh == nil {
+		t.Fatalf("a shell as the page of %s was refused with %d", name, status)
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), deadline)
 	defer cancel()
-	c, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(p.srv.URL, "http")+"/api/zathras/"+string(h.pods[0].id)+"/shell", &websocket.DialOptions{
-		HTTPClient: p.client,
-		HTTPHeader: http.Header{"Origin": {"http://evil.example"}},
-	})
-	if err == nil {
-		c.CloseNow()
-		t.Fatal("a page of another site was given a shell")
+	if err := sh.Write(ctx, websocket.MessageBinary, []byte("exit 4\n")); err != nil {
+		t.Fatalf("Write: %v", err)
 	}
-	if resp == nil || resp.StatusCode != http.StatusForbidden {
-		t.Errorf("the socket of a page of another site was refused with %v, want 403", err)
+	for {
+		m := read(sh)
+		if m.err != nil {
+			t.Fatalf("the shell ended with %v before its exit status", m.err)
+		}
+		if m.typ == websocket.MessageText {
+			if string(m.data) != `{"exit":4}` {
+				t.Errorf("the text message is %s, want {\"exit\":4}", m.data)
+			}
+			break
+		}
+	}
+	// A page of another site, in the same browser, gets neither.
+	for _, path := range []string{"/api/watch", shell} {
+		if c, status := dial(path, "https://evil.example"); c != nil || status != http.StatusForbidden {
+			t.Errorf("%s as a page of another site was answered %d, want 403", path, status)
+		}
 	}
 }
 
@@ -532,7 +582,7 @@ and `startDraal` sets it where it sets `addr`:
 - [ ] **Step 4: Run the tests to see them pass**
 
 Run: `nix develop .#bare --command go test -race ./e2e/ -run HTTP -v`
-Expected: `--- PASS` for `TestHTTPWatchFollowsARollout`, `TestHTTPHistory`, `TestHTTPLogs`, `TestHTTPShell`, `TestHTTPOfAZathrasThatIsNotConnected`, `TestHTTPUnderAnotherHostNameIsRefused`, `TestHTTPOfAZathrasThatGoesWhileItsLogAndItsShellAreOpen`, `TestHTTPShellThatThePageClosesEndsItsProcess` and `TestHTTPShellThatTakesNoInputEndsItsProcessWhenThePageGoes`, and `ok  	github.com/fables-for-robots/great-machine/e2e`.
+Expected: `--- PASS` for `TestHTTPWatchFollowsARollout`, `TestHTTPHistory`, `TestHTTPLogs`, `TestHTTPShell`, `TestHTTPOfAZathrasThatIsNotConnected`, `TestHTTPUnderAnotherHostName`, `TestHTTPOfAZathrasThatGoesWhileItsLogAndItsShellAreOpen`, `TestHTTPShellThatThePageClosesEndsItsProcess` and `TestHTTPShellThatTakesNoInputEndsItsProcessWhenThePageGoes`, and `ok  	github.com/fables-for-robots/great-machine/e2e`.
 
 Run: `nix develop .#bare --command go test ./...`
 Expected: `ok` for every package that has tests, `web` and `web/demo` among them.

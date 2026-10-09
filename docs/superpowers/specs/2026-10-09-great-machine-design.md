@@ -89,7 +89,6 @@ Every flag has an environment variable, and a flag wins over its variable.
 | `--jaccard-server ID` | `JACCARD_SERVER` | required | the jaccard-store server that closures are pushed to |
 | `--jaccard-prefix P` | `JACCARD_PREFIX` | required | what is put before the name of a store path to make its reference; the same value the sidecars are given |
 | `--web-addr ADDR` | `GREAT_MACHINE_WEB_ADDR` | `127.0.0.1:8080` | where the web page listens; empty for no web page |
-| `--web-host NAME` | `GREAT_MACHINE_WEB_HOST` | | a host name under which the web page is answered besides IP addresses and `localhost`; may be given more than once |
 | `--bind IP:PORT` | `GREAT_MACHINE_BIND` | every address, a port the system picks | the UDP address of the iroh endpoint |
 
 At start draal logs its endpoint ID, which is all that a zathras or an
@@ -196,18 +195,16 @@ allowlist later, with one verb and one path for every operation
 **The web page has no authentication**, as a browser has no iroh key. It
 listens on loopback unless told otherwise, and is reached through
 `kubectl port-forward` or an SSH tunnel. **Whoever can reach that port
-has a shell in every container.** Two rules keep a web site that is open
-in the operator's browser from being among them:
+has a shell in every container.**
 
-- The page is answered only under a host name that nobody else can point
-  at it: a loopback address or `localhost`; any other IP address, when it
-  listens beyond loopback; and the names draal was given with
-  `--web-host`, which are for a draal behind a proxy that authenticates.
-  Under any other name it refuses. A site can point a name of its own at
-  draal's address while its page is open, and that page would otherwise
-  be of the same origin as draal's.
-- Its WebSockets refuse an `Origin` that is not the host they were asked
-  on.
+It answers under any host name, so that a tunnel or a proxy may reach it
+under whatever name it has. Its WebSockets refuse an `Origin` that is not
+the host they were asked on, which keeps a page of another site from
+opening one. That does not keep out a site that points a name of its own
+at draal's address while its page is open in the browser of someone who
+can reach the port (DNS rebinding): its page is then of the same origin
+as draal's. This was weighed and left open: whoever can reach the port is
+trusted, and so is what they browse meanwhile.
 
 ## 5. Protocol
 
@@ -810,6 +807,7 @@ Three stages, each of which ends with something that works by itself:
 ## 17. Not in this design
 
 - Tokens of clamp, and any authentication of the web page.
+- A check of the host name the web page is asked under (section 4).
 - Checks of what a service does. draal and the health check of zathras go
   by whether its process runs, and for how long.
 - Environment and secrets of a service: they are those of the pod.

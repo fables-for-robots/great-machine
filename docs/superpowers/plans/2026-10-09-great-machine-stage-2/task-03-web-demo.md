@@ -6,7 +6,7 @@
 
 **Interfaces:**
 - Consumes:
-  - Tasks 1 and 2: `web.New(web.Config{Controller, Loopback, Dist})`, `web.IsLoopback`, `web.Built`.
+  - Tasks 1 and 2: `web.New(web.Config{Controller, Dist})`, `web.IsLoopback`, `web.Built`.
   - `draal.Controller` and `draal.Shell`, which the demo implements.
   - `logring.New(size, maxLine int) *Ring`, `(*Ring).SetClock`, `Add(stream, text string)`, `Lines() []wire.LogLine`, `Follow(ctx, buffer int) ([]wire.LogLine, <-chan wire.LogLine)`; the streams `logring.Stdout`, `Stderr`, `Zathras`.
   - `ptyshell.Start(ptyshell.Config{Term, Cols, Rows}) (*Session, error)`; `(*Session).Read`, `Write`, `Resize(cols, rows uint16) error`, `Wait() int`, `Close() error`.
@@ -398,7 +398,8 @@ The program, `web/demo/main.go`:
 //
 // Everything it shows is made up but the shell: THE SHELL OF THE PAGE IS A
 // REAL SHELL ON THE MACHINE THAT RUNS THE DEMO, as the user who runs it.
-// The page has no authentication. Leave the demo on a loopback address.
+// The page has no authentication and answers under every host name.
+// Leave the demo on a loopback address.
 //
 // It is not part of the program, and nothing of great-machine uses it.
 package main
@@ -440,7 +441,7 @@ func main() {
 // with empty a fleet without a service. It writes to out what it serves,
 // and calls ready, if set, with the URL once it listens.
 func run(ctx context.Context, addr, dist string, empty bool, out io.Writer, ready func(url string)) error {
-	cfg := web.Config{Loopback: web.IsLoopback(addr)}
+	cfg := web.Config{}
 	if dist != "" {
 		if info, err := os.Stat(dist); err != nil || !info.IsDir() {
 			return fmt.Errorf("--dist %s is no directory", dist)
@@ -476,7 +477,7 @@ func run(ctx context.Context, addr, dist string, empty bool, out io.Writer, read
 	}
 	fmt.Fprintf(out, "demo: %s behind the real API of great-machine, at %s\n", what, url)
 	fmt.Fprintf(out, "demo: the shell of the page is a REAL SHELL ON THIS MACHINE, as the user who runs the demo\n")
-	if !cfg.Loopback {
+	if !web.IsLoopback(addr) {
 		fmt.Fprintf(out, "demo: %s is not loopback: whoever reaches it has that shell\n", addr)
 	}
 	if dist == "" && !web.Built() {
@@ -1699,8 +1700,8 @@ Expected: ``great-machine: the web page was not built into this program. Build t
 Run: `curl -s http://127.0.0.1:18080/api/services/web/rollouts | head -c 150`
 Expected: `{"rollouts":[{"id":26,"service":"web","generation":20,"parallel":2,"state":"preparing","created":"` and a time (the state is `activating` or `completed` later in the minute).
 
-Run: `curl -s -H 'Host: example.com' http://127.0.0.1:18080/`
-Expected: `great-machine: this page was asked for as "example.com", and it does not answer to that: it has no authentication, and a name that draal was not told could be anyone's. draal listens on loopback: open http://127.0.0.1:18080/ on its machine, or forward a port to that address and open it as http://127.0.0.1:PORT/ or http://localhost:PORT/; or start draal with --web-host NAME for the name a proxy passes requests on under.`
+Run: `curl -s -H 'Host: example.com' http://127.0.0.1:18080/api/services/fresh/rollouts`
+Expected: `{"rollouts":[]}`: the demo answers under any host name, as draal does.
 
 Run: `curl -s http://127.0.0.1:18080/api/watch`
 Expected: `{"error":{"code":"bad-request","message":"/api/watch is a WebSocket"}}`

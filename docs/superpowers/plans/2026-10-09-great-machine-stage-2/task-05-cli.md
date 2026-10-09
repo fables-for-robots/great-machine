@@ -1,24 +1,23 @@
-### Task 5: `--web-addr` and `--web-host`, and the server of the page beside the iroh endpoint
+### Task 5: `--web-addr`, and the server of the page beside the iroh endpoint
 
 **Files:**
-- Modify: `cli/draal.go` (the two flags, their places in `draalConfig`, and `runDraal`, which starts the server and stops it first)
+- Modify: `cli/draal.go` (the flag, its place in `draalConfig`, and `runDraal`, which starts the server and stops it first)
 - Create: `cli/web.go` (the HTTP server: its start, its stop, the line of the log)
-- Modify: `cli/commands_test.go`, `cli/fake_test.go` (the flags and their variables)
+- Modify: `cli/commands_test.go`, `cli/fake_test.go` (the flag and its variable)
 - Test: `cli/web_test.go`, `cli/draal_test.go`
 - Create: `scripts/test-page.sh` (asks the draal of a program, or of an image, for the page)
 - Modify: `.github/workflows/test.yml` (the step `nix build` asks the program for the page)
 
 **Interfaces:**
 - Consumes:
-  - The package `web` of Tasks 1 and 2: `web.New(cfg web.Config) http.Handler` with `web.Config{Controller draal.Controller; Loopback bool; Hosts []string; Log *slog.Logger; …}`, `web.Built() bool`, `web.IsLoopback(addr string) bool`. Of the handler this task relies on what the contract says of it: outside `/api/` it answers `GET` with the page, `index.html` for a path that is no file, and with status 501 when the page is not built; it answers a request by its `Host` as the table "The host name" has it (a loopback IP address and `localhost` always, a name of `Hosts` always and however it is written, any other name with 403); `GET /api/watch` is a WebSocket whose first message comes at once; **and the handler of every WebSocket returns when the context of its request is done, within a second or two also when the page does not answer**, which is how this task ends the sockets at shutdown.
+  - The package `web` of Tasks 1 and 2: `web.New(cfg web.Config) http.Handler` with `web.Config{Controller draal.Controller; Log *slog.Logger; …}`, `web.Built() bool`, `web.IsLoopback(addr string) bool`. Of the handler this task relies on what the contract says of it: outside `/api/` it answers `GET` with the page, `index.html` for a path that is no file, and with status 501 when the page is not built; it answers under any host name, and looks at the `Host` of no request to decide whether to answer it; `GET /api/watch` is a WebSocket whose first message comes at once; **and the handler of every WebSocket returns when the context of its request is done, within a second or two also when the page does not answer**, which is how this task ends the sockets at shutdown. `web.IsLoopback` is used for one thing, the warning at start.
   - `github.com/coder/websocket` (in `go.mod` since Task 2), in a test, as a page's side of a socket.
   - `draal.New(draal.Config) *draal.Draal`, `(*draal.Draal).Serve(ctx, node.Listener) error`; `node.Listen(ctx, node.ListenConfig{Key, Bind, Local, Log})`, where `Local` is the field for tests: no relay, nothing announced, bound to 127.0.0.1.
   - In `cli`: `required`, `noArguments`, `usageError`; in its tests `buffer`, `waitFor`, `cleanEnvironment`, `read`, `idA`, `idB`.
   - Task 4: `packages.<system>.default` is built from the repository with the page at `web/dist`.
 - Produces:
   - `great-machine draal --web-addr ADDR` (`GREAT_MACHINE_WEB_ADDR`), default `127.0.0.1:8080`, empty for no web page. A value that is not `HOST:PORT` is a command line that is not valid: status 2. An address that cannot be bound ends the command with status 1 and `great-machine: the web page: listen tcp …`.
-  - `great-machine draal --web-host NAME` (`GREAT_MACHINE_WEB_HOST`), which may be repeated and whose variable takes several with commas between them: a host name without a port, of letters, digits, hyphens and dots, 253 characters at most, kept in lower case and without a dot at its end. Anything else is status 2. The names are `web.Config.Hosts`.
-  - The log, in this order after `serving`: `level=INFO msg="web page" addr=127.0.0.1:8080 url=http://127.0.0.1:8080/` (`addr` is what was bound, `url` has the host of the flag, or `localhost` when the flag names every address), with ` hosts=draal.example.com,draal.internal` at its end when `--web-host` gave names, and without `hosts=` when it gave none; `level=WARN msg="the web page was not built into this program: it answers every request with a line that says so"` when `!web.Built()`; `level=WARN msg="the web page listens on an address that is not loopback: it has no authentication, and whoever reaches it has a shell in every container" addr=…` when `!web.IsLoopback(addr)`.
+  - The log, in this order after `serving`: `level=INFO msg="web page" addr=127.0.0.1:8080 url=http://127.0.0.1:8080/` (`addr` is what was bound, `url` has the host of the flag, or `localhost` when the flag names every address); `level=WARN msg="the web page was not built into this program: it answers every request with a line that says so"` when `!web.Built()`; `level=WARN msg="the web page listens on an address that is not loopback: it has no authentication, and whoever reaches it has a shell in every container" addr=…` when `!web.IsLoopback(addr)`.
   - `scripts/test-page.sh PROGRAM` and `scripts/test-page.sh --image IMAGE`: starts `draal`, reads the URL from the log, and fails unless `GET /` and `GET /s/web` are answered with a page. Task 11 uses the second form.
 
 Two things about `net/http` decide the shape of `cli/web.go`. First,
@@ -35,12 +34,12 @@ cut a WebSocket.
 
 - [ ] **Step 1: Write the failing tests of the flag**
 
-In `cli/fake_test.go`, `GREAT_MACHINE_WEB_ADDR` and `GREAT_MACHINE_WEB_HOST` join the variables that `cleanEnvironment` takes out of the environment:
+In `cli/fake_test.go`, `GREAT_MACHINE_WEB_ADDR` joins the variables that `cleanEnvironment` takes out of the environment:
 
 ```go
 // variables are the environment variables the commands read.
 var variables = []string{
-	"GREAT_MACHINE_DATA", "GREAT_MACHINE_OPERATORS", "JACCARD_SERVER", "JACCARD_PREFIX", "GREAT_MACHINE_BIND", "GREAT_MACHINE_WEB_ADDR", "GREAT_MACHINE_WEB_HOST",
+	"GREAT_MACHINE_DATA", "GREAT_MACHINE_OPERATORS", "JACCARD_SERVER", "JACCARD_PREFIX", "GREAT_MACHINE_BIND", "GREAT_MACHINE_WEB_ADDR",
 	"GREAT_MACHINE_DRAAL", "GREAT_MACHINE_SERVICE", "GREAT_MACHINE_NAME", "GREAT_MACHINE_PRELOAD_URL",
 	"GREAT_MACHINE_SHELL", "GREAT_MACHINE_STOP_TIMEOUT", "GREAT_MACHINE_HEALTH_ADDR",
 	"GREAT_MACHINE_KEY", "GREAT_MACHINE_PARALLEL", "GREAT_MACHINE_DETACH", "GREAT_MACHINE_JOBS",
@@ -48,7 +47,7 @@ var variables = []string{
 }
 ```
 
-In `cli/commands_test.go`, in the table of `TestInvalidCommandLines`, the rows of draal get seven more, before `draal: an argument`:
+In `cli/commands_test.go`, in the table of `TestInvalidCommandLines`, the rows of draal get two more, before `draal: an argument`:
 
 ```go
 		// draal.
@@ -65,18 +64,10 @@ In `cli/commands_test.go`, in the table of `TestInvalidCommandLines`, the rows o
 		{"draal: a bad --web-addr", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--web-addr", "8080"}, `--web-addr: "8080" is not an address to listen on`},
 		{"draal: the variable stands in for --web-addr", map[string]string{"GREAT_MACHINE_WEB_ADDR": "localhost"},
 			[]string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/"}, `--web-addr: "localhost" is not an address to listen on`},
-		{"draal: a --web-host with a port", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--web-host", "draal.example.com:8080"},
-			`--web-host: "draal.example.com:8080" is not a host name: want letters, digits, hyphens and dots, 253 characters at most, and no port`},
-		{"draal: a --web-host that is a URL", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--web-host", "https://draal.example.com"},
-			`--web-host: "https://draal.example.com" is not a host name`},
-		{"draal: a --web-host that is a dot", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--web-host", "."}, `--web-host: "." is not a host name`},
-		{"draal: a --web-host that is too long", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--web-host", strings.Repeat("a", 254)}, `is not a host name`},
-		{"draal: the variable stands in for --web-host", map[string]string{"GREAT_MACHINE_WEB_HOST": "draal.example.com,draal_2"},
-			[]string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/"}, `--web-host: "draal_2" is not a host name`},
 		{"draal: an argument", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "now"}, `draal takes no argument, got "now"`},
 ```
 
-and `TestReadDraal` expects the default in both of its cases, with a test of each flag behind it:
+and `TestReadDraal` expects the default in both of its cases, with a test of the flag behind it:
 
 ```go
 func TestReadDraal(t *testing.T) {
@@ -159,45 +150,6 @@ func TestReadDraalWebAddr(t *testing.T) {
 		t.Errorf("an empty variable: got %q, want no web page", got.webAddr)
 	}
 }
-
-// TestReadDraalWebHost: --web-host may be repeated, its variable takes
-// several with commas between them, and a name is kept in lower case and
-// without a dot at its end.
-func TestReadDraalWebHost(t *testing.T) {
-	cleanEnvironment(t)
-	var got draalConfig
-	reader := func(c *cli.Context) (err error) {
-		got, err = readDraal(c)
-		return err
-	}
-	args := []string{"--data", "d", "--jaccard-server", idA, "--jaccard-prefix", "nix/"}
-	with := func(more ...string) []string { return append(append([]string{}, args...), more...) }
-
-	read(t, draalCommand(), reader, args...)
-	if got.webHosts != nil {
-		t.Errorf("without the flag: got %q, want none", got.webHosts)
-	}
-	read(t, draalCommand(), reader, with("--web-host", "Draal.Example.COM.", "--web-host", "draal-2.internal", "--web-host", "xn--bcher-kva.example")...)
-	if want := []string{"draal.example.com", "draal-2.internal", "xn--bcher-kva.example"}; !reflect.DeepEqual(got.webHosts, want) {
-		t.Errorf("the flag, repeated: got %q, want %q", got.webHosts, want)
-	}
-	// A name of 253 characters is the longest there is.
-	longest := strings.Repeat("a", 253)
-	read(t, draalCommand(), reader, with("--web-host", longest)...)
-	if want := []string{longest}; !reflect.DeepEqual(got.webHosts, want) {
-		t.Errorf("a name of 253 characters: got %q", got.webHosts)
-	}
-
-	t.Setenv("GREAT_MACHINE_WEB_HOST", "draal.example.com, DRAAL.internal,")
-	read(t, draalCommand(), reader, args...)
-	if want := []string{"draal.example.com", "draal.internal"}; !reflect.DeepEqual(got.webHosts, want) {
-		t.Errorf("the variable: got %q, want %q", got.webHosts, want)
-	}
-	read(t, draalCommand(), reader, with("--web-host", "other.example.com")...)
-	if want := []string{"other.example.com"}; !reflect.DeepEqual(got.webHosts, want) {
-		t.Errorf("the flag over the variable: got %q, want %q", got.webHosts, want)
-	}
-}
 ```
 
 - [ ] **Step 2: Run the tests to see them fail**
@@ -230,7 +182,7 @@ import (
 )
 ```
 
-and the command, its configuration and `readDraal` become, with `webHost` behind them:
+and the command, its configuration and `readDraal` become:
 
 ```go
 // draalCommand is `great-machine draal`, the controller.
@@ -251,8 +203,6 @@ func draalCommand() *cli.Command {
 				Usage: "`PREFIX` put before the name of a store path to make its reference; the same value the sidecars are given (required)"},
 			&cli.StringFlag{Name: "web-addr", EnvVars: []string{"GREAT_MACHINE_WEB_ADDR"}, Value: "127.0.0.1:8080",
 				Usage: "`ADDR`ess the web page listens on; empty for no web page"},
-			&cli.StringSliceFlag{Name: "web-host", EnvVars: []string{"GREAT_MACHINE_WEB_HOST"},
-				Usage: "host `NAME` under which the web page is answered besides IP addresses and localhost, for a draal behind a proxy that authenticates; may be repeated, and the variable takes several with commas between them"},
 			&cli.StringFlag{Name: "bind", EnvVars: []string{"GREAT_MACHINE_BIND"},
 				Usage: "UDP `IP:PORT` the iroh endpoint binds (default: every address, a port the system picks)"},
 		},
@@ -272,7 +222,6 @@ type draalConfig struct {
 	operators []wire.ID
 	store     wire.StoreInfo
 	webAddr   string         // "" for no web page
-	webHosts  []string       // the names the web page answers to besides, in lower case
 	bind      netip.AddrPort // the zero value: every address, a port the system picks
 }
 
@@ -313,18 +262,6 @@ func readDraal(c *cli.Context) (draalConfig, error) {
 			return draalConfig{}, usageError("--web-addr: %q is not an address to listen on: want HOST:PORT, such as 127.0.0.1:8080, or nothing for no web page", cfg.webAddr)
 		}
 	}
-	// As with --operator: the library has cut the values at their commas,
-	// and what a comma too many leaves empty is passed over.
-	for _, text := range c.StringSlice("web-host") {
-		if text = strings.TrimSpace(text); text == "" {
-			continue
-		}
-		host, err := webHost(text)
-		if err != nil {
-			return draalConfig{}, err
-		}
-		cfg.webHosts = append(cfg.webHosts, host)
-	}
 	if bind := c.String("bind"); bind != "" {
 		if cfg.bind, err = netip.ParseAddrPort(bind); err != nil {
 			return draalConfig{}, usageError("--bind: %q is not an address to bind: want IP:PORT, such as 0.0.0.0:4433 or [::]:4433", bind)
@@ -332,26 +269,9 @@ func readDraal(c *cli.Context) (draalConfig, error) {
 	}
 	return cfg, nil
 }
-
-// webHost returns text as a host name the web page answers to: in lower
-// case, without a dot at its end. A name has letters, digits, hyphens
-// and dots, 253 characters at most, and no port.
-func webHost(text string) (string, error) {
-	host := strings.TrimSuffix(strings.ToLower(text), ".")
-	ok := host != "" && len(host) <= 253
-	for _, c := range host {
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '.') {
-			ok = false
-		}
-	}
-	if !ok {
-		return "", usageError("--web-host: %q is not a host name: want letters, digits, hyphens and dots, 253 characters at most, and no port, such as draal.example.com", text)
-	}
-	return host, nil
-}
 ```
 
-`runDraal` is not changed yet: the flags are read and nothing listens.
+`runDraal` is not changed yet: the flag is read and nothing listens.
 
 - [ ] **Step 4: Run the tests to see them pass**
 
@@ -362,7 +282,7 @@ Expected: `ok  	github.com/fables-for-robots/great-machine/cli`
 
 ```bash
 git add cli/
-git commit -m "CLI: draal reads --web-addr and --web-host"
+git commit -m "CLI: draal reads --web-addr"
 ```
 
 - [ ] **Step 6: Write the failing tests of the server**
@@ -413,7 +333,7 @@ func TestAnnounceWeb(t *testing.T) {
 	const notBuilt, notLoopback = "the web page was not built into this program", "not loopback: it has no authentication, and whoever reaches it has a shell in every container"
 
 	var logged buffer
-	announceWeb(quietLog(&logged), "127.0.0.1:8080", bound, nil, true, true)
+	announceWeb(quietLog(&logged), "127.0.0.1:8080", bound, true, true)
 	if got, want := logged.String(), `level=INFO msg="web page" addr=127.0.0.1:8080 url=http://127.0.0.1:8080/`; !strings.Contains(got, want) {
 		t.Errorf("logged %q, want %q in it", got, want)
 	}
@@ -421,25 +341,14 @@ func TestAnnounceWeb(t *testing.T) {
 		t.Errorf("a page that is built, on loopback, is one line: got %q", got)
 	}
 
-	if got := logged.String(); strings.Contains(got, "hosts=") {
-		t.Errorf("without a host name the line names none: got %q", got)
-	}
-
-	// The host names the page answers to besides are in the line.
 	logged = buffer{}
-	announceWeb(quietLog(&logged), "127.0.0.1:8080", bound, []string{"draal.example.com", "draal.internal"}, true, true)
-	if got, want := logged.String(), `msg="web page" addr=127.0.0.1:8080 url=http://127.0.0.1:8080/ hosts=draal.example.com,draal.internal`; !strings.Contains(got, want) {
-		t.Errorf("logged %q, want %q in it", got, want)
-	}
-
-	logged = buffer{}
-	announceWeb(quietLog(&logged), "127.0.0.1:8080", bound, nil, true, false)
+	announceWeb(quietLog(&logged), "127.0.0.1:8080", bound, true, false)
 	if got := logged.String(); !strings.Contains(got, "level=WARN") || !strings.Contains(got, notBuilt) || strings.Contains(got, notLoopback) {
 		t.Errorf("a page that is not built: logged %q", got)
 	}
 
 	logged = buffer{}
-	announceWeb(quietLog(&logged), ":8080", &net.TCPAddr{IP: net.IPv6unspecified, Port: 8080}, nil, false, true)
+	announceWeb(quietLog(&logged), ":8080", &net.TCPAddr{IP: net.IPv6unspecified, Port: 8080}, false, true)
 	if got := logged.String(); !strings.Contains(got, "level=WARN") || !strings.Contains(got, notLoopback) || !strings.Contains(got, "url=http://localhost:8080/") || strings.Contains(got, notBuilt) {
 		t.Errorf("an address that is not loopback: logged %q", got)
 	}
@@ -567,7 +476,6 @@ import (
 	"net"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -684,16 +592,11 @@ func (w *webServer) Stop() {
 	})
 }
 
-// announceWeb logs where the web page is, with the host names it answers
-// to besides when there are any, and warns about a page that
+// announceWeb logs where the web page is, and warns about a page that
 // was not built into the program and about an address that is not
 // loopback.
-func announceWeb(log *slog.Logger, addr string, bound net.Addr, hosts []string, loopback, built bool) {
-	attrs := []any{"addr", bound.String(), "url", webURL(addr, bound)}
-	if len(hosts) > 0 {
-		attrs = append(attrs, "hosts", strings.Join(hosts, ","))
-	}
-	log.Info("web page", attrs...)
+func announceWeb(log *slog.Logger, addr string, bound net.Addr, loopback, built bool) {
+	log.Info("web page", "addr", bound.String(), "url", webURL(addr, bound))
 	if !built {
 		log.Warn("the web page was not built into this program: it answers every request with a line that says so")
 	}
@@ -744,6 +647,8 @@ git commit -m "CLI: the HTTP server of the web page, which ends its WebSockets w
 
 `cli/draal_test.go`. These run the real `runDraal`, with the real handler of `web`. Its iroh endpoint is bound with `Local`, through a field of `draalConfig` that no flag sets, so the tests need no relay and take hundredths of a second. A second such field, `listenWeb`, lets `TestRunDraalWebFails` get hold of the listener of the page, to close it under the server. They pass with the page built into `web` and without it, and say which they met.
 
+`TestRunDraalWebUnderAnyHost` holds what was decided of the host name: draal answers the page under whatever name it is asked as, on a loopback address too, and refuses none.
+
 `TestRunDraalStopsWithPagesThatDoNotAnswer` is the one that holds the shutdown with the real sockets: three pages that hold the socket of the fleet and read no more, so that they answer neither a ping nor the close. draal has to stop well within the 5 seconds it gives its handlers, and without the warning that it gave up on them. It rests on `web` bounding the close of a socket (Task 2).
 
 ```go
@@ -756,7 +661,6 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
-	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -943,38 +847,24 @@ func startDraal(t *testing.T, ctx context.Context, cfg draalConfig, logged *buff
 	return url, done
 }
 
-// TestDraalConfigWeb: the handler of the page is told whether the address
-// is loopback, and the host names of --web-host.
-func TestDraalConfigWeb(t *testing.T) {
-	hosts := []string{"draal.example.com", "draal.internal"}
-	got := draalConfig{webAddr: "127.0.0.1:8080", webHosts: hosts}.web(nil, nil)
-	if !got.Loopback || !reflect.DeepEqual(got.Hosts, hosts) {
-		t.Errorf("on loopback with host names: Loopback %v, Hosts %q", got.Loopback, got.Hosts)
-	}
-	got = draalConfig{webAddr: ":8080"}.web(nil, nil)
-	if got.Loopback || got.Hosts != nil {
-		t.Errorf("on every address without host names: Loopback %v, Hosts %q", got.Loopback, got.Hosts)
-	}
-}
-
-// TestRunDraalWebHost: draal answers the page under a name of --web-host,
-// however the browser writes it, logs the names at its start, and refuses
-// a name it was not told.
-func TestRunDraalWebHost(t *testing.T) {
+// TestRunDraalWebUnderAnyHost: draal answers the page under whatever
+// host name it is asked as, on a loopback address too: through a tunnel,
+// a forward or a proxy the browser's name for it is not draal's own. No
+// name is refused.
+func TestRunDraalWebUnderAnyHost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cfg := draalForTest(t, "127.0.0.1:0")
-	cfg.webHosts = []string{"draal.example.com"}
 	var logged buffer
-	url, done := startDraal(t, ctx, cfg, &logged)
-	if !strings.Contains(logged.String(), " hosts=draal.example.com") {
-		t.Errorf("the log does not name the host:\n%s", logged.String())
-	}
+	url, done := startDraal(t, ctx, draalForTest(t, "127.0.0.1:0"), &logged)
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	defer client.CloseIdleConnections()
-	status := func(host string) int {
-		t.Helper()
+	// The tests run with the page built and without it.
+	want := http.StatusNotImplemented
+	if web.Built() {
+		want = http.StatusOK
+	}
+	for _, host := range []string{"localhost", "127.0.0.1:8080", "draal.example.com", "Draal.Example.COM.:8443", "10.1.2.3", "[2001:db8::1]:8080"} {
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -986,21 +876,8 @@ func TestRunDraalWebHost(t *testing.T) {
 		}
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
-		return resp.StatusCode
-	}
-	// The tests run with the page built and without it.
-	page := http.StatusNotImplemented
-	if web.Built() {
-		page = http.StatusOK
-	}
-	for _, host := range []string{"draal.example.com", "draal.example.com:8443", "Draal.Example.COM.", "localhost"} {
-		if got := status(host); got != page {
-			t.Errorf("asked as %s: %d, want %d", host, got, page)
-		}
-	}
-	for _, host := range []string{"other.example.com", "example.com", "draal.example.com.evil.example"} {
-		if got := status(host); got != http.StatusForbidden {
-			t.Errorf("asked as %s, a name draal was not told: %d, want 403", host, got)
+		if resp.StatusCode != want {
+			t.Errorf("asked as %s: %d, want %d", host, resp.StatusCode, want)
 		}
 	}
 
@@ -1112,8 +989,8 @@ func TestRunDraalWebFails(t *testing.T) {
 
 - [ ] **Step 12: Run the tests to see them fail**
 
-Run: `nix develop .#bare --command go test ./cli/ -run 'TestRunDraal|TestDraalConfigWeb'`
-Expected: FAIL, the package does not compile: `unknown field local in struct literal of type draalConfig`, `draalConfig{…}.web undefined (type draalConfig has no field or method web)` and `cfg.listenWeb undefined (type draalConfig has no field or method listenWeb)`
+Run: `nix develop .#bare --command go test ./cli/ -run TestRunDraal`
+Expected: FAIL, the package does not compile: `unknown field local in struct literal of type draalConfig` and `cfg.listenWeb undefined (type draalConfig has no field or method listenWeb)`
 
 - [ ] **Step 13: draal serves the page**
 
@@ -1150,7 +1027,6 @@ type draalConfig struct {
 	operators []wire.ID
 	store     wire.StoreInfo
 	webAddr   string         // "" for no web page
-	webHosts  []string       // the names the web page answers to besides, in lower case
 	bind      netip.AddrPort // the zero value: every address, a port the system picks
 	// local is for tests: the iroh endpoint uses no relay, announces
 	// nothing and is bound to 127.0.0.1 unless bind says otherwise. No
@@ -1162,15 +1038,9 @@ type draalConfig struct {
 }
 ```
 
-and `runDraal` becomes, with the method that makes the configuration of the handler before it:
+and `runDraal` becomes:
 
 ```go
-// web returns the configuration of the handler of the web page, which
-// answers from c.
-func (cfg draalConfig) web(c draal.Controller, log *slog.Logger) web.Config {
-	return web.Config{Controller: c, Loopback: web.IsLoopback(cfg.webAddr), Hosts: cfg.webHosts, Log: log}
-}
-
 // runDraal is draal until ctx is done, which SIGINT and SIGTERM do. That
 // is how draal is meant to end, and no error.
 func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error) {
@@ -1230,11 +1100,10 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 	if pageListener == nil {
 		defer context.AfterFunc(ctx, stopServing)()
 	} else {
-		handler := cfg.web(d, log)
-		page := startWeb(pageListener, web.New(handler), webStopWait, log)
+		page := startWeb(pageListener, web.New(web.Config{Controller: d, Log: log}), webStopWait, log)
 		// For the ways out of this function that are not the end of ctx.
 		defer page.Stop()
-		announceWeb(log, cfg.webAddr, pageListener.Addr(), cfg.webHosts, handler.Loopback, web.Built())
+		announceWeb(log, cfg.webAddr, pageListener.Addr(), web.IsLoopback(cfg.webAddr), web.Built())
 		go func() {
 			select {
 			case <-ctx.Done():
@@ -1264,15 +1133,14 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 
 - [ ] **Step 14: Run the tests to see them pass**
 
-Run: `nix develop .#bare --command go test ./cli/ -run 'TestRunDraal|TestDraalConfigWeb' -v`
+Run: `nix develop .#bare --command go test ./cli/ -run TestRunDraal -v`
 Expected:
 
 ```
 --- PASS: TestRunDraalWeb (0.02s)
 --- PASS: TestRunDraalNoWeb (0.01s)
 --- PASS: TestRunDraalWebAddrTaken (0.01s)
---- PASS: TestDraalConfigWeb (0.00s)
---- PASS: TestRunDraalWebHost (0.02s)
+--- PASS: TestRunDraalWebUnderAnyHost (0.02s)
 --- PASS: TestRunDraalStopsWithPagesThatDoNotAnswer (…s)
 --- PASS: TestRunDraalWebFails (0.01s)
 PASS
