@@ -48,6 +48,29 @@ cluster whose nodes can run the
 [sidecar](https://github.com/amber-store/jaccard-nfs-nix-store#pod), and
 Nix on the laptop.
 
+**The network.** draal, every pod and the laptop dial out: to iroh's
+public relays, which carry a connection until a direct path is found
+(and for good where none is), and to pkarr and DNS, through which an
+endpoint is announced and looked up by its ID. A cluster whose egress is
+restricted has to allow that. When it does not, draal warns at its start
+that it has no relay connection, and a zathras never appears in
+`great-machine status`.
+
+**0. The program.** On the laptop, build it with Nix from the flake.
+The build runs a program while Nix evaluates, which Nix allows only when
+asked (see [Development](#development)):
+
+```sh
+nix build github:fables-for-robots/great-machine/v0.1.0 \
+  --option allow-unsafe-native-code-during-evaluation true
+./result/bin/great-machine version
+```
+
+`nix profile install` with the same option puts it on the `PATH`. A
+release also publishes the image `ghcr.io/fables-for-robots/great-machine`
+under its tag, which holds the program, for Linux on amd64 and arm64:
+the cluster runs draal and every zathras from it.
+
 **1. The operator's key.** On the laptop:
 
 ```sh
@@ -371,6 +394,18 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
   and can halt a rollout by failing it. Treat the endpoint ID of draal as
   something the pods know and the world does not, and put no secret in
   the arguments of a service.
+- **What draal takes from a registrant is bounded.** A registration is
+  refused unless the name is 1 to 253 bytes of letters, digits, `.`, `_`
+  and `-` and the version at most 64 bytes of printable ASCII. What a
+  zathras reports is cleaned of control characters and cut before draal
+  keeps or shows it (the binary at 4 KiB, the arguments at 128 of 1 KiB,
+  the reason of a failure at 4 KiB), a report that is not of the protocol
+  ends the connection, and draal keeps at most 900 samples of a zathras,
+  twice what 15 minutes bring. What draal does not bound is how many register:
+  a peer can register any number of zathrases, every one is sent to
+  every watcher, and a fleet that comes to more than a message holds
+  (4 MiB) ends `status` and the following of a rollout, which draal
+  logs.
 - **The jaccard-store server** takes a push from anyone who can reach it,
   and the sidecar's preload endpoint has no authentication, which is why
   it listens on the loopback address of the pod.
