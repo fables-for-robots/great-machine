@@ -36,6 +36,7 @@ type Registry struct {
 	mu      sync.Mutex
 	members map[wire.ID]*entry
 	epoch   uint64 // of the last Join
+	subs    map[chan struct{}]struct{}
 }
 
 // New returns a registry that keeps the samples of the last history.
@@ -43,6 +44,7 @@ func New(history time.Duration) *Registry {
 	return &Registry{
 		history: history,
 		members: map[wire.ID]*entry{},
+		subs:    map[chan struct{}]struct{}{},
 	}
 }
 
@@ -63,6 +65,7 @@ func (r *Registry) Join(m Member) (epoch uint64) {
 	e := &entry{member: m, epoch: r.epoch}
 	e.keep(m.State.Sample, r.history)
 	r.members[m.ID] = e
+	r.notify()
 	return e.epoch
 }
 
@@ -80,6 +83,7 @@ func (r *Registry) Report(id wire.ID, epoch uint64, st wire.State, now time.Time
 	e.member.State = st
 	e.member.Reported = now
 	e.keep(st.Sample, r.history)
+	r.notify()
 	return true
 }
 
@@ -93,6 +97,7 @@ func (r *Registry) Leave(id wire.ID, epoch uint64) bool {
 		return false
 	}
 	delete(r.members, id)
+	r.notify()
 	return true
 }
 
