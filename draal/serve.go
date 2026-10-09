@@ -123,6 +123,7 @@ func (d *Draal) register(ctx context.Context, conn node.Conn, s node.Stream, reg
 		}
 	}()
 
+	last := reg.State
 	if err := wire.Write(s, &wire.Response{Registered: &wire.Registered{}}); err == nil {
 		for {
 			var st wire.State
@@ -130,11 +131,17 @@ func (d *Draal) register(ctx context.Context, conn node.Conn, s node.Stream, reg
 				break
 			}
 			d.fleet.Report(id, epoch, st, d.cfg.Now())
+			last = st
 		}
 	}
 
-	d.fleet.Leave(id, epoch)
+	// The reconciler is told who left, with its last report, together with
+	// the fleet: whoever finds the member gone finds the leave as well.
+	at := d.cfg.Now()
 	d.mu.Lock()
+	if d.fleet.Leave(id, epoch) {
+		d.left = append(d.left, leave{id: id, service: reg.Service, state: last, at: at})
+	}
 	current := d.sessions[id] == sess
 	if current {
 		delete(d.sessions, id)

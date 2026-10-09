@@ -25,10 +25,11 @@ type Config struct {
 	// /nix/store. The tests of the whole point it at a directory they can
 	// write to.
 	StoreDir       string
-	Settle         time.Duration    // 0: 15 seconds
+	Settle         time.Duration    // 0: 45 seconds
 	StableAfter    time.Duration    // 0: 30 seconds
 	PrepareTimeout time.Duration    // 0: 30 minutes
 	RetryAfter     time.Duration    // 0: 30 seconds
+	AbsentGrace    time.Duration    // 0: 2 minutes
 	GoneAfter      time.Duration    // 0: 10 seconds
 	WatchEvery     time.Duration    // 0: 1 second
 	History        time.Duration    // 0: 15 minutes
@@ -43,7 +44,7 @@ func (cfg Config) withDefaults() Config {
 	}
 	cfg.StoreDir = path.Clean(cfg.StoreDir)
 	if cfg.Settle == 0 {
-		cfg.Settle = 15 * time.Second
+		cfg.Settle = 45 * time.Second
 	}
 	if cfg.StableAfter == 0 {
 		cfg.StableAfter = 30 * time.Second
@@ -53,6 +54,9 @@ func (cfg Config) withDefaults() Config {
 	}
 	if cfg.RetryAfter == 0 {
 		cfg.RetryAfter = 30 * time.Second
+	}
+	if cfg.AbsentGrace == 0 {
+		cfg.AbsentGrace = 2 * time.Minute
 	}
 	if cfg.GoneAfter == 0 {
 		cfg.GoneAfter = 10 * time.Second
@@ -121,6 +125,7 @@ type Draal struct {
 
 	mu       sync.Mutex
 	sessions map[wire.ID]*session       // the zathrases that are connected
+	left     []leave                    // who left since the reconciler last looked, in order
 	tallies  map[string]tally           // by service: the counts of the last decision
 	subs     map[chan struct{}]struct{} // who is told that something changed
 }
@@ -131,6 +136,15 @@ type session struct {
 	id      wire.ID
 	service string
 	conn    node.Conn
+}
+
+// leave is a zathras that left the fleet: its last report, and when draal
+// let it go.
+type leave struct {
+	id      wire.ID
+	service string
+	state   wire.State
+	at      time.Time
 }
 
 // tally is the counts of the last decision about a rollout.

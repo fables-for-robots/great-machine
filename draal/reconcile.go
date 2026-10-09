@@ -3,10 +3,13 @@ package draal
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/fables-for-robots/great-machine/db"
+	"github.com/fables-for-robots/great-machine/fleet"
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/rollout"
 	"github.com/fables-for-robots/great-machine/wire"
@@ -57,6 +60,14 @@ type reconciler struct {
 	activating map[wire.ID]*command
 	failed     map[wire.ID]failure
 	seen       map[string]uint64 // by service: the last rollout that was looked at
+	// absent is, by service, who left while a rollout of the service was
+	// under way without being done on its target, and is not back: the
+	// Absent of rollout.Input. It is kept over a rollout that supersedes,
+	// and emptied when no rollout of the service is under way.
+	absent map[string]map[wire.ID]time.Time
+	// left is the leaves taken from the Draal that have not been weighed
+	// against the rollouts of their service yet.
+	left []leave
 }
 
 // reconcile is the reconciler loop. It does nothing before Settle has
@@ -71,6 +82,7 @@ func (d *Draal) reconcile(ctx context.Context) {
 		activating: map[wire.ID]*command{},
 		failed:     map[wire.ID]failure{},
 		seen:       map[string]uint64{},
+		absent:     map[string]map[wire.ID]time.Time{},
 	}
 	defer r.sending.Wait()
 	members, stopMembers := d.fleet.Subscribe()
@@ -128,6 +140,9 @@ func (d *Draal) reconcile(ctx context.Context) {
 func (r *reconciler) pass() time.Time {
 	d := r.d
 	r.forget()
+	// A leave whose grace has passed holds nothing, whatever its service.
+	now := d.cfg.Now()
+	r.left = slices.DeleteFunc(r.left, func(l leave) bool { return !now.Before(l.at.Add(d.cfg.AbsentGrace)) })
 	names, err := d.serviceNames(r.ctx)
 	if err != nil {
 		if r.ctx.Err() == nil {
@@ -188,6 +203,9 @@ func (r *reconciler) forget() {
 func (r *reconciler) service(name string) (recheck time.Time, changed bool, err error) {
 	d := r.d
 	for range rounds {
+		// The members first, and the leaves with them: the rollout is read
+		// after, so that it is never older than a leave the members show.
+		members, back := r.look(name)
 		var stable uint64
 		row, err := d.cfg.DB.Service(r.ctx, name)
 		switch {
@@ -209,17 +227,23 @@ func (r *reconciler) service(name string) (recheck time.Time, changed bool, err 
 			}
 		}
 
+		now := d.cfg.Now()
+		if err := r.note(name, current, now, back); err != nil {
+			return time.Time{}, changed, err
+		}
 		in := rollout.Input{
-			Now:            d.cfg.Now(),
+			Now:            now,
 			Stable:         stable,
 			Rollout:        current,
-			Members:        d.fleet.Service(name),
+			Members:        members,
 			Preparing:      map[wire.ID]uint64{},
 			Activating:     map[wire.ID]uint64{},
 			Failed:         map[wire.ID]rollout.Failure{},
+			Absent:         maps.Clone(r.absent[name]),
 			StableAfter:    d.cfg.StableAfter,
 			PrepareTimeout: d.cfg.PrepareTimeout,
 			RetryAfter:     d.cfg.RetryAfter,
+			AbsentGrace:    d.cfg.AbsentGrace,
 		}
 		for _, m := range in.Members {
 			if cmd := r.preparing[m.ID]; cmd != nil {
@@ -248,6 +272,9 @@ func (r *reconciler) service(name string) (recheck time.Time, changed bool, err 
 			d.log.Info("rollout", "service", name, "rollout", last.ID, "state", dec.State, "reason", dec.Reason)
 			last.State, last.Reason = dec.State, dec.Reason
 			moved, changed = true, true
+			if !last.State.UnderWay() {
+				delete(r.absent, name)
+			}
 		}
 		if has {
 			t := tally{rollout: last.ID, prepared: dec.Prepared, activated: dec.Activated, awaited: dec.Awaited}
@@ -267,6 +294,128 @@ func (r *reconciler) service(name string) (recheck time.Time, changed bool, err 
 		}
 	}
 	return d.cfg.Now(), changed, nil
+}
+
+// look returns the members of a service, takes the leaves the Draal has
+// noted since the last look, and says which zathrases of the service that
+// left, or are absent, are connected again. It does all of it under d.mu,
+// with which a zathras joins and leaves, so that the three agree: a
+// zathras that left is among the members only when it came back after.
+func (r *reconciler) look(service string) ([]fleet.Member, map[wire.ID]bool) {
+	d := r.d
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	members := d.fleet.Service(service)
+	r.left = append(r.left, d.left...)
+	d.left = nil
+	back := map[wire.ID]bool{}
+	connected := func(id wire.ID) {
+		if _, ok := d.fleet.Get(id); ok {
+			back[id] = true
+		}
+	}
+	for _, l := range r.left {
+		if l.service == service {
+			connected(l.id)
+		}
+	}
+	for id := range r.absent[service] {
+		connected(id)
+	}
+	return members, back
+}
+
+// note weighs the leaves of a service against its rollouts, and keeps its
+// book of who is absent: a zathras that left while a rollout of the
+// service was under way, and was not done on that rollout's target, is
+// entered with the time it left. Whoever is back, and whoever left
+// AbsentGrace ago or longer, is dropped; everyone is when no rollout of
+// the service is under way.
+func (r *reconciler) note(service string, current *wire.RolloutInfo, now time.Time, back map[wire.ID]bool) error {
+	grace := r.d.cfg.AbsentGrace
+	underWay := current != nil && current.State.UnderWay()
+	// The rollouts of the service are read for a leave from before current
+	// was made, before anything is changed.
+	var rollouts []wire.RolloutInfo
+	for _, l := range r.left {
+		if underWay && l.service == service && l.at.Before(current.Created) {
+			list, err := r.d.cfg.DB.Rollouts(r.ctx, service, rolloutsListed)
+			if err != nil {
+				return err
+			}
+			rollouts = list
+			break
+		}
+	}
+
+	book := r.absent[service]
+	if book == nil {
+		book = map[wire.ID]time.Time{}
+	}
+	rest := r.left[:0]
+	for _, l := range r.left {
+		if l.service != service {
+			rest = append(rest, l)
+			continue
+		}
+		// A zathras that left again was back in between.
+		delete(book, l.id)
+		if !underWay || back[l.id] || !now.Before(l.at.Add(grace)) {
+			continue
+		}
+		if target, ok := during(current, rollouts, l.at); ok && !rollout.Done(l.state, target, r.d.cfg.StableAfter) {
+			book[l.id] = l.at
+		}
+	}
+	clear(r.left[len(rest):])
+	r.left = rest
+	for id, at := range book {
+		if !underWay || back[id] || !now.Before(at.Add(grace)) {
+			delete(book, id)
+		}
+	}
+	if len(book) == 0 {
+		delete(r.absent, service)
+	} else {
+		r.absent[service] = book
+	}
+	return nil
+}
+
+// during returns the target of the rollout that was under way when a
+// zathras left at the time given, and false when none was. current is the
+// last rollout of the service, and under way; rollouts are the last of the
+// service, newest first, which a leave from before current was made needs.
+//
+// A rollout is under way from when it is made until it ends, a superseded
+// one until the next was made. So the rollout that was under way is the
+// last one made before the zathras left, if it is current or was
+// superseded; one that completed or halted took its absent with it. When
+// draal cannot tell, because more rollouts were made since than it reads,
+// it answers current: it waits rather than not.
+func during(current *wire.RolloutInfo, rollouts []wire.RolloutInfo, at time.Time) (uint64, bool) {
+	if !at.Before(current.Created) {
+		return current.Generation, true
+	}
+	for _, ro := range rollouts {
+		if ro.Created.After(at) {
+			continue
+		}
+		switch ro.State {
+		case wire.RolloutSuperseded:
+			return ro.Generation, true
+		case wire.RolloutCompleted, wire.RolloutHalted:
+			return 0, false
+		default:
+			// current, by a clock that went back.
+			return current.Generation, true
+		}
+	}
+	if len(rollouts) == rolloutsListed {
+		return current.Generation, true
+	}
+	// It left before the service had a rollout.
+	return 0, false
 }
 
 // recorded is called when a service has a rollout that was not seen
