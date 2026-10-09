@@ -61,6 +61,7 @@
             ldflags = [
               "-X github.com/fables-for-robots/great-machine/cli.Version=${version}"
             ];
+            meta.license = pkgs.lib.licenses.lgpl3Only;
           };
 
           busybox = pkgs.pkgsStatic.busybox;

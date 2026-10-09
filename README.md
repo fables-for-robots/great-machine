@@ -488,3 +488,9 @@ one.
 ```sh
 git tag v0.1.0 && git push origin v0.1.0
 ```
+
+## License
+
+Licensed under the GNU Lesser General Public License, version 3 only
+(`LGPL-3.0-only`). See [`LICENSE`](LICENSE) for the LGPL terms and
+[`COPYING`](COPYING) for the GPL terms incorporated by the LGPL.
