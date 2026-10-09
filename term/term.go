@@ -44,6 +44,15 @@ const endOfInput = 0x04
 // with the error of ctx. The session is not closed: that is the caller's
 // to do, and it ends what Attach has left reading.
 //
+// On a terminal, when Attach returns for any reason but a detach, a
+// goroutine is left reading the terminal: a read of a terminal cannot be
+// interrupted the way this code reads it. The next input the user types, a
+// key or a line, is read by that goroutine and dropped, and it never
+// reaches the session. This does not matter to a caller whose process ends
+// after Attach, as `great-machine shell` does. A caller that lives on, the
+// terminal UI, must not call Attach on a terminal until that read is made
+// interruptible. After a detach nothing is left reading.
+//
 // Nothing is written to the session or to out once Attach has returned.
 // Two more things where the documentation of the session leaves room:
 //
@@ -135,9 +144,13 @@ func (a *attachment) run(ctx context.Context) (exit int, detached bool, err erro
 
 	// Neither goroutine is waited for when Attach returns. The one that
 	// reads in cannot be interrupted while it waits in Read on a terminal:
-	// it ends with the next key, or never. The one that reads the session
-	// ends when the caller closes the session. What either of them reads
-	// after Attach has returned is stopped by its gate and dropped.
+	// it ends with the next input of the user, or never. That input, a key
+	// or a line, is the user's and it is lost: the goroutine reads it, finds
+	// its gate shut and drops it, and nobody else gets it. The gate keeps it
+	// from the session, which is why the session is not harmed; the user
+	// is. After a detach nothing is left, the goroutine returned by itself.
+	// The one that reads the session ends when the caller closes the
+	// session, and what it reads after Attach has returned is dropped too.
 	a.spawn(results, a.input)
 	a.spawn(results, func() (result, bool) { return a.output(ctx), true })
 

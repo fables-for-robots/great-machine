@@ -376,22 +376,102 @@ func TestAttachTerminal(t *testing.T) {
 		t.Errorf("out = %q", out.String())
 	}
 
+	// After a detach nothing is left reading: the goroutine returned by
+	// itself, before Attach did.
+	select {
+	case <-a.inputEnded:
+	default:
+		t.Error("the reading of the terminal is still going after a detach")
+	}
+
 	// A change of size is nothing to an Attach that has returned.
+	noSizeAfterReturn(t, master, s)
+}
+
+// noSizeAfterReturn changes the size of the terminal, raises SIGWINCH, and
+// fails when the session is sent a size within a third of a second. It
+// waits that long because it shows that something does NOT happen: a handler
+// that was still armed would have acted by then.
+func noSizeAfterReturn(t *testing.T, master *os.File, s *fakeSession) {
+	t.Helper()
 	before := len(s.sizes())
+	if err := pty.Setsize(master, &pty.Winsize{Cols: 140, Rows: 60}); err != nil {
+		t.Fatal(err)
+	}
 	if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := master.Write([]byte("z")); err != nil {
-		t.Fatal(err)
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if n := len(s.sizes()); n != before {
+			t.Fatalf("%d sizes were sent after Attach had returned: %v", n-before, s.sizes()[before:])
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
-	// The key above wakes the goroutine that was left reading, which ends.
-	select {
-	case <-a.inputEnded:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the reading of the terminal did not end with the next key")
+}
+
+// The path that leaves a reader on a terminal: Attach ends with nothing
+// typed. The terminal is restored, and the key typed next is read by the
+// goroutine that was left, and dropped: the session never gets it.
+func TestAttachTerminalLeftoverReader(t *testing.T) {
+	cases := []struct {
+		name  string
+		end   func(s *fakeSession, cancel func())
+		check func(t *testing.T, got attached)
+	}{
+		{"the shell ends",
+			func(s *fakeSession, cancel func()) { close(s.out) },
+			func(t *testing.T, got attached) {
+				if got.err != nil || got.detached || got.exit != 42 {
+					t.Errorf("Attach = %d, %v, %v; want 42, false, nil", got.exit, got.detached, got.err)
+				}
+			}},
+		{"the context is done",
+			func(s *fakeSession, cancel func()) { cancel() },
+			func(t *testing.T, got attached) {
+				if !errors.Is(got.err, context.Canceled) || got.detached {
+					t.Errorf("Attach = %d, %v, %v; want the error of the context", got.exit, got.detached, got.err)
+				}
+			}},
 	}
-	if s.got() != "ls\r\x03x" || len(s.sizes()) != before {
-		t.Errorf("the session was sent %q and %d sizes after Attach had returned", s.got(), len(s.sizes())-before)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			master, tty := terminal(t)
+			cooked := mode(t, tty)
+			s := newFakeSession(42)
+			a := newAttachment(tty, io.Discard, s)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := start(ctx, a)
+			waitFor(t, "the size", func() bool { return len(s.sizes()) == 1 })
+
+			c.end(s, cancel)
+			c.check(t, await(t, done))
+			if !reflect.DeepEqual(mode(t, tty), cooked) {
+				t.Error("the terminal was not restored")
+			}
+			// The goroutine is left reading: it has not ended on its own.
+			select {
+			case <-a.inputEnded:
+				t.Fatal("the reading of the terminal ended with nothing typed")
+			default:
+			}
+
+			// The next input of the user is read by it and dropped. A line
+			// feed completes the line now that the terminal is cooked again.
+			if _, err := master.Write([]byte("z\n")); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-a.inputEnded:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the reading of the terminal did not end with the next input")
+			}
+			if s.got() != "" {
+				t.Errorf("the session was sent %q after Attach had returned", s.got())
+			}
+			noSizeAfterReturn(t, master, s)
+		})
 	}
 }
 
