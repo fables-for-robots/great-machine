@@ -30,6 +30,8 @@ jobs:
         run: go vet ./...
       - name: test
         run: go test ./...
+      - name: pid1
+        run: scripts/test-pid1.sh
       # Steps that test more are added above this line. The last step
       # builds the program as a release does. gonixgo runs a program
       # while Nix evaluates, which Nix allows only when asked.
