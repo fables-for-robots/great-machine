@@ -153,7 +153,8 @@ func Push(ctx context.Context, cfg Config, storePaths []string) (Result, error) 
 	}
 	res := Result{Present: len(items) - len(missing)}
 	for _, it := range missing {
-		info, err := os.Lstat(it.path)
+		// Cleaned: a slash behind the name of a link would have it followed.
+		info, err := os.Lstat(filepath.Clean(it.path))
 		// A path that is not there fails when its turn comes.
 		if err == nil && info.Mode()&fs.ModeSymlink != 0 {
 			return res, fmt.Errorf("pushing %s: the store path is a symbolic link, which cannot be pushed", it.path)
@@ -183,8 +184,10 @@ func Push(ctx context.Context, cfg Config, storePaths []string) (Result, error) 
 		})
 	}
 	err = g.Wait()
-	// The end of the caller's context is the cause of whatever it ended.
-	if cerr := ctx.Err(); cerr != nil {
+	// The end of the caller's context is the cause of what it ended: an
+	// error of a context while the caller's is done. A push that succeeded,
+	// or failed by itself, says so.
+	if cerr := ctx.Err(); cerr != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 		err = fmt.Errorf("the push was interrupted: %w", cerr)
 	}
 	return res, err

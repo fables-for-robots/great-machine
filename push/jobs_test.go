@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -141,6 +144,61 @@ func TestPushCancelled(t *testing.T) {
 	}
 	if got := srv.refs(); len(got) != 0 {
 		t.Errorf("the server has the references %q, want none", got)
+	}
+	empty(t, cfg.TempDir)
+}
+
+// cancelAfter replaces the hook of the package for the length of the
+// test: when the work on the store path given has ended, cancel is
+// called, before Push has returned.
+func cancelAfter(t *testing.T, storePath string, cancel context.CancelFunc) {
+	t.Helper()
+	old := pushing
+	pushing = func(p string) func() {
+		if p != storePath {
+			return func() {}
+		}
+		return cancel
+	}
+	t.Cleanup(func() { pushing = old })
+}
+
+// A push whose every path succeeded succeeded, even when the context
+// ended a moment later.
+func TestPushThatSucceededBeforeTheContextEnded(t *testing.T) {
+	srv := startServer(t)
+	cfg := srv.config()
+	paths := storePaths(t, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelAfter(t, paths[0], cancel)
+
+	res, err := Push(ctx, cfg, paths)
+	if err != nil {
+		t.Fatalf("Push = %+v, %v; want it to have succeeded", res, err)
+	}
+	if res != (Result{Pushed: 1}) {
+		t.Errorf("Push = %+v, want one pushed", res)
+	}
+	empty(t, cfg.TempDir)
+}
+
+// A path that failed by itself keeps its error, which names it, even when
+// the context ended before Push returned.
+func TestPushThatFailedBeforeTheContextEnded(t *testing.T) {
+	srv := startServer(t)
+	cfg := srv.config()
+	nothing := filepath.Join(t.TempDir(), "bbbb-nothing")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelAfter(t, nothing, cancel)
+
+	_, err := Push(ctx, cfg, []string{nothing})
+	if err == nil || !strings.Contains(err.Error(), nothing) || !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Push: %v; want the error of %s, that it does not exist", err, nothing)
+	}
+	if strings.Contains(fmt.Sprint(err), "interrupted") {
+		t.Errorf("Push: %v; want no interrupt, which was not the cause", err)
 	}
 	empty(t, cfg.TempDir)
 }

@@ -257,6 +257,28 @@ func TestPushSymbolicLink(t *testing.T) {
 	empty(t, cfg.TempDir)
 }
 
+// A symbolic link is refused also when it is given with a slash behind
+// it, which would have it followed.
+func TestPushSymbolicLinkWithASlash(t *testing.T) {
+	srv := startServer(t)
+	cfg := srv.config()
+	store := t.TempDir()
+	dir := storePathDir(t, store, "aaaa-web-1.0")
+	link := filepath.Join(store, "bbbb-web-current")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := push(t, cfg, []string{link + "/"})
+	if err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("Push = %+v, %v; want an error for the symbolic link", res, err)
+	}
+	if got := srv.refs(); len(got) != 0 {
+		t.Errorf("the server has the references %q, want none", got)
+	}
+	empty(t, cfg.TempDir)
+}
+
 func TestPushAgain(t *testing.T) {
 	srv := startServer(t)
 	paths := storePaths(t, 3)
