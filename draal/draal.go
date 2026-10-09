@@ -27,7 +27,8 @@ type Config struct {
 	StoreDir       string
 	Settle         time.Duration    // 0: 45 seconds
 	StableAfter    time.Duration    // 0: 30 seconds
-	PrepareTimeout time.Duration    // 0: 30 minutes
+	PrepareTimeout time.Duration    // 0: 30 minutes, also of one prepare
+	ActivateWait   time.Duration    // 0: 30 seconds, of one activate
 	RetryAfter     time.Duration    // 0: 30 seconds
 	AbsentGrace    time.Duration    // 0: 2 minutes
 	GoneAfter      time.Duration    // 0: 10 seconds
@@ -59,6 +60,9 @@ func (cfg Config) withDefaults() Config {
 	}
 	if cfg.PrepareTimeout == 0 {
 		cfg.PrepareTimeout = 30 * time.Minute
+	}
+	if cfg.ActivateWait == 0 {
+		cfg.ActivateWait = 30 * time.Second
 	}
 	if cfg.RetryAfter == 0 {
 		cfg.RetryAfter = 30 * time.Second

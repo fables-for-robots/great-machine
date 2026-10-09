@@ -86,6 +86,9 @@ func TestTheDefaultsOfStreams(t *testing.T) {
 	if cfg.RequestWait != 5*time.Second || cfg.MaxStreams != 64 || cfg.RefuseWait != 2*time.Second {
 		t.Errorf("RequestWait %v, MaxStreams %d, RefuseWait %v; want 5s, 64, 2s", cfg.RequestWait, cfg.MaxStreams, cfg.RefuseWait)
 	}
+	if cfg.ActivateWait != 30*time.Second {
+		t.Errorf("ActivateWait %v, want 30s", cfg.ActivateWait)
+	}
 }
 
 func TestAConnectionHasAtMostMaxStreams(t *testing.T) {

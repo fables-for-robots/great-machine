@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -90,6 +91,12 @@ func (d *Draal) serveStream(ctx context.Context, conn node.Conn, s node.Stream) 
 	}
 	if err != nil {
 		d.log.Debug("reading a request", "peer", conn.RemoteID(), "error", err)
+		return
+	}
+	// One that asks for more than one thing is refused before anything of
+	// it is looked at: authorized for one, it might do another.
+	if fields := asked(&req); len(fields) > 1 {
+		d.refuse(s, wire.Errorf(wire.CodeBadRequest, "a request asks for one thing, and this one asks for %s", strings.Join(fields, " and ")))
 		return
 	}
 	if req.Register != nil {

@@ -100,7 +100,7 @@ func (d *Draal) checkRollout(req wire.RolloutRequest) error {
 		return wire.Errorf(wire.CodeBadRequest, "the closure is empty")
 	}
 	for _, n := range req.Closure {
-		if strings.Contains(n, "/") {
+		if n == "" || n == "." || n == ".." || strings.Contains(n, "/") {
 			return wire.Errorf(wire.CodeBadRequest, "%q in the closure is no name of a store path", n)
 		}
 	}

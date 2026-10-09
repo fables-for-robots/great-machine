@@ -143,6 +143,9 @@ func TestRolloutRefusals(t *testing.T) {
 		{"no closure", change(func(r *wire.RolloutRequest) { r.Closure = nil })},
 		{"a closure without the binary's store path", change(func(r *wire.RolloutRequest) { r.Closure = []string{"def-libc"} })},
 		{"a path in the closure", change(func(r *wire.RolloutRequest) { r.Closure = []string{"abc-web", "/nix/store/def-libc"} })},
+		{"an empty name in the closure", change(func(r *wire.RolloutRequest) { r.Closure = []string{"abc-web", ""} })},
+		{"a dot in the closure", change(func(r *wire.RolloutRequest) { r.Closure = []string{"abc-web", "."} })},
+		{"two dots in the closure", change(func(r *wire.RolloutRequest) { r.Closure = []string{"abc-web", ".."} })},
 		{"parallel below 0", change(func(r *wire.RolloutRequest) { r.Parallel = -1 })},
 	}
 	for _, tc := range cases {

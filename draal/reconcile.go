@@ -3,6 +3,7 @@ package draal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"sync"
@@ -463,7 +464,8 @@ func (r *reconciler) withdraw(service string, current *wire.RolloutInfo) {
 	}
 }
 
-// send sends a command to a zathras, in a goroutine of its own.
+// send sends a command to a zathras, in a goroutine of its own. A prepare
+// is bounded by PrepareTimeout, an activate by ActivateWait.
 func (r *reconciler) send(service string, current *wire.RolloutInfo, c rollout.Command) {
 	d := r.d
 	if r.preparing[c.Zathras] != nil || r.activating[c.Zathras] != nil {
@@ -478,7 +480,13 @@ func (r *reconciler) send(service string, current *wire.RolloutInfo, c rollout.C
 		d.log.Error("reconciler: reading a generation", "service", service, "generation", c.Generation, "error", err)
 		return
 	}
-	ctx, cancel := context.WithCancel(r.ctx)
+	// A command that is not answered within its limit is withdrawn, and
+	// counts as failed.
+	late := &lateError{activate: c.Activate, limit: d.cfg.PrepareTimeout}
+	if c.Activate {
+		late.limit = d.cfg.ActivateWait
+	}
+	ctx, cancel := context.WithTimeoutCause(r.ctx, late.limit, late)
 	cmd := &command{sess: sess, activate: c.Activate, generation: c.Generation, cancel: cancel}
 	if current != nil && current.State.UnderWay() {
 		cmd.rollout = current.ID
@@ -494,11 +502,34 @@ func (r *reconciler) send(service string, current *wire.RolloutInfo, c rollout.C
 	d.log.Info("command sent", "service", service, "zathras", c.Zathras, "activate", c.Activate, "generation", c.Generation)
 	r.sending.Go(func() {
 		err := call(ctx, sess.conn, &req)
+		var refusal *wire.Error
+		if err != nil && !errors.As(err, &refusal) && context.Cause(ctx) == late {
+			err = late
+		}
 		select {
 		case r.results <- result{cmd: cmd, err: err}:
 		case <-r.ctx.Done():
 		}
 	})
+}
+
+// lateError is the failure of a command that was not answered within its
+// limit.
+type lateError struct {
+	activate bool
+	limit    time.Duration
+}
+
+func (e *lateError) Error() string {
+	return fmt.Sprintf("did not %s within %s", commandName(e.activate), e.limit)
+}
+
+// commandName returns the name of a command: activate or prepare.
+func commandName(activate bool) string {
+	if activate {
+		return "activate"
+	}
+	return "prepare"
 }
 
 // call sends one request on a stream of its own and returns the error it
@@ -516,11 +547,13 @@ func call(ctx context.Context, conn node.Conn, req *wire.Request) error {
 	return err
 }
 
-// answered takes the answer to a command into the books. Only what the
-// zathras answered counts as a failure: a command that ended without an
-// answer, because the stream or the connection broke, and one the zathras
-// answered with unavailable, because it shuts down, just leave the books.
-// If the zathras is still there, the next decision sends the command again.
+// answered takes the answer to a command into the books. What the zathras
+// answered counts as a failure, and so does a command it did not answer
+// within its limit (PrepareTimeout, ActivateWait); every failure is
+// logged. A command that ended without an answer, because the stream or
+// the connection broke, and one the zathras answered with unavailable,
+// because it shuts down, just leave the books. If the zathras is still
+// there, the next decision sends the command again.
 func (r *reconciler) answered(res result) {
 	cmd := res.cmd
 	cmd.cancel()
@@ -532,23 +565,35 @@ func (r *reconciler) answered(res result) {
 	if sent[id] != cmd {
 		return // withdrawn, or the zathras left
 	}
-	var refusal *wire.Error
+	var (
+		refusal *wire.Error
+		late    *lateError
+		reason  string
+	)
 	switch {
 	case res.err == nil && cmd.activate:
 		// It stays until a report shows the generation.
 		cmd.accepted = true
+		return
 	case res.err == nil:
 		delete(sent, id)
+		return
+	case errors.As(res.err, &late):
+		reason = late.Error()
 	case errors.As(res.err, &refusal) && refusal.Code != wire.CodeUnavailable:
-		delete(sent, id)
-		r.failed[id] = failure{sess: cmd.sess, Failure: rollout.Failure{
-			Generation: cmd.generation,
-			Activate:   cmd.activate,
-			Reason:     clean(refusal.Message, maxReason),
-			At:         r.d.cfg.Now(),
-		}}
+		reason = clean(refusal.Message, maxReason)
 	default:
 		delete(sent, id)
 		r.d.log.Warn("a command was not answered", "zathras", id, "activate", cmd.activate, "generation", cmd.generation, "error", res.err)
+		return
 	}
+	delete(sent, id)
+	r.failed[id] = failure{sess: cmd.sess, Failure: rollout.Failure{
+		Generation: cmd.generation,
+		Activate:   cmd.activate,
+		Reason:     reason,
+		At:         r.d.cfg.Now(),
+	}}
+	r.d.log.Warn("a command failed", "zathras", id, "name", cmd.sess.name, "service", cmd.sess.service,
+		"command", commandName(cmd.activate), "generation", cmd.generation, "reason", reason)
 }

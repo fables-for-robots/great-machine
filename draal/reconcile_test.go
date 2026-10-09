@@ -3,7 +3,9 @@ package draal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -467,5 +469,128 @@ func TestANewDraalCarriesARolloutOn(t *testing.T) {
 	}
 	if svc, _ := w.service("web"); svc.Stable != info.Generation {
 		t.Errorf("the stable generation is %d, want %d", svc.Stable, info.Generation)
+	}
+}
+
+// hangs is an onPrepare that never answers: it waits until draal closes
+// the stream, and then says so on withdrawn.
+func hangs(withdrawn chan<- struct{}) func(wire.Prepare, node.Stream) error {
+	return func(_ wire.Prepare, s node.Stream) error {
+		io.Copy(io.Discard, s)
+		withdrawn <- struct{}{}
+		return errors.New("withdrawn")
+	}
+}
+
+func TestAPrepareThatIsNotAnsweredInARolloutHaltsIt(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.StableAfter = time.Hour // web-a is never done: the rollout stays activating
+	cfg.PrepareTimeout = 500 * time.Millisecond
+	w := startWorld(t, cfg)
+	w.stableWeb()
+	w.zathras(10, "web", "web-a", running(1))
+	info := w.rollout(newWeb(0))
+	w.awaitRollout(info, wire.RolloutActivating)
+
+	// web-b comes while the rollout activates, and is sent prepare, which
+	// it never answers.
+	withdrawn := make(chan struct{}, 1)
+	b := w.newFake(11, "web", "web-b", running(1))
+	b.onPrepare = hangs(withdrawn)
+	b.connect()
+
+	halted := w.awaitRollout(info, wire.RolloutHalted)
+	if want := "web-b: did not prepare within 500ms"; halted.Reason != want {
+		t.Errorf("the reason is %q, want %q", halted.Reason, want)
+	}
+	wait(t, "draal to close the stream of the prepare", withdrawn)
+}
+
+func TestAnActivateThatIsNotAnsweredInARolloutHaltsIt(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.ActivateWait = 100 * time.Millisecond
+	w := startWorld(t, cfg)
+	w.stableWeb()
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	a := w.newFake(10, "web", "web-a", running(1))
+	a.onActivate = func(wire.Activate) error {
+		<-release
+		return errors.New("too late")
+	}
+	a.connect()
+
+	halted := w.awaitRollout(w.rollout(newWeb(1)), wire.RolloutHalted)
+	if want := "web-a: did not activate within 100ms"; halted.Reason != want {
+		t.Errorf("the reason is %q, want %q", halted.Reason, want)
+	}
+}
+
+func TestAPrepareThatIsNotAnsweredIsSentAgain(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.PrepareTimeout = 100 * time.Millisecond
+	w := startWorld(t, cfg)
+	first := w.stableWeb()
+
+	withdrawn := make(chan struct{}, 1)
+	var prepares atomic.Int32
+	z := w.newFake(10, "web", "web-new", idle())
+	hang := hangs(withdrawn)
+	z.onPrepare = func(p wire.Prepare, s node.Stream) error {
+		if prepares.Add(1) == 1 {
+			return hang(p, s)
+		}
+		return nil
+	}
+	z.connect()
+
+	wait(t, "draal to close the stream of the prepare that hangs", withdrawn)
+	eventually(t, "the zathras to run the stable generation", func() bool {
+		got, _ := w.member("web", z.id)
+		return got.State.Generation == first.Generation && got.State.Phase == wire.PhaseRunning
+	})
+	got := z.sent()
+	if gap, least := got.prepareAt[1].Sub(got.prepareAt[0]), cfg.PrepareTimeout+cfg.RetryAfter; gap < least {
+		t.Errorf("the prepare was sent again after %v, sooner than PrepareTimeout and RetryAfter (%v)", gap, least)
+	}
+}
+
+func TestAFailedCommandIsLogged(t *testing.T) {
+	cfg := testConfig(t)
+	log := logTo(&cfg)
+	w := startWorld(t, cfg)
+	no := func(wire.Prepare, node.Stream) error { return wire.Errorf(wire.CodeInternal, "the sidecar said no") }
+
+	// Outside a rollout: a new zathras is sent the stable generation.
+	first := w.stableWeb()
+	var failed atomic.Bool
+	a := w.newFake(10, "web", "web-a", idle())
+	a.onPrepare = func(p wire.Prepare, s node.Stream) error {
+		if failed.CompareAndSwap(false, true) {
+			return no(p, s)
+		}
+		return nil
+	}
+	a.connect()
+	outside := map[string]string{
+		"zathras": string(a.id), "name": "web-a", "service": "web",
+		"command": "prepare", "generation": fmt.Sprint(first.Generation), "reason": "the sidecar said no",
+	}
+	eventually(t, "the failure outside a rollout to be logged", func() bool {
+		_, ok := log.find(slog.LevelWarn, outside)
+		return ok
+	})
+
+	// In a rollout.
+	b := w.newFake(11, "web", "web-b", running(1))
+	b.onPrepare = no
+	b.connect()
+	info := w.awaitRollout(w.rollout(newWeb(1)), wire.RolloutHalted)
+	inside := map[string]string{
+		"zathras": string(b.id), "name": "web-b", "service": "web",
+		"command": "prepare", "generation": fmt.Sprint(info.Generation), "reason": "the sidecar said no",
+	}
+	if _, ok := log.find(slog.LevelWarn, inside); !ok {
+		t.Error("the failure in a rollout was not logged")
 	}
 }

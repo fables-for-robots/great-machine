@@ -699,6 +699,30 @@ func TestProtocolRequestsDraalDoesNotAnswer(t *testing.T) {
 	}
 }
 
+// A request asks for one thing: one that asks for two is refused before
+// anything of it is looked at, whoever asks.
+func TestARequestWithTwoFieldsIsRefused(t *testing.T) {
+	w := startWorld(t, testConfig(t))
+	z := w.zathras(10, "web", "web-1", idle())
+	for _, peer := range []wire.ID{operatorID, strangerID} {
+		conn := w.dial(peer)
+		for name, req := range map[string]*wire.Request{
+			"watch and shell": {Watch: &wire.WatchRequest{}, Shell: &wire.ShellRequest{Zathras: z.id, Cols: 80, Rows: 24}},
+			"register and logs": {
+				Register: &wire.Register{Service: "web", Name: "web-2", State: idle()},
+				Logs:     &wire.LogsRequest{Zathras: z.id},
+			},
+		} {
+			if _, _, err := ask(t, conn, req); wire.CodeOf(err) != wire.CodeBadRequest {
+				t.Errorf("%s from %s = %v, want a bad-request", name, peer, err)
+			}
+		}
+	}
+	if _, ok := w.member("web", nodetest.ID(2)); ok {
+		t.Error("a request with two fields registered the operator")
+	}
+}
+
 func TestServeEndsWithItsContext(t *testing.T) {
 	w := startWorld(t, testConfig(t))
 	z := w.zathras(10, "web", "web-1", idle())
