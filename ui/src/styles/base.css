@@ -1,0 +1,496 @@
+/* The page's own styles: the ground, the type, the frame of every view,
+   and the few things every view is made of. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--ffr-font-body);
+  font-size: 14px;
+  line-height: 1.45;
+  font-feature-settings: "tnum", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p,
+dl,
+dd,
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+}
+
+ul,
+ol {
+  list-style: none;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+::selection {
+  background: var(--term-selection);
+}
+
+/* ---- The frame ------------------------------------------------- */
+
+.frame {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The header is the brand's ground in both schemes: black, with the
+   glow of teal and blue at its far end, and the mark in white. */
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  color: var(--ffr-white);
+  background:
+    radial-gradient(circle at 88% -60%, rgba(53, 139, 242, 0.6) 0%, rgba(53, 139, 242, 0) 30%),
+    radial-gradient(circle at 99% 150%, rgba(45, 182, 190, 0.5) 0%, rgba(45, 182, 190, 0) 24%),
+    var(--ffr-black);
+  border-bottom: 1px solid var(--ffr-ink-500);
+}
+
+.top-in {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 var(--ffr-space-5);
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: var(--ffr-space-4);
+  flex-wrap: wrap;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--ffr-space-2);
+  color: var(--ffr-white);
+  font-family: var(--ffr-font-display);
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.brand:hover {
+  text-decoration: none;
+}
+
+/* The mark's file has a wide margin around the gear: the box shows its
+   middle. */
+.mark {
+  width: 30px;
+  height: 30px;
+  overflow: hidden;
+  position: relative;
+  flex: none;
+}
+
+.mark img {
+  position: absolute;
+  width: 66px;
+  height: 66px;
+  left: -17px;
+  top: -16px;
+}
+
+.top nav {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--ffr-space-2);
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.crumbs li {
+  display: flex;
+  align-items: center;
+  gap: var(--ffr-space-2);
+  min-width: 0;
+}
+
+.crumbs li + li::before {
+  content: "/";
+  color: var(--ffr-ink-300);
+}
+
+.crumbs a,
+.crumbs span {
+  color: var(--ffr-ink-100);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 28ch;
+}
+
+.crumbs a:hover {
+  color: var(--ffr-white);
+}
+
+.crumbs [aria-current] {
+  color: var(--ffr-white);
+  font-weight: 600;
+}
+
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ffr-space-2);
+  font-family: var(--ffr-font-display);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding: 5px 10px;
+  border-radius: var(--ffr-radius-pill);
+  border: 1.5px solid var(--ffr-ink-400);
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.link::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.link[data-state="live"] {
+  color: var(--ffr-teal);
+  border-color: var(--ffr-teal-700);
+}
+
+.link[data-state="connecting"] {
+  color: var(--ffr-ink-100);
+}
+
+.link[data-state="lost"] {
+  color: #ff8f98;
+  border-color: #ff8f98;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .link[data-state="connecting"]::before,
+  .link[data-state="lost"]::before {
+    animation: blink 1.2s steps(2, jump-none) infinite;
+  }
+}
+
+@keyframes blink {
+  to {
+    opacity: 0.25;
+  }
+}
+
+/* What is said across the page while the connection is lost. */
+.lost {
+  background: var(--bad-wash);
+  color: var(--bad-text);
+  border-bottom: 1px solid var(--bad);
+  font-weight: 500;
+}
+
+.lost p {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: var(--ffr-space-2) var(--ffr-space-5);
+}
+
+.view {
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: var(--ffr-space-5) var(--ffr-space-5) var(--ffr-space-7);
+  flex: 1;
+}
+
+/* The last fleet stays while the connection is lost, and looks it. */
+.view[data-stale] {
+  opacity: 0.62;
+}
+
+/* ---- Type ------------------------------------------------------ */
+
+h1 {
+  font-family: var(--ffr-font-display);
+  font-weight: 800;
+  font-size: 28px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+h2 {
+  font-family: var(--ffr-font-display);
+  font-weight: 700;
+  font-size: 17px;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.mono {
+  font-family: var(--ffr-font-mono);
+  font-size: 0.93em;
+  font-feature-settings: "zero";
+}
+
+.muted {
+  color: var(--fg-muted);
+}
+
+.label {
+  font-family: var(--ffr-font-display);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.num {
+  font-family: var(--ffr-font-mono);
+  font-size: 0.93em;
+  white-space: nowrap;
+}
+
+/* ---- Pieces ---------------------------------------------------- */
+
+.head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ffr-space-3) var(--ffr-space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--ffr-space-5);
+}
+
+.head .muted {
+  font-size: 14px;
+}
+
+.section {
+  margin-top: var(--ffr-space-6);
+}
+
+.section > h2 {
+  margin-bottom: var(--ffr-space-3);
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: var(--ffr-radius-md);
+  background: var(--bg);
+}
+
+/* What a view says when it has nothing to show, or could not get it. */
+.notice {
+  border: 1px solid var(--border);
+  border-radius: var(--ffr-radius-md);
+  background: var(--surface);
+  padding: var(--ffr-space-5);
+  max-width: 76ch;
+}
+
+.notice h2 {
+  margin-bottom: var(--ffr-space-2);
+}
+
+.notice p + p {
+  margin-top: var(--ffr-space-2);
+}
+
+.notice[data-kind="bad"] {
+  border-color: var(--bad);
+  background: var(--bad-wash);
+}
+
+.notice.small {
+  padding: var(--ffr-space-3) var(--ffr-space-4);
+}
+
+/* A command to type: a line of its own, that can be selected whole. */
+.cmd {
+  display: block;
+  margin-top: var(--ffr-space-3);
+  padding: var(--ffr-space-2) var(--ffr-space-3);
+  border-radius: var(--ffr-radius-sm);
+  background: var(--ffr-black);
+  color: var(--ffr-white);
+  font-family: var(--ffr-font-mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cmd {
+    background: var(--ffr-ink-500);
+  }
+}
+
+.cmd + p {
+  margin-top: var(--ffr-space-3);
+}
+
+/* Why something failed, in the words of draal or of a zathras: in full,
+   however long, and as it was written. */
+.reason {
+  color: var(--bad-text);
+  font-family: var(--ffr-font-mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* An endpoint ID, short; the whole of it is its title and what a click
+   copies. */
+.id {
+  font-family: var(--ffr-font-mono);
+  font-size: 0.93em;
+  color: var(--fg-muted);
+  background: none;
+  border: 0;
+  border-bottom: 1px dashed var(--border);
+  padding: 0;
+  cursor: copy;
+  white-space: nowrap;
+}
+
+.id:hover {
+  color: var(--fg);
+  border-bottom-color: var(--fg-muted);
+}
+
+.id[data-said]::after {
+  content: " " attr(data-said);
+  font-family: var(--ffr-font-body);
+  color: var(--ok-text);
+}
+
+/* A state as a word with its colour beside it. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--ffr-font-display);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding: 3px 9px;
+  border-radius: var(--ffr-radius-pill);
+  border: 1.5px solid var(--tone, var(--idle));
+  color: var(--tone-text, var(--idle-text));
+  background: var(--tone-wash, transparent);
+}
+
+.badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tone, var(--idle));
+}
+
+[data-tone="ok"] {
+  --tone: var(--ok);
+  --tone-text: var(--ok-text);
+  --tone-wash: var(--ok-wash);
+}
+
+[data-tone="busy"] {
+  --tone: var(--busy);
+  --tone-text: var(--busy-text);
+  --tone-wash: var(--busy-wash);
+}
+
+[data-tone="warn"] {
+  --tone: var(--warn);
+  --tone-text: var(--warn-text);
+  --tone-wash: var(--warn-wash);
+}
+
+[data-tone="bad"] {
+  --tone: var(--bad);
+  --tone-text: var(--bad-text);
+  --tone-wash: var(--bad-wash);
+}
+
+[data-tone="idle"] {
+  --tone: var(--idle);
+  --tone-text: var(--idle-text);
+  --tone-wash: transparent;
+}
+
+@media (max-width: 640px) {
+  .top-in {
+    padding: var(--ffr-space-2) var(--ffr-space-4);
+    gap: var(--ffr-space-2) var(--ffr-space-3);
+  }
+
+  .top nav {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .link {
+    margin-left: auto;
+  }
+
+  .view {
+    padding: var(--ffr-space-4) var(--ffr-space-4) var(--ffr-space-7);
+  }
+
+  .lost p {
+    padding: var(--ffr-space-2) var(--ffr-space-4);
+  }
+
+  h1 {
+    font-size: 23px;
+  }
+}

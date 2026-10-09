@@ -1,0 +1,163 @@
+/* The tokens of the Fables for Robots design system, and what this page
+   makes of them. The brand is four colours: black, white, teal and
+   blue. The scales below them are the design system's own. The two
+   signal colours (warn, bad) are not the brand's: they are here because
+   a halted rollout and a service that keeps ending must not look like
+   anything else, and they are used for state alone. */
+
+:root {
+  /* The brand. */
+  --ffr-black: #000000;
+  --ffr-white: #ffffff;
+  --ffr-teal: #2db6be;
+  --ffr-blue: #358bf2;
+
+  --ffr-ink-900: #000000;
+  --ffr-ink-800: #0a0a0b;
+  --ffr-ink-700: #141418;
+  --ffr-ink-600: #1c1c22;
+  --ffr-ink-500: #262630;
+  --ffr-ink-400: #3a3a46;
+  --ffr-ink-300: #5b5b6a;
+  --ffr-ink-200: #8d8d9a;
+  --ffr-ink-100: #c7c7ce;
+  --ffr-ink-050: #eeeef1;
+  --ffr-ink-025: #f7f7f9;
+
+  --ffr-teal-700: #1a7c82;
+  --ffr-teal-300: #7fd4d9;
+  --ffr-teal-100: #d5f1f3;
+  --ffr-blue-700: #1f5bb3;
+  --ffr-blue-300: #8ab9f8;
+  --ffr-blue-100: #dbe9fd;
+
+  --ffr-font-display: "Montserrat Variable", "Inter Variable", system-ui, sans-serif;
+  --ffr-font-body: "Inter Variable", system-ui, sans-serif;
+  --ffr-font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --ffr-space-1: 4px;
+  --ffr-space-2: 8px;
+  --ffr-space-3: 12px;
+  --ffr-space-4: 16px;
+  --ffr-space-5: 24px;
+  --ffr-space-6: 32px;
+  --ffr-space-7: 48px;
+
+  --ffr-radius-sm: 4px;
+  --ffr-radius-md: 8px;
+  --ffr-radius-pill: 999px;
+
+  --ffr-ease-standard: cubic-bezier(0.2, 0.7, 0.1, 1);
+  --ffr-duration-fast: 120ms;
+  --ffr-duration-normal: 220ms;
+
+  /* What the page draws with, in the light. */
+  color-scheme: light dark;
+  --bg: var(--ffr-white);
+  --surface: var(--ffr-ink-025);
+  --surface-strong: var(--ffr-ink-050);
+  --fg: var(--ffr-black);
+  --fg-muted: var(--ffr-ink-300);
+  --fg-subtle: #74748a;
+  --border: #dedee4;
+  --border-strong: var(--ffr-black);
+  --link: var(--ffr-blue-700);
+  --focus: var(--ffr-blue);
+
+  /* State. Each is used with a word beside it, never alone. */
+  --ok: var(--ffr-teal);
+  --ok-text: var(--ffr-teal-700);
+  --ok-wash: var(--ffr-teal-100);
+  --busy: var(--ffr-blue);
+  --busy-text: var(--ffr-blue-700);
+  --busy-wash: var(--ffr-blue-100);
+  --warn: #c98a00;
+  --warn-text: #8a5a00;
+  --warn-wash: #fbefd2;
+  --bad: #d43a48;
+  --bad-text: #b0202e;
+  --bad-wash: #fde4e6;
+  --idle: var(--ffr-ink-200);
+  --idle-text: var(--ffr-ink-300);
+
+  /* The two series of a chart, checked for the light surface. */
+  --series-1: #1f5bb3;
+  --series-2: #2db6be;
+  --grid: #e6e6ec;
+
+  /* The sixteen colours of a terminal, for the log and the shell. */
+  --term-bg: var(--ffr-ink-025);
+  --term-fg: var(--ffr-ink-700);
+  --term-cursor: var(--ffr-blue-700);
+  --term-selection: #bcd6fb;
+  --term-black: #141418;
+  --term-red: #b0202e;
+  --term-green: #1c7c4a;
+  --term-yellow: #8a5a00;
+  --term-blue: #1f5bb3;
+  --term-magenta: #8b3fa8;
+  --term-cyan: #1a7c82;
+  --term-white: #5b5b6a;
+  --term-bright-black: #74748a;
+  --term-bright-red: #d43a48;
+  --term-bright-green: #249a5c;
+  --term-bright-yellow: #a86f00;
+  --term-bright-blue: #358bf2;
+  --term-bright-magenta: #a855c7;
+  --term-bright-cyan: #1f97a0;
+  --term-bright-white: #3a3a46;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: var(--ffr-black);
+    --surface: var(--ffr-ink-700);
+    --surface-strong: var(--ffr-ink-500);
+    --fg: var(--ffr-white);
+    --fg-muted: var(--ffr-ink-100);
+    --fg-subtle: var(--ffr-ink-200);
+    --border: #2c2c38;
+    --border-strong: var(--ffr-white);
+    --link: var(--ffr-blue-300);
+    --focus: var(--ffr-blue-300);
+
+    --ok-text: var(--ffr-teal-300);
+    --ok-wash: #0f3437;
+    --busy-text: var(--ffr-blue-300);
+    --busy-wash: #132b4d;
+    --warn: #e9a821;
+    --warn-text: #f3c462;
+    --warn-wash: #3a2c08;
+    --bad: #f0606c;
+    --bad-text: #ff8f98;
+    --bad-wash: #43141a;
+    --idle: var(--ffr-ink-300);
+    --idle-text: var(--ffr-ink-100);
+
+    /* The same two hues, stepped for a black surface. */
+    --series-1: #2f6fd6;
+    --series-2: #25a8b0;
+    --grid: #23232d;
+
+    --term-bg: var(--ffr-ink-800);
+    --term-fg: #e4e4ea;
+    --term-cursor: var(--ffr-teal);
+    --term-selection: #1f4a80;
+    --term-black: #262630;
+    --term-red: #f0606c;
+    --term-green: #4cc38a;
+    --term-yellow: #e9a821;
+    --term-blue: #5fa3f5;
+    --term-magenta: #c586e0;
+    --term-cyan: #2db6be;
+    --term-white: #c7c7ce;
+    --term-bright-black: #8d8d9a;
+    --term-bright-red: #ff8f98;
+    --term-bright-green: #7fdcae;
+    --term-bright-yellow: #f3c462;
+    --term-bright-blue: #8ab9f8;
+    --term-bright-magenta: #dcaaf0;
+    --term-bright-cyan: #7fd4d9;
+    --term-bright-white: #ffffff;
+  }
+}

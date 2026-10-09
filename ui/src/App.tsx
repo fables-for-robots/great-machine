@@ -1,43 +1,26 @@
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
+import { Route, Router } from "@solidjs/router";
+import { onCleanup, onMount } from "solid-js";
+import Layout from "./components/Layout";
+import { startFleet } from "./state/fleet";
+import NotFound from "./views/NotFound";
+import Service from "./views/Service";
+import Services from "./views/Services";
+import Zathras from "./views/Zathras";
 
-// The skeleton of the page: its name and, as a first sign of life, the
-// number of services in the first message of /api/watch.
+// The page: one connection to the fleet for all of it, and a view for
+// each of its three paths.
 export default function App() {
-  const [services, setServices] = createSignal<number>();
-  const [failed, setFailed] = createSignal(false);
-
   onMount(() => {
-    const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`${scheme}//${location.host}/api/watch`);
-    socket.onmessage = (event) => {
-      if (typeof event.data !== "string") {
-        return;
-      }
-      const fleet: unknown = JSON.parse(event.data);
-      if (typeof fleet === "object" && fleet !== null && "services" in fleet) {
-        const list = fleet.services;
-        setServices(Array.isArray(list) ? list.length : 0);
-        setFailed(false);
-      }
-    };
-    socket.onerror = () => setFailed(true);
-    socket.onclose = () => {
-      if (services() === undefined) {
-        setFailed(true);
-      }
-    };
-    onCleanup(() => socket.close());
+    const stop = startFleet();
+    onCleanup(stop);
   });
 
   return (
-    <main>
-      <h1>great-machine</h1>
-      <Show
-        when={services() !== undefined}
-        fallback={<p>{failed() ? "draal does not answer." : "Asking draal…"}</p>}
-      >
-        <p>services: {services()}</p>
-      </Show>
-    </main>
+    <Router root={Layout}>
+      <Route path="/" component={Services} />
+      <Route path="/s/:service" component={Service} />
+      <Route path="/s/:service/z/:id" component={Zathras} />
+      <Route path="*" component={NotFound} />
+    </Router>
   );
 }
