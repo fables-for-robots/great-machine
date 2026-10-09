@@ -203,9 +203,19 @@ func (r *reconciler) forget() {
 func (r *reconciler) service(name string) (recheck time.Time, changed bool, err error) {
 	d := r.d
 	for range rounds {
-		// The members first, and the leaves with them: the rollout is read
-		// after, so that it is never older than a leave the members show.
+		// The rollout is read before the members and again after them, and
+		// decided about only when both readings agree. Before: the members
+		// are never older than the rollout, or a rollout made just after a
+		// look at nobody would complete at once. After, with the leaves:
+		// the rollout is never older than a leave the members show.
+		before, hadBefore, err := d.cfg.DB.LastRollout(r.ctx, name)
+		if err != nil {
+			return time.Time{}, changed, err
+		}
 		members, back := r.look(name)
+		if d.cfg.afterLook != nil {
+			d.cfg.afterLook(name)
+		}
 		var stable uint64
 		row, err := d.cfg.DB.Service(r.ctx, name)
 		switch {
@@ -217,6 +227,10 @@ func (r *reconciler) service(name string) (recheck time.Time, changed bool, err 
 		last, has, err := d.cfg.DB.LastRollout(r.ctx, name)
 		if err != nil {
 			return time.Time{}, changed, err
+		}
+		if has != hadBefore || last.ID != before.ID || last.State != before.State {
+			// It was made, or it moved, while the members were looked at.
+			continue
 		}
 		var current *wire.RolloutInfo
 		if has {

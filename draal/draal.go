@@ -35,6 +35,11 @@ type Config struct {
 	History        time.Duration    // 0: 15 minutes
 	Now            func() time.Time // nil: time.Now
 	Log            *slog.Logger     // nil: slog.Default()
+
+	// afterLook, if set, is called by the reconciler when it has looked at
+	// the members of a service and before it reads the service's rollout:
+	// the tests make things happen in between.
+	afterLook func(service string)
 }
 
 // withDefaults returns cfg with every zero value replaced by its default.

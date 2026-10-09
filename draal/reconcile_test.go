@@ -6,6 +6,8 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -223,6 +225,49 @@ func TestAZathrasThatFailsHaltsTheRollout(t *testing.T) {
 				t.Errorf("%d activates were sent, want the rollout to halt at the first", n)
 			}
 		})
+	}
+}
+
+// A rollout made while the reconciler is between its look at the members
+// and its reading of the rollout is not decided about with the members of
+// before: with nobody connected then, it would complete at once.
+func TestARolloutIsNotDecidedWithMembersFromBeforeIt(t *testing.T) {
+	cfg := testConfig(t)
+	var armed atomic.Bool
+	looked, goOn := make(chan struct{}), make(chan struct{})
+	cfg.afterLook = func(service string) {
+		if service == "web" && armed.CompareAndSwap(true, false) {
+			looked <- struct{}{}
+			<-goOn
+		}
+	}
+	w := startWorld(t, cfg)
+	release := sync.OnceFunc(func() { close(goOn) })
+	t.Cleanup(release)
+	w.stableWeb()
+	a := w.newFake(10, "web", "web-a", running(1))
+	b := w.newFake(11, "web", "web-b", running(1))
+	for _, z := range []*fake{a, b} {
+		z.onActivate = func(wire.Activate) error {
+			return wire.Errorf(wire.CodeInternal, "not an executable file")
+		}
+	}
+
+	// The reconciler looks at web while nobody is connected, and waits.
+	armed.Store(true)
+	w.d.changed()
+	wait(t, "the reconciler to look at the members of web", looked)
+	a.connect()
+	b.connect()
+	info := w.rollout(newWeb(1))
+	release()
+
+	halted := w.awaitRollout(info, wire.RolloutHalted)
+	if !strings.Contains(halted.Reason, ": not an executable file") {
+		t.Errorf("the reason is %q, want what the zathras answered", halted.Reason)
+	}
+	if n := len(a.sent().activates) + len(b.sent().activates); n != 1 {
+		t.Errorf("%d activates were sent, want the rollout to halt at the first", n)
 	}
 }
 
