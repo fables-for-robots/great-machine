@@ -1,0 +1,78 @@
+# draal, the controller: one of it, with a volume for its key and its
+# database.
+#
+# What to change: the endpoint IDs of the operators (`great-machine id`
+# prints one), the jaccard-store server's endpoint ID and the prefix,
+# which the sidecars of the pods are given too.
+#
+# The endpoint ID of draal is what the pods and the operators need. draal
+# logs it when it starts:
+#
+#   kubectl logs deployment/draal | grep -i 'endpoint'
+#
+# It is that of the key in the volume, and stays as long as the volume.
+#
+# draal listens on no TCP port, and needs no Service: zathrases and
+# operators reach it over iroh by its endpoint ID.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: draal-data
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      # A key and a database of rollouts: megabytes.
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: draal
+spec:
+  # More than one draal for a fleet is not supported.
+  replicas: 1
+  # The old draal is gone before the new one starts: two would open the
+  # same database, and evict each other at the relay, having one key.
+  # While there is none, every service goes on running.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: draal
+  template:
+    metadata:
+      labels:
+        app: draal
+    spec:
+      containers:
+        - name: draal
+          # The same tag as the pods' app containers: draal and every
+          # zathras are kept on one tag, because a draal and a zathras of
+          # different versions may not speak the same protocol. v0.1.0 is
+          # the first release, which exists once it has been tagged.
+          image: ghcr.io/fables-for-robots/great-machine:v0.1.0
+          # The image's entrypoint is great-machine.
+          args: ["draal"]
+          env:
+            # Holds draal.key, created on first run, and draal.sqlite.
+            - name: GREAT_MACHINE_DATA
+              value: /data
+            # Who may roll out, read logs and open shells: endpoint IDs
+            # with commas between them. Without any, nobody can.
+            - name: GREAT_MACHINE_OPERATORS
+              value: "2222222222222222222222222222222222222222222222222222222222222222"
+            # Where `great-machine rollout` pushes closures to.
+            - name: JACCARD_SERVER
+              value: "0000000000000000000000000000000000000000000000000000000000000000"
+            # Put before the name of a store path as it is, to make its
+            # reference. The same value the sidecars have.
+            - name: JACCARD_PREFIX
+              value: /great-machine/nix/store/
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: draal-data

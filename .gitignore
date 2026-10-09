@@ -1,0 +1,18 @@
+# nix build
+/result
+/result-*
+
+# direnv
+/.direnv/
+
+# go build and go test -c
+/great-machine
+*.test
+*.out
+
+# the database of a draal that was run in the tree
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+.DS_Store

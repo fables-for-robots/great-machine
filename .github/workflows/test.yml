@@ -1,0 +1,55 @@
+name: Test
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Every `run` step runs in the flake's bare shell, which has the Go
+    # and the sqlc that the dev shell has. A step added here needs no
+    # setup of its own for them.
+    defaults:
+      run:
+        shell: nix develop .#bare --command bash -e {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ hashFiles('go.sum', 'flake.lock') }}
+          restore-keys: go-${{ runner.os }}-
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test ./...
+      # db/dbq is what sqlc makes of db/queries and db/migrations, and
+      # nothing else: a query that was changed without `go generate ./db`
+      # fails here.
+      - name: sqlc
+        run: sqlc diff
+      - name: pid1
+        run: scripts/test-pid1.sh
+      # Steps that test more are added above this line. The last step
+      # builds the program as a release does. gonixgo runs a program
+      # while Nix evaluates, which Nix allows only when asked.
+      - name: nix build
+        run: |
+          nix build --option allow-unsafe-native-code-during-evaluation true
+          ./result/bin/great-machine version
+      # The image as a release builds it, and what a pod asks of it: that
+      # it runs with another store mounted over /nix/store.
+      - name: image
+        run: |
+          nix build .#image --option allow-unsafe-native-code-during-evaluation true
+          docker load < result
+          docker run --rm --tmpfs /nix/store ghcr.io/fables-for-robots/great-machine:nix version
+          docker run --rm --tmpfs /nix/store --entrypoint sh ghcr.io/fables-for-robots/great-machine:nix \
+            -c 'test -d /tmp && test -s /etc/ssl/certs/ca-certificates.crt'

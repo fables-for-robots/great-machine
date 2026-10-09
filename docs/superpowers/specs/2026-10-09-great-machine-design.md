@@ -145,8 +145,46 @@ Authorize(peer EndpointID, op Operation, service string) error
 | register as a zathras of a service | every peer |
 | everything else | the endpoint IDs given with `--operator` |
 
+Endpoint IDs are compared exactly, and an empty one among the operators
+is ignored.
+
 A request that is refused is answered `unauthorized` and logged with the
-peer and the operation.
+peer and the operation. A refusal about a zathras is the same whether
+that zathras is connected or not, and names no service: a peer that is no
+operator does not learn who is there.
+
+### What draal accepts from a peer
+
+Registration is open, so nothing that a peer which registered sends is
+trusted to be small, well-formed or harmless to show:
+
+- **A registration** is refused with `bad-request` unless the name is 1 to
+  253 bytes of `A-Z a-z 0-9 . _ -`, beginning with a letter or a digit
+  (a host name is), the version at most 64 bytes of printable ASCII, and
+  the phase one of the four.
+- **What a zathras reports** is bounded before draal keeps or shows it.
+  Every string is made valid UTF-8 and its control characters become
+  spaces. The binary is cut at 4096 bytes, the arguments at 128 of 1024
+  bytes each, the error of the last exit at 1024 bytes. Of the prepared
+  generations the 64 highest are kept. A report with a phase draal does
+  not know ends the connection.
+- **The reason of a failure** that a zathras gives is cleaned the same way
+  and cut at 4096 bytes, so the reason of a rollout is bounded as well.
+- **Samples.** Draal keeps of a zathras at most twice what one reporting
+  every 2 seconds sends in 15 minutes, and ignores a sample that is not
+  newer than the last it has.
+- **Streams.** The first message of a stream has to come within 5 seconds.
+  A connection has at most 64 streams that the peer opened being served
+  at a time; one more is closed without an answer. A stream whose request
+  was refused is closed 2 seconds after the refusal. A request with more
+  than one of its fields set is refused.
+- An answer that cannot be written, for another reason than the peer
+  having gone, is logged by draal with the peer and the request.
+
+What is not bounded is the number of peers that register. The fleet is
+sent whole, and enough registrants that each report as much as they may
+make it larger than a message can be: operators then get no fleet, and
+draal's log says why.
 
 This function is the one place that decides. Tokens of
 [clamp](https://github.com/amber-store/clamp) are meant to replace the
@@ -243,14 +281,19 @@ ID, name, the time it connected and its state.
 
 `great-machine rollout SERVICE PATH [-- ARG...]`:
 
-1. **The binary.** A `PATH` inside `/nix/store` is taken as written. Any
-   other path is resolved through its symbolic links, as `realpath` does,
-   and has to end inside `/nix/store` (so `./result/bin/web` works). The
-   binary has to be there. A Mach-O binary is refused: the pods run Linux.
+1. **The binary.** A `PATH` inside `/nix/store` is taken as written, and
+   refused when, through its symbolic links, it ends outside the store: a
+   link to another store path is what a wrapper is, a link out of the
+   store names a file that is in no closure. Any other path is resolved
+   through its symbolic links, as `realpath` does, and has to end inside
+   `/nix/store` (so `./result/bin/web` works). The binary has to be
+   there. A Mach-O binary is refused: the pods run Linux.
 2. **The closure.** `nix-store --query --requisites` of the store path the
    binary is in.
 3. **The store.** draal is asked for the jaccard-store server and the
-   prefix.
+   prefix, and the connection to draal is closed. The push dials with
+   the operator's key as well, and two endpoints with one key put each
+   other out at the relay: the key has one endpoint at a time.
 4. **The push.** The server is asked which of the references
    `prefix + name` it has. A store path never changes under its name, so
    one that is there is not pushed again. Every other path is imported into
@@ -261,9 +304,14 @@ ID, name, the time it connected and its state.
    reference (a link exists only as an entry of a directory), so a closure
    that has one is refused, with its name, before anything is pushed. The
    first path that fails ends the command; nothing was rolled out.
-5. **The rollout.** draal is sent the service, the binary, the arguments,
-   the names of the closure and `--parallel`. It records a new generation
-   and a rollout and answers at once.
+5. **The rollout.** draal is dialed again and sent the service, the
+   binary, the arguments, the names of the closure and `--parallel`. It
+   records a new generation and a rollout and answers at once. If draal
+   cannot be reached now, the closure was pushed and nothing was rolled
+   out, and the command says so: running it again pushes nothing. Draal
+   refuses a closure that is empty, that does not hold the store path of
+   the binary, or in which a name is empty, is `.` or `..`, or has a `/`
+   in it.
 6. **Following.** The command watches the fleet and shows the rollout until
    it has completed or halted. It exits with 0 when the rollout completed
    and with 1 when it halted or was superseded, having printed the reason.
@@ -304,8 +352,9 @@ goes, and whenever a rollout is made. A draal that was restarted, and a
 zathras that was gone and is back, are therefore carried on with: nothing
 of a rollout is kept in memory that the reports do not give back.
 
-After it starts, draal waits 15 seconds before the reconciler does
-anything, so that the zathrases are back before it decides.
+After it starts, draal waits 45 seconds before the reconciler does
+anything, so that the zathrases are back before it decides: a zathras
+dials again after 30 seconds at most.
 
 **Preparing.** Every connected zathras that has not prepared the target is
 sent `prepare`. The zathras posts the closure to the preload endpoint of
@@ -316,7 +365,7 @@ the sidecar and then checks that the binary is a file it may execute.
 - A `prepare` that fails halts the rollout, with the name of the zathras
   and what the sidecar said.
 - A rollout that is still `preparing` 30 minutes after it was made is
-  halted.
+  halted, and the reason names the zathrases that had not prepared.
 
 **Activating.** For the reconciler a zathras is
 
@@ -337,9 +386,19 @@ Then:
 - A zathras whose phase is `idle` has nothing to lose: it is sent `prepare`
   and `activate` at once and is not counted against `parallel`. It can fail
   like any other.
-- When every connected zathras is done, the rollout is `completed`.
-- A zathras that goes is no longer looked at. If it comes back it is
-  waiting, under way or done by what it reports.
+- When every connected zathras is done, and none that left during the
+  rollout is still being waited for, the rollout is `completed`.
+- A zathras that goes is sent nothing and frees its place in the batch. If
+  it comes back it is waiting, under way or done by what it reports.
+- **A zathras that left during a rollout without being done holds the
+  completion of the rollout for 2 minutes.** Without this, a fleet that
+  loses draal for longer than the 10 seconds after which a zathras counts
+  as gone would complete the rollout by its absence, and on its return
+  every zathras would be moved to the new stable generation at once. A
+  zathras that is back within the 2 minutes takes its place in the
+  rollout again. One that stays away longer is gone, and the rollout
+  completes over those who are there. Draal keeps who left in memory, and
+  carries it over to a rollout that supersedes the one they left during.
 
 **No rollout under way.** A service that never had a rollout has nothing
 to run, and its zathrases stay `idle`. When the last rollout of a service
@@ -350,10 +409,25 @@ generation. When the last rollout halted, the service is frozen: only a
 zathras that is `idle` is sent the stable generation, if there is one, and
 no other zathras is touched until the operator rolls out or rolls back.
 
+This convergence is not paced: every zathras that is not on the stable
+generation is moved at once. That is right for a new pod, and for one
+that missed a rollout which has run on the others since. It is also what
+happens to a fleet that returns after more than the 2 minutes above, or
+after a restart of draal from which it stayed away longer than the 45
+seconds: a known limit of this design.
+
 A `prepare` or an `activate` that fails while no rollout is under way has
 no rollout to halt. It is logged, and sent again after 30 seconds, for as
 long as it fails: a new pod whose store cannot be reached for a while does
 not stay `idle` for ever.
+
+**A command that is not answered has failed.** Draal waits 30 minutes for
+the answer to a `prepare` and 30 seconds for the answer to an `activate`,
+which a zathras gives at once. Then it closes the stream, and the command
+counts as one that failed, with a reason that says so: in a rollout it
+halts the rollout, outside one it is sent again. **Every command that
+fails is logged** by draal, with the zathras, the service, the command,
+the generation and the reason.
 
 ## 7. zathras
 
@@ -386,7 +460,7 @@ keeps it running, and tells draal.
   SIGTERM, SIGINT and SIGHUP on to it and wait for every child there is.
   The zathras that does the work is that child, and the container ends
   with its exit status.
-- On SIGTERM or SIGINT it stops the service as in 7.1, ends the shells and
+- On SIGTERM, SIGINT or SIGHUP it stops the service as in 7.1, ends the shells and
   exits with 0. It starts nothing while it does. The pod's
   `terminationGracePeriodSeconds` has to be longer than `--stop-timeout`.
 
@@ -531,11 +605,19 @@ program that talks to draal as the other operator commands do. It has the
 views of the web page: services, a service, a zathras with its state, its
 figures as sparklines and its log, followed live. From a zathras, a key
 opens the shell: the TUI gives the terminal to the session and takes it
-back when the shell has ended or `Ctrl-]` was typed. `great-machine shell`
+back when the shell has ended or `Ctrl-]` was typed, which ends the
+session: the remote shell is hung up. `great-machine shell`
 is the same session without the TUI around it. Its exit status is that of
 the shell. With a standard input that is no terminal
 (`echo uptime | great-machine shell web`) the input is passed on as it is,
 and at its end the shell is told that its input has ended.
+
+**Before the TUI can give the terminal to a session**, the session's read
+of the terminal has to be made interruptible. As stage 1 leaves it, a
+session on a terminal that ends for another reason than `Ctrl-]` leaves
+a read of the terminal behind, which takes the next thing that is typed
+and drops it. `great-machine shell` ends its process after the session,
+so nothing is lost there. A TUI lives on.
 
 ## 11. Packages
 

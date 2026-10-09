@@ -1,0 +1,339 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/fables-for-robots/great-machine/wire"
+	"github.com/urfave/cli/v2"
+)
+
+// TestInvalidCommandLines holds every command to the exit status 2 and a
+// message on stderr for a command line that is not valid. None of them
+// gets as far as the network.
+func TestInvalidCommandLines(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		args []string
+		want string // in stderr
+	}{
+		// The operator commands.
+		{"status: too many arguments", nil, []string{"status", "--draal", idA, "web", "api"}, `unexpected argument "api"`},
+		{"status: a bad service name", nil, []string{"status", "--draal", idA, "Web"}, `"Web" is not the name of a service`},
+		{"status: no --draal", nil, []string{"status"}, "--draal is required: give it, or set GREAT_MACHINE_DRAAL"},
+		{"status: a bad --draal", nil, []string{"status", "--draal", "nonsense"}, `--draal: "nonsense"`},
+		{"status: the variable stands in for --draal", map[string]string{"GREAT_MACHINE_DRAAL": "nonsense"},
+			[]string{"status"}, `--draal: "nonsense"`},
+		{"status: --draal wins over its variable", map[string]string{"GREAT_MACHINE_DRAAL": idA},
+			[]string{"status", "--draal", "nonsense"}, `--draal: "nonsense"`},
+		{"logs: no SERVICE", nil, []string{"logs", "--draal", idA}, "logs: SERVICE is missing; usage: great-machine logs SERVICE [ZATHRAS]"},
+		{"logs: too many arguments", nil, []string{"logs", "--draal", idA, "web", "web-a", "web-b"}, `unexpected argument "web-b"`},
+		{"logs: a flag behind SERVICE", nil, []string{"logs", "--draal", idA, "web", "-f"}, "logs: the flag -f has to come before SERVICE"},
+		{"logs: no --draal", nil, []string{"logs", "-f", "web"}, "--draal is required"},
+		{"shell: no SERVICE", nil, []string{"shell", "--draal", idA}, "shell: SERVICE is missing"},
+		{"shell: a bad service name", nil, []string{"shell", "--draal", idA, "web_1"}, `"web_1" is not the name of a service`},
+		{"shell: no --draal", nil, []string{"shell", "web"}, "--draal is required"},
+		{"rollback: no SERVICE", nil, []string{"rollback", "--draal", idA}, "rollback: SERVICE is missing"},
+		{"rollback: too many arguments", nil, []string{"rollback", "--draal", idA, "web", "api"}, `unexpected argument "api"`},
+		{"rollback: a negative --parallel", nil, []string{"rollback", "--draal", idA, "--parallel", "-1", "web"}, "--parallel: -1 is not a number of zathrases"},
+		{"rollback: a --parallel that is no number", nil, []string{"rollback", "--draal", idA, "--parallel", "many", "web"}, `"many"`},
+		{"rollback: the variable stands in for --parallel", map[string]string{"GREAT_MACHINE_PARALLEL": "-3"},
+			[]string{"rollback", "--draal", idA, "web"}, "--parallel: -3 is not a number of zathrases"},
+		{"rollback: a variable that is no number", map[string]string{"GREAT_MACHINE_PARALLEL": "many"},
+			[]string{"rollback", "--draal", idA, "web"}, `"many"`},
+		{"rollback: --detach behind SERVICE", nil, []string{"rollback", "--draal", idA, "web", "--detach"}, "rollback: the flag --detach has to come before SERVICE"},
+		{"rollback: no --draal", nil, []string{"rollback", "web"}, "--draal is required"},
+		{"rollout: no SERVICE", nil, []string{"rollout", "--draal", idA}, "rollout: SERVICE is missing; usage: great-machine rollout SERVICE PATH [-- ARG...]"},
+		{"rollout: no PATH", nil, []string{"rollout", "--draal", idA, "web"}, "rollout: PATH is missing"},
+		{"rollout: no PATH before --", nil, []string{"rollout", "--draal", idA, "web", "--", "/nix/store/abc-web/bin/web"}, "rollout: PATH is missing"},
+		{"rollout: an argument of the service without --", nil, []string{"rollout", "--draal", idA, "web", "/nix/store/abc-web/bin/web", "--port", "80"},
+			"rollout: the flag --port has to come before SERVICE, and the arguments of the service behind --"},
+		{"rollout: --detach behind SERVICE", nil, []string{"rollout", "--draal", idA, "web", "--detach", "/nix/store/abc-web/bin/web"},
+			"rollout: the flag --detach has to come before SERVICE"},
+		{"rollout: --parallel behind SERVICE", nil, []string{"rollout", "--draal", idA, "web", "--parallel", "2", "/nix/store/abc-web/bin/web"},
+			"rollout: the flag --parallel has to come before SERVICE"},
+		{"rollout: a flag behind PATH and before --", nil, []string{"rollout", "--draal", idA, "web", "/nix/store/abc-web/bin/web", "-v", "--", "x"},
+			"rollout: the flag -v has to come before SERVICE"},
+		{"rollout: a service name that begins like a flag", nil, []string{"rollout", "--draal", idA, "-web", "/nix/store/abc-web/bin/web"}, "flag provided but not defined: -web"},
+		{"rollout: a service name with a dot", nil, []string{"rollout", "--draal", idA, "web.prod", "/nix/store/abc-web/bin/web"}, `"web.prod" is not the name of a service`},
+		{"rollout: a negative --parallel", nil, []string{"rollout", "--draal", idA, "--parallel", "-1", "web", "/nix/store/abc-web/bin/web"}, "--parallel: -1"},
+		{"rollout: --jobs 0", nil, []string{"rollout", "--draal", idA, "--jobs", "0", "web", "/nix/store/abc-web/bin/web"}, "--jobs: 0 is not a number of store paths"},
+		{"rollout: the variable stands in for --jobs", map[string]string{"GREAT_MACHINE_JOBS": "0"},
+			[]string{"rollout", "--draal", idA, "web", "/nix/store/abc-web/bin/web"}, "--jobs: 0 is not a number of store paths"},
+		{"rollout: no --draal", nil, []string{"rollout", "web", "/nix/store/abc-web/bin/web"}, "--draal is required"},
+		{"rollout: a bad --draal", nil, []string{"rollout", "--draal", "nonsense", "web", "/nix/store/abc-web/bin/web"}, `--draal: "nonsense"`},
+		{"id: an argument", nil, []string{"id", "now"}, `id takes no argument, got "now"`},
+
+		// draal.
+		{"draal: no --data", nil, []string{"draal", "--jaccard-server", idB, "--jaccard-prefix", "nix/"}, "--data is required: give it, or set GREAT_MACHINE_DATA"},
+		{"draal: no --jaccard-server", nil, []string{"draal", "--data", "d", "--jaccard-prefix", "nix/"}, "--jaccard-server is required: give it, or set JACCARD_SERVER"},
+		{"draal: no --jaccard-prefix", nil, []string{"draal", "--data", "d", "--jaccard-server", idB}, "--jaccard-prefix is required: give it, or set JACCARD_PREFIX"},
+		{"draal: a bad --jaccard-server", nil, []string{"draal", "--data", "d", "--jaccard-server", "nonsense", "--jaccard-prefix", "nix/"}, `--jaccard-server: "nonsense" is not an endpoint ID`},
+		{"draal: an operator that is no endpoint ID", nil,
+			[]string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--operator", idA, "--operator", "alice"},
+			`--operator: "alice" is not an endpoint ID`},
+		{"draal: the variable stands in for --operator", map[string]string{"GREAT_MACHINE_OPERATORS": idA + ",bob"},
+			[]string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/"}, `--operator: "bob" is not an endpoint ID`},
+		{"draal: a bad --bind", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--bind", "4433"}, `--bind: "4433" is not an address to bind`},
+		{"draal: an argument", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "now"}, `draal takes no argument, got "now"`},
+
+		// zathras.
+		{"zathras: no --draal", nil, []string{"zathras", "--service", "web"}, "--draal is required: give it, or set GREAT_MACHINE_DRAAL"},
+		{"zathras: a bad --draal", nil, []string{"zathras", "--draal", "nonsense", "--service", "web"}, `--draal: "nonsense"`},
+		{"zathras: no --service", nil, []string{"zathras", "--draal", idA}, "--service is required: give it, or set GREAT_MACHINE_SERVICE"},
+		{"zathras: a bad --service", nil, []string{"zathras", "--draal", idA, "--service", "Web"}, `"Web" is not the name of a service`},
+		{"zathras: the variable stands in for --service", map[string]string{"GREAT_MACHINE_SERVICE": "Web"},
+			[]string{"zathras", "--draal", idA}, `"Web" is not the name of a service`},
+		{"zathras: a --stop-timeout that is no duration", nil, []string{"zathras", "--draal", idA, "--service", "web", "--stop-timeout", "soon"}, `"soon"`},
+		{"zathras: a --stop-timeout of nothing", nil, []string{"zathras", "--draal", idA, "--service", "web", "--stop-timeout", "0s"}, "--stop-timeout: 0s is not a time"},
+		{"zathras: an argument", nil, []string{"zathras", "--draal", idA, "--service", "web", "now"}, `zathras takes no argument, got "now"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cleanEnvironment(t)
+			for name, value := range tt.env {
+				t.Setenv(name, value)
+			}
+			var stdout, stderr bytes.Buffer
+			got := run(context.Background(), newApp(&stdout, &stderr), append([]string{"great-machine"}, tt.args...))
+			if got != 2 {
+				t.Errorf("the exit status is %d, want 2", got)
+			}
+			if !strings.HasPrefix(stderr.String(), "great-machine: ") || !strings.Contains(stderr.String(), tt.want) {
+				t.Errorf("stderr is %q, want it to say %q", stderr.String(), tt.want)
+			}
+			if strings.Count(stderr.String(), "\n") != 1 {
+				t.Errorf("stderr is more than one line: %q", stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Errorf("stdout is %q, want nothing", stdout.String())
+			}
+		})
+	}
+}
+
+func TestReadDraal(t *testing.T) {
+	cleanEnvironment(t)
+	var got draalConfig
+	reader := func(c *cli.Context) (err error) {
+		got, err = readDraal(c)
+		return err
+	}
+
+	// The variables alone. The operators have commas between them, and
+	// what a comma too many leaves empty is passed over.
+	t.Setenv("GREAT_MACHINE_DATA", "/var/lib/draal")
+	t.Setenv("GREAT_MACHINE_OPERATORS", idA+", "+idB+",")
+	t.Setenv("JACCARD_SERVER", idC)
+	t.Setenv("JACCARD_PREFIX", "nix/")
+	read(t, draalCommand(), reader)
+	want := draalConfig{
+		data:      "/var/lib/draal",
+		operators: []wire.ID{wire.ID(idA), wire.ID(idB)},
+		store:     wire.StoreInfo{Server: wire.ID(idC), Prefix: "nix/"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("from the variables: got %+v, want %+v", got, want)
+	}
+
+	// A flag wins over its variable, and --operator may be repeated.
+	read(t, draalCommand(), reader, "--data", "data", "--operator", idC, "--operator", idA,
+		"--jaccard-server", idA, "--jaccard-prefix", "store/", "--bind", "0.0.0.0:4433")
+	want = draalConfig{
+		data:      "data",
+		operators: []wire.ID{wire.ID(idC), wire.ID(idA)},
+		store:     wire.StoreInfo{Server: wire.ID(idA), Prefix: "store/"},
+		bind:      netip.MustParseAddrPort("0.0.0.0:4433"),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("from the flags: got %+v, want %+v", got, want)
+	}
+}
+
+func TestReadZathras(t *testing.T) {
+	cleanEnvironment(t)
+	var got zathrasConfig
+	reader := func(c *cli.Context) (err error) {
+		got, err = readZathras(c)
+		return err
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The defaults of the design.
+	read(t, zathrasCommand(), reader, "--draal", idA, "--service", "web")
+	want := zathrasConfig{
+		draal:       wire.ID(idA),
+		service:     "web",
+		name:        host,
+		preloadURL:  "http://127.0.0.1:9889/v1/preload",
+		shell:       "/bin/sh",
+		stopTimeout: 2 * time.Minute,
+		healthAddr:  ":9890",
+	}
+	if got != want {
+		t.Errorf("the defaults: got %+v, want %+v", got, want)
+	}
+
+	// The variables, and two flags that win over theirs. An empty
+	// --health-addr is no health check.
+	t.Setenv("GREAT_MACHINE_DRAAL", idB)
+	t.Setenv("GREAT_MACHINE_SERVICE", "api")
+	t.Setenv("GREAT_MACHINE_NAME", "api-0")
+	t.Setenv("GREAT_MACHINE_PRELOAD_URL", "http://127.0.0.1:1/preload")
+	t.Setenv("GREAT_MACHINE_SHELL", "/bin/bash")
+	t.Setenv("GREAT_MACHINE_STOP_TIMEOUT", "30s")
+	t.Setenv("GREAT_MACHINE_HEALTH_ADDR", "127.0.0.1:9999")
+	read(t, zathrasCommand(), reader, "--name", "api-1", "--health-addr", "")
+	want = zathrasConfig{
+		draal:       wire.ID(idB),
+		service:     "api",
+		name:        "api-1",
+		preloadURL:  "http://127.0.0.1:1/preload",
+		shell:       "/bin/bash",
+		stopTimeout: 30 * time.Second,
+		healthAddr:  "",
+	}
+	if got != want {
+		t.Errorf("the variables: got %+v, want %+v", got, want)
+	}
+}
+
+// A health check that cannot listen ends zathras at once, before it has
+// made a key or dialed anyone.
+func TestZathrasHealthAddressTaken(t *testing.T) {
+	cleanEnvironment(t)
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	var stdout, stderr bytes.Buffer
+	got := run(context.Background(), newApp(&stdout, &stderr),
+		[]string{"great-machine", "zathras", "--draal", idA, "--service", "web", "--health-addr", taken.Addr().String()})
+	if got != 1 || !strings.Contains(stderr.String(), "great-machine: the health check: listen tcp") {
+		t.Errorf("the exit status is %d and stderr %q, want 1 and the failure to listen", got, stderr.String())
+	}
+}
+
+func TestID(t *testing.T) {
+	cleanEnvironment(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "keys", "operator.key")
+	ids := map[string]bool{}
+	for range 2 {
+		var stdout, stderr bytes.Buffer
+		if got := run(context.Background(), newApp(&stdout, &stderr), []string{"great-machine", "id", "--key", path}); got != 0 {
+			t.Fatalf("the exit status is %d, stderr: %s", got, stderr.String())
+		}
+		id, ok := strings.CutSuffix(stdout.String(), "\n")
+		if !ok || len(id) != 64 || strings.Trim(id, "0123456789abcdef") != "" {
+			t.Fatalf("stdout is %q, want 64 hexadecimal characters and a line feed", stdout.String())
+		}
+		ids[id] = true
+	}
+	if len(ids) != 1 {
+		t.Errorf("the ID changed between two runs: %v", ids)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the key file was not created: %v", err)
+	}
+
+	// The variable stands in for the flag, and the flag wins over it.
+	other := filepath.Join(dir, "other.key")
+	t.Setenv("GREAT_MACHINE_KEY", other)
+	var stdout, stderr bytes.Buffer
+	if got := run(context.Background(), newApp(&stdout, &stderr), []string{"great-machine", "id"}); got != 0 {
+		t.Fatalf("the exit status is %d, stderr: %s", got, stderr.String())
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("the key file the variable names was not created: %v", err)
+	}
+	if ids[strings.TrimSuffix(stdout.String(), "\n")] {
+		t.Error("the variable was not read: the ID is that of the first key")
+	}
+	stdout.Reset()
+	if got := run(context.Background(), newApp(&stdout, &stderr), []string{"great-machine", "id", "--key", path}); got != 0 {
+		t.Fatalf("the exit status is %d, stderr: %s", got, stderr.String())
+	}
+	if !ids[strings.TrimSuffix(stdout.String(), "\n")] {
+		t.Error("the flag did not win over the variable")
+	}
+}
+
+// The default place of the operator's key is in the user's configuration
+// directory.
+func TestIDDefaultKey(t *testing.T) {
+	cleanEnvironment(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if got := run(context.Background(), newApp(&stdout, &stderr), []string{"great-machine", "id"}); got != 0 {
+		t.Fatalf("the exit status is %d, stderr: %s", got, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "great-machine", "operator.key")); err != nil {
+		t.Errorf("the key file was not created in %s: %v", dir, err)
+	}
+	if !strings.HasPrefix(dir, home) {
+		t.Fatalf("the configuration directory %s is outside the test's home", dir)
+	}
+}
+
+// TestRunExitStatus: a command that returns a cli.ExitCoder chooses the
+// exit status, and a message that is empty is not printed.
+func TestRunExitStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		want   int
+		stderr string
+	}{
+		{"the status of the remote shell", cli.Exit("", 7), 7, ""},
+		{"an interrupt", interrupted("interrupted: rollout #%d goes on", 13), 130, "great-machine: interrupted: rollout #13 goes on\n"},
+		{"an interrupt with nothing to say", interrupted(""), 130, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			app := newApp(&stdout, &stderr)
+			app.Commands = append(app.Commands, &cli.Command{
+				Name:   "fail",
+				Action: func(*cli.Context) error { return tt.err },
+			})
+			if got := run(context.Background(), app, []string{"great-machine", "fail"}); got != tt.want {
+				t.Errorf("run returned %d, want %d", got, tt.want)
+			}
+			if got := stderr.String(); got != tt.stderr {
+				t.Errorf("stderr is %q, want %q", got, tt.stderr)
+			}
+		})
+	}
+}
+
+func TestHelpNamesEveryCommand(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if got := run(context.Background(), newApp(&stdout, &stderr), []string{"great-machine", "--help"}); got != 0 {
+		t.Fatalf("the exit status is %d", got)
+	}
+	for _, name := range []string{"draal", "zathras", "id", "rollout", "rollback", "status", "logs", "shell", "version"} {
+		if !strings.Contains(stdout.String(), "\n   "+name+" ") {
+			t.Errorf("the help does not name %s:\n%s", name, stdout.String())
+		}
+	}
+}
