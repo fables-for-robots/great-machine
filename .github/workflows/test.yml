@@ -30,6 +30,11 @@ jobs:
         run: go vet ./...
       - name: test
         run: go test ./...
+      # db/dbq is what sqlc makes of db/queries and db/migrations, and
+      # nothing else: a query that was changed without `go generate ./db`
+      # fails here.
+      - name: sqlc
+        run: sqlc diff
       - name: pid1
         run: scripts/test-pid1.sh
       # Steps that test more are added above this line. The last step
