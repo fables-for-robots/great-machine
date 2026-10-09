@@ -85,6 +85,36 @@ func TestRunLogs(t *testing.T) {
 		}
 	})
 
+	t.Run("following an empty ring ends with an interrupt, and well", func(t *testing.T) {
+		empty := &fakeDraal{fleets: []wire.Fleet{testFleet(statusNow)}}
+		emptyClient := empty.start(t)
+		var out buffer
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- runLogs(ctx, emptyClient, target{service: "web", zathras: "web-b"}, true, &out, zone) }()
+		waitFor(t, "the request for the log", func() bool {
+			for _, req := range empty.asked() {
+				if req.Logs != nil {
+					return true
+				}
+			}
+			return false
+		})
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("runLogs returned %v after the interrupt, want nil", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("runLogs did not return after the interrupt")
+		}
+		if out.String() != "" {
+			t.Errorf("something was printed: %q", out.String())
+		}
+	})
+
 	t.Run("a name that names no zathras", func(t *testing.T) {
 		var out buffer
 		err := runLogs(context.Background(), client, target{service: "web", zathras: "nobody"}, false, &out, zone)

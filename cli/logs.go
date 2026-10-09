@@ -83,6 +83,11 @@ func runLogs(ctx context.Context, client *operator.Client, t target, follow bool
 	defer cancel()
 	lines, err := client.Logs(ctx, z.ID, follow)
 	if err != nil {
+		// An interrupt before the first line of an empty ring is how
+		// following ends, as after a line.
+		if follow && ctx.Err() != nil {
+			return nil
+		}
 		return fmt.Errorf("the log of %s: %w", z.Name, err)
 	}
 	for {

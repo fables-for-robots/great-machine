@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/operator"
@@ -64,12 +65,30 @@ func TestReadRollout(t *testing.T) {
 // fakeRollout is a draal that answers a rollout of web with #13 to
 // generation 8, and the parts of a rollout that are not draal's.
 type fakeRollout struct {
+	t       *testing.T
 	fake    *fakeDraal
-	client  *operator.Client
+	client  *operator.Client // the first one connect returns
 	key     node.Key
 	pushed  push.Config
 	paths   []string
 	pushErr error
+
+	connectErr map[int]error // by the number of the call of connect, from 1
+	mu         sync.Mutex
+	events     []string
+	clients    []*operator.Client
+}
+
+func (f *fakeRollout) event(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, name)
+}
+
+func (f *fakeRollout) happened() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.events...)
 }
 
 func newFakeRollout(t *testing.T, last wire.RolloutInfo) *fakeRollout {
@@ -87,7 +106,7 @@ func newFakeRollout(t *testing.T, last wire.RolloutInfo) *fakeRollout {
 			rolloutFleet(last),
 		},
 	}
-	return &fakeRollout{fake: fake, client: fake.start(t), key: key}
+	return &fakeRollout{t: t, fake: fake, client: fake.start(t), key: key}
 }
 
 func (f *fakeRollout) deps() rolloutDeps {
@@ -102,8 +121,38 @@ func (f *fakeRollout) deps() rolloutDeps {
 		closure: func(_ context.Context, storePath string) ([]string, error) {
 			return []string{"/nix/store/aaa-glibc", storePath, "/nix/store/zzz-openssl"}, nil
 		},
-		connect: func(context.Context) (*operator.Client, node.Key, error) { return f.client, f.key, nil },
-		push: func(_ context.Context, cfg push.Config, storePaths []string) (push.Result, error) {
+		connect: func(context.Context) (*operator.Client, node.Key, error) {
+			f.mu.Lock()
+			n := len(f.clients) + 1
+			f.mu.Unlock()
+			f.event("connect")
+			if err := f.connectErr[n]; err != nil {
+				return nil, node.Key{}, err
+			}
+			client := f.client
+			if n > 1 {
+				client = f.fake.start(f.t)
+			}
+			f.mu.Lock()
+			f.clients = append(f.clients, client)
+			f.mu.Unlock()
+			return client, f.key, nil
+		},
+		push: func(ctx context.Context, cfg push.Config, storePaths []string) (push.Result, error) {
+			f.event("push")
+			// The key of the operator has one endpoint at a time: every
+			// client that was made is closed now.
+			f.mu.Lock()
+			clients := append([]*operator.Client(nil), f.clients...)
+			f.mu.Unlock()
+			for i, c := range clients {
+				cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				_, err := c.Store(cctx)
+				cancel()
+				if err == nil {
+					f.t.Errorf("the push was called while client %d is open", i+1)
+				}
+			}
 			f.pushed, f.paths = cfg, storePaths
 			if f.pushErr != nil {
 				cfg.Progress.Found(1, 2)
@@ -130,6 +179,7 @@ func TestRunRollout(t *testing.T) {
 		"connecting to draal (0.0s)",
 		"asking the store: 1 of 3 already there (0.0s)",
 		"pushing: 2 paths, 3.0 KiB (0.0s)",
+		"connecting to draal (0.0s)",
 		"rolling out: generation 8, rollout #13 (0.0s)",
 		"preparing: 3 zathrases (0.0s)",
 		"activating: 3 zathrases (0.0s)",
@@ -149,6 +199,23 @@ func TestRunRollout(t *testing.T) {
 	}
 	if want := []string{"/nix/store/aaa-glibc", "/nix/store/abc-web", "/nix/store/zzz-openssl"}; !reflect.DeepEqual(f.paths, want) {
 		t.Errorf("pushed %v, want %v", f.paths, want)
+	}
+	if got, want := f.happened(), []string{"connect", "push", "connect"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the calls were %v, want %v", got, want)
+	}
+	// The store was asked of the first client, before the push, and the
+	// rollout of the second, after it.
+	var order []string
+	for _, req := range f.fake.asked() {
+		switch {
+		case req.Store != nil:
+			order = append(order, "store")
+		case req.Rollout != nil:
+			order = append(order, "rollout")
+		}
+	}
+	if want := []string{"store", "rollout"}; !reflect.DeepEqual(order, want) {
+		t.Errorf("draal was asked %v, want %v", order, want)
 	}
 	// draal was asked for the rollout with the names of the closure.
 	var asked *wire.RolloutRequest
@@ -191,6 +258,26 @@ func TestRunRolloutPushFails(t *testing.T) {
 	for _, req := range f.fake.asked() {
 		if req.Rollout != nil {
 			t.Error("draal was asked for a rollout after the push had failed")
+		}
+	}
+}
+
+// A second connection that cannot be made says that the closure is pushed.
+func TestRunRolloutReconnectFails(t *testing.T) {
+	f := newFakeRollout(t, wire.RolloutInfo{ID: 13, State: wire.RolloutCompleted})
+	f.connectErr = map[int]error{2: errors.New("no route to draal")}
+	var stdout, stderr buffer
+	err := runRollout(context.Background(), rolloutConfig{service: "web", path: "./result/bin/web", jobs: 5}, f.deps(), &stdout, plainProgress(&stderr))
+	want := "the closure was pushed and nothing was rolled out; running the command again is cheap: no route to draal"
+	if err == nil || err.Error() != want {
+		t.Fatalf("runRollout returned %v, want %q", err, want)
+	}
+	if !strings.HasSuffix(stderr.String(), "pushing: 2 paths, 3.0 KiB (0.0s)\nconnecting to draal: failed after 0.0s\n") {
+		t.Errorf("progress:\n%s", stderr.String())
+	}
+	for _, req := range f.fake.asked() {
+		if req.Rollout != nil {
+			t.Error("draal was asked for a rollout after the second connection failed")
 		}
 	}
 }

@@ -145,7 +145,11 @@ func runRollout(ctx context.Context, cfg rolloutConfig, deps rolloutDeps, stdout
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	// Closed on every path; closing twice does nothing. The key of the
+	// operator never has two endpoints at once, for two endpoints with
+	// one key evict each other at the relay: the client is closed before
+	// the push, which dials the store, and draal is dialed again after.
+	defer func() { client.Close() }()
 	p.done("")
 
 	// The step lasts until the push says what the server has: asking
@@ -155,6 +159,7 @@ func runRollout(ctx context.Context, cfg rolloutConfig, deps rolloutDeps, stdout
 	if err != nil {
 		return fmt.Errorf("asking draal for the store: %w", err)
 	}
+	client.Close()
 	steps := &pushSteps{p: p}
 	result, err := deps.push(ctx, push.Config{
 		Key:      key,
@@ -177,8 +182,16 @@ func runRollout(ctx context.Context, cfg rolloutConfig, deps rolloutDeps, stdout
 		p.done(fmt.Sprintf("%d paths, %s", result.Pushed, byteSize(steps.bytes.Load())))
 	}
 
+	p.begin("connecting to draal")
+	again, _, err := deps.connect(ctx)
+	if err != nil {
+		return fmt.Errorf("the closure was pushed and nothing was rolled out; running the command again is cheap: %w", err)
+	}
+	defer again.Close()
+	p.done("")
+
 	p.begin("rolling out")
-	r, err := client.Rollout(ctx, wire.RolloutRequest{
+	r, err := again.Rollout(ctx, wire.RolloutRequest{
 		Service:  cfg.service,
 		Binary:   binary,
 		Args:     cfg.args,
@@ -189,7 +202,7 @@ func runRollout(ctx context.Context, cfg rolloutConfig, deps rolloutDeps, stdout
 		return fmt.Errorf("rolling %s out: %w", cfg.service, err)
 	}
 	p.done(fmt.Sprintf("generation %d, rollout #%d", r.Generation, r.ID))
-	return watchRollout(ctx, client, r, cfg.detach, stdout, p)
+	return watchRollout(ctx, again, r, cfg.detach, stdout, p)
 }
 
 // pushSteps is the push.Progress of a rollout: it ends the step that asks
