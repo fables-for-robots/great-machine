@@ -75,3 +75,5 @@ jobs:
           docker run --rm --tmpfs /nix/store ghcr.io/fables-for-robots/great-machine:nix version
           docker run --rm --tmpfs /nix/store --entrypoint sh ghcr.io/fables-for-robots/great-machine:nix \
             -c 'test -d /tmp && test -s /etc/ssl/certs/ca-certificates.crt'
+          # The draal of the image has the page.
+          scripts/test-page.sh --image ghcr.io/fables-for-robots/great-machine:nix
