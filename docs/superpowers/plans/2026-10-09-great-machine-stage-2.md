@@ -156,7 +156,8 @@ with the codes of `wire` and the status 400 for `bad-request`, 403 for
 `unauthorized`, 404 for `not-found`, 503 for `unavailable`, 500 for
 `internal`. The message of an `internal` refusal says nothing of what
 went wrong, whoever made the refusal, draal or a zathras: that is in
-draal's log. A zathras is named by its endpoint
+draal's log. A refusal with a code that is none of these five is answered
+as an internal one. A zathras is named by its endpoint
 ID, 64 hexadecimal characters in lower case; anything else is 400. A
 method that is not `GET` is 405, as a refusal with the code
 `bad-request` and the header `Allow: GET`.
