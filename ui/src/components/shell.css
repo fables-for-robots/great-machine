@@ -1,0 +1,110 @@
+/* The shell of a zathras: xterm.js in a box of the terminal's ground. */
+
+.shell-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--ffr-space-1) var(--ffr-space-4);
+  margin-bottom: var(--ffr-space-3);
+}
+
+.shell-head .muted {
+  font-size: 13px;
+  flex: 1 1 24ch;
+}
+
+.shell-closed,
+.shell-ended {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ffr-space-2) var(--ffr-space-4);
+}
+
+.shell-closed .muted {
+  font-size: 13px;
+  max-width: 70ch;
+}
+
+.shell-ended {
+  margin-bottom: var(--ffr-space-3);
+  padding: var(--ffr-space-2) var(--ffr-space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--ffr-radius-sm);
+  font-weight: 500;
+}
+
+.shell-ended span {
+  flex: 1 1 30ch;
+  overflow-wrap: anywhere;
+}
+
+/* The button of the design system: blocky, black on white or white on
+   black, a pixel up when the pointer is on it. */
+.button {
+  font-family: var(--ffr-font-display);
+  font-weight: 700;
+  font-size: 13px;
+  padding: 8px 16px;
+  border-radius: var(--ffr-radius-sm);
+  border: 1.5px solid var(--fg);
+  background: var(--fg);
+  color: var(--bg);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform var(--ffr-duration-fast) var(--ffr-ease-standard);
+}
+
+.button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.button.quiet {
+  background: transparent;
+  color: var(--fg);
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
+.button:disabled {
+  background: var(--surface-strong);
+  border-color: var(--border);
+  color: var(--fg-subtle);
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button {
+    transition: none;
+  }
+}
+
+.shell-box {
+  height: 440px;
+  border: 1px solid var(--border);
+  border-radius: var(--ffr-radius-md);
+  background: var(--term-bg);
+  padding: var(--ffr-space-2) var(--ffr-space-3);
+  overflow: hidden;
+}
+
+.shell-box[data-state="closed"] {
+  display: none;
+}
+
+/* A terminal that has ended is read, not typed into. */
+.shell-box[data-state="ended"] {
+  opacity: 0.8;
+}
+
+.shell-term,
+.shell-box .xterm {
+  height: 100%;
+}
+
+@media (max-width: 640px) {
+  .shell-box {
+    height: 340px;
+    padding: var(--ffr-space-2);
+  }
+}

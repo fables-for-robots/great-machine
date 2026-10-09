@@ -1,5 +1,5 @@
 import { A, useParams } from "@solidjs/router";
-import { createEffect, createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createSignal, For, lazy, Match, Show, Switch } from "solid-js";
 import { isID, isZeroTime, type Zathras as ZathrasInfo } from "../api/types";
 import { PhaseBadge } from "../components/Badge";
 import Figures from "../components/Figures";
@@ -10,6 +10,10 @@ import { findService, findZathras, fleet, freshAt, now, received } from "../stat
 import { phaseNote } from "../state/rollout";
 import "./service.css";
 import "./zathras.css";
+
+// The shell brings xterm.js, which is most of the page's script: it is
+// a file of its own that only this view asks for.
+const Shell = lazy(() => import("../components/Shell"));
 
 // Everything a zathras reports, each thing under its name.
 function StatePanel(props: { zathras: ZathrasInfo; stable: number | undefined }) {
@@ -209,6 +213,7 @@ export default function Zathras() {
             </div>
             <Figures id={params.id} present={live() !== undefined} connected={live()?.connected} sample={live()?.state.sample} />
             <Log id={params.id} present={live() !== undefined} connected={live()?.connected} />
+            <Shell id={params.id} present={live() !== undefined} />
           </>
         )}
       </Match>
