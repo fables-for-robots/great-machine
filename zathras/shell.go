@@ -48,8 +48,11 @@ func (a *Agent) answerShell(ctx context.Context, s node.Stream, req *wire.ShellR
 		}
 	}()
 
-	// What the shell prints, and at its end the exit status.
+	// What the shell prints, and at its end the exit status. exited says,
+	// once shellEnded is closed, whether it came that far: it did not if
+	// the stream took no more output.
 	shellEnded := make(chan struct{})
+	exited := false
 	go func() {
 		defer close(shellEnded)
 		buf := make([]byte, 32<<10)
@@ -66,21 +69,32 @@ func (a *Agent) answerShell(ctx context.Context, s node.Stream, req *wire.ShellR
 		}
 		exit := session.Wait()
 		wire.Write(s, &wire.Response{Shell: &wire.ShellOutput{Exit: &exit}})
-		s.CloseWrite()
+		exited = true
 	}()
 
 	select {
 	case <-shellEnded:
+		if !exited {
+			// draal has closed the stream. The reading of the input may
+			// not see it: see Done below.
+			break
+		}
 		// The exit status is on its way. draal closes the stream when it
-		// has read it.
+		// has read it. The end of what is sent closes Done, so it comes
+		// here, where Done is waited for no more.
+		s.CloseWrite()
 		select {
 		case <-streamEnded:
 		case <-ctx.Done():
 		}
 	case <-streamEnded:
+	case <-s.Done():
+		// draal has closed the stream, and the reading of the input has
+		// not seen it: it waits in a write to a terminal whose program
+		// reads nothing.
 	case <-ctx.Done():
 	}
-	session.Close() // ends the shell if it runs, and with it the output
+	session.Close() // ends the shell if it runs, and with it the output and an input that waits to be written
 	s.Close()       // ends the input, and an output that waits to be written
 	<-shellEnded
 	<-streamEnded
