@@ -58,6 +58,10 @@ func (d *Draal) operate(ctx context.Context, peer wire.ID, s node.Stream, req *w
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	err := d.admit(peer, req)
+	if err == nil && req.Shell != nil {
+		d.serveShell(ctx, cancel, s, *req.Shell)
+		return
+	}
 	// The peer writes nothing more: the end of what it sends, or an
 	// error, is the end of the request.
 	go func() {
@@ -126,6 +130,79 @@ func (d *Draal) respond(ctx context.Context, peer wire.ID, req *wire.Request, se
 			return err
 		}
 		send(&wire.Response{History: &wire.SampleList{Samples: samples}})
+	case req.Logs != nil:
+		lines, err := d.Logs(ctx, req.Logs.Zathras, req.Logs.Follow)
+		if err != nil {
+			return err
+		}
+		for line := range lines {
+			if !send(&wire.Response{Line: &line}) {
+				break
+			}
+		}
 	}
 	return nil
+}
+
+// serveShell relays a shell session between the stream of an operator and
+// the Shell of the Controller.
+func (d *Draal) serveShell(ctx context.Context, cancel context.CancelFunc, s node.Stream, req wire.ShellRequest) {
+	sh, err := d.Shell(ctx, req.Zathras, req)
+	if err != nil {
+		refuse(s, err)
+		return
+	}
+	defer sh.Close()
+	if err := wire.Write(s, &wire.Response{Shell: &wire.ShellOutput{}}); err != nil {
+		return
+	}
+	// Input, until the operator ends the stream, which ends the session.
+	go func() {
+		defer cancel()
+		defer sh.Close()
+		for {
+			var in wire.ShellInput
+			if err := wire.Read(s, &in); err != nil {
+				return
+			}
+			if in.Resize != nil {
+				if err := sh.Resize(in.Resize.Cols, in.Resize.Rows); err != nil {
+					return
+				}
+			}
+			if len(in.Data) > 0 {
+				if _, err := sh.Write(in.Data); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	// Output, and behind it the exit status.
+	buf := make([]byte, 16<<10)
+	for {
+		n, err := sh.Read(buf)
+		if n > 0 {
+			if werr := wire.Write(s, &wire.Response{Shell: &wire.ShellOutput{Data: buf[:n]}}); werr != nil {
+				return
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			wire.WriteError(s, err)
+			s.CloseWrite()
+			<-ctx.Done()
+			return
+		}
+	}
+	status, err := sh.Wait(ctx)
+	sh.Close() // the zathras need not wait for the operator
+	if err != nil {
+		wire.WriteError(s, err)
+	} else {
+		wire.Write(s, &wire.Response{Shell: &wire.ShellOutput{Exit: &status}})
+	}
+	s.CloseWrite()
+	<-ctx.Done()
 }
