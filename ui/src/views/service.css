@@ -1,0 +1,284 @@
+/* View 2: the rollout of a service, its zathrases, its last rollouts. */
+
+/* ---- A table, here and in the view of a zathras ----------------- */
+
+.scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--ffr-radius-md);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.table th {
+  font-family: var(--ffr-font-display);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  text-align: left;
+  white-space: nowrap;
+  background: var(--surface);
+  padding: var(--ffr-space-2) var(--ffr-space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.table td {
+  padding: var(--ffr-space-2) var(--ffr-space-3);
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.table tr:last-child td {
+  border-bottom: 0;
+}
+
+.table .r {
+  text-align: right;
+}
+
+.table .nw {
+  white-space: nowrap;
+}
+
+.table .why {
+  min-width: 22ch;
+}
+
+.table tbody tr:hover {
+  background: var(--surface);
+}
+
+/* The name of a zathras is as long as a DNS name may be, and two may
+   have one name: the name wraps where it has to, and the ID is always
+   under it. */
+.z-name {
+  max-width: 34ch;
+  min-width: 18ch;
+}
+
+.z-name a {
+  display: block;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.z-note {
+  white-space: nowrap;
+}
+
+.tag {
+  font-size: 12px;
+  color: var(--tone-text);
+  white-space: nowrap;
+}
+
+.exit {
+  font-family: var(--ffr-font-mono);
+  font-size: 0.93em;
+  white-space: nowrap;
+}
+
+.exit[data-tone="bad"] {
+  color: var(--bad-text);
+}
+
+/* ---- The rollout ------------------------------------------------ */
+
+.roll {
+  padding: var(--ffr-space-4) var(--ffr-space-5) var(--ffr-space-5);
+}
+
+.roll[data-state="halted"] {
+  border-color: var(--bad);
+}
+
+.roll[data-state="preparing"],
+.roll[data-state="activating"] {
+  border-color: var(--busy);
+}
+
+.roll-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ffr-space-2) var(--ffr-space-3);
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ffr-space-3) var(--ffr-space-6);
+  margin-top: var(--ffr-space-4);
+}
+
+.facts > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.facts dd {
+  overflow-wrap: anywhere;
+}
+
+.roll-reason {
+  margin-top: var(--ffr-space-4);
+  padding: var(--ffr-space-3) var(--ffr-space-4);
+  border-radius: var(--ffr-radius-sm);
+  background: var(--bad-wash);
+  display: grid;
+  gap: var(--ffr-space-1);
+}
+
+.roll-reason .label {
+  color: var(--bad-text);
+}
+
+.roll-none,
+.roll-key {
+  margin-top: var(--ffr-space-4);
+  max-width: 86ch;
+  font-size: 13px;
+}
+
+/* The stages of a rollout, left to right as a zathras passes them. */
+.stages {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--ffr-space-2);
+  margin-top: var(--ffr-space-4);
+}
+
+.stage {
+  border-top: 3px solid var(--tone);
+  background: var(--surface);
+  border-radius: 0 0 var(--ffr-radius-sm) var(--ffr-radius-sm);
+  padding: var(--ffr-space-2) var(--ffr-space-3) var(--ffr-space-3);
+  min-width: 0;
+}
+
+.stage[data-empty] {
+  border-top-color: var(--border);
+}
+
+.stage[data-empty] .stage-head b {
+  color: var(--fg-subtle);
+}
+
+.stage-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ffr-space-2);
+}
+
+.stage-head b {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.stage ul {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  margin-top: var(--ffr-space-1);
+  font-size: 13px;
+}
+
+.stage li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--ffr-space-2);
+  min-width: 0;
+}
+
+.stage li a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.stage li span {
+  font-size: 11.5px;
+  flex: none;
+}
+
+@media (max-width: 860px) {
+  .stages {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .roll {
+    padding: var(--ffr-space-4);
+  }
+
+  /* A table becomes a list: each row a block, each cell a line with
+     the name of its column before it. */
+  .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .table,
+  .table tbody,
+  .table tr,
+  .table td {
+    display: block;
+  }
+
+  .table tr {
+    padding: var(--ffr-space-3);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table td {
+    border: 0;
+    padding: 2px 0;
+    text-align: left;
+    max-width: none;
+    min-width: 0;
+  }
+
+  .table .r {
+    text-align: left;
+  }
+
+  .table .nw {
+    white-space: normal;
+  }
+
+  .table td:empty {
+    display: none;
+  }
+
+  .table td:not(.z-name)::before {
+    content: attr(data-label);
+    display: inline-block;
+    min-width: 11ch;
+    margin-right: var(--ffr-space-2);
+    font-family: var(--ffr-font-display);
+    font-weight: 700;
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+
+  .z-note {
+    white-space: normal;
+  }
+}
