@@ -3,6 +3,8 @@ package draal
 import (
 	"context"
 	"io"
+	"reflect"
+	"strings"
 
 	"github.com/fables-for-robots/great-machine/authz"
 	"github.com/fables-for-robots/great-machine/node"
@@ -73,9 +75,19 @@ func (d *Draal) operate(ctx context.Context, peer wire.ID, s node.Stream, req *w
 		io.Copy(io.Discard, s)
 		cancel()
 	}()
+	// An answer that cannot be written for another reason than the
+	// stream, such as one of more than wire.MaxFrame, is logged: the
+	// operator sees only that the answer ended.
+	out := &streamWriter{w: s}
+	unwritten := func(err error) {
+		if out.err == nil {
+			d.log.Error("an answer to an operator could not be written", "peer", peer, "request", strings.Join(asked(req), " "), "error", err)
+		}
+	}
 	// send writes one response, and ends the request when it cannot.
 	send := func(resp *wire.Response) bool {
-		if err := wire.Write(s, resp); err != nil {
+		if err := wire.Write(out, resp); err != nil {
+			unwritten(err)
 			cancel()
 			return false
 		}
@@ -85,10 +97,42 @@ func (d *Draal) operate(ctx context.Context, peer wire.ID, s node.Stream, req *w
 		err = d.respond(ctx, peer, req, send)
 	}
 	if err != nil {
-		wire.WriteError(s, err)
+		if werr := wire.WriteError(out, err); werr != nil {
+			unwritten(werr)
+		}
 	}
 	s.CloseWrite()
 	<-ctx.Done()
+}
+
+// streamWriter is a writer over a stream that keeps the error of the
+// stream, which tells a peer that has gone from an answer that could not
+// be made.
+type streamWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (sw *streamWriter) Write(p []byte) (int, error) {
+	n, err := sw.w.Write(p)
+	if err != nil {
+		sw.err = err
+	}
+	return n, err
+}
+
+// asked returns the names of the fields of req that are set, as the
+// protocol names them.
+func asked(req *wire.Request) []string {
+	v := reflect.ValueOf(req).Elem()
+	var names []string
+	for i := range v.NumField() {
+		if !v.Field(i).IsNil() {
+			name, _, _ := strings.Cut(v.Type().Field(i).Tag.Get("json"), ",")
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // respond does what req asks and sends what answers it. An error it

@@ -544,7 +544,7 @@ func (r *reconciler) answered(res result) {
 		r.failed[id] = failure{sess: cmd.sess, Failure: rollout.Failure{
 			Generation: cmd.generation,
 			Activate:   cmd.activate,
-			Reason:     refusal.Message,
+			Reason:     clean(refusal.Message, maxReason),
 			At:         r.d.cfg.Now(),
 		}}
 	default:

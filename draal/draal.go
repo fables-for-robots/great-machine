@@ -140,6 +140,7 @@ type Draal struct {
 type session struct {
 	id      wire.ID
 	service string
+	name    string
 	conn    node.Conn
 }
 

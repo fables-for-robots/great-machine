@@ -90,18 +90,31 @@ func (d *Draal) register(ctx context.Context, conn node.Conn, s node.Stream, reg
 		refuse(s, err)
 		return
 	}
-	if err := wire.ValidService(reg.Service); err != nil {
+	if err := validRegister(reg); err != nil {
 		refuse(s, err)
 		return
 	}
+	// What a zathras reports is bounded before it is kept or shown. That
+	// it had to be is logged once for the connection.
+	warned := false
+	bound := func(st wire.State) wire.State {
+		st, cut := bounded(st)
+		if cut && !warned {
+			warned = true
+			d.log.Warn("a zathras reports more than draal keeps, or control characters: what it reports is cut and cleaned",
+				"zathras", id, "name", reg.Name)
+		}
+		return st
+	}
+	state := bound(reg.State)
 	now := d.cfg.Now()
-	sess := &session{id: id, service: reg.Service, conn: conn}
+	sess := &session{id: id, service: reg.Service, name: reg.Name, conn: conn}
 	// The fleet and the sessions change together, so that whoever sees
 	// the member finds its connection.
 	d.mu.Lock()
 	epoch := d.fleet.Join(fleet.Member{
 		ID: id, Service: reg.Service, Name: reg.Name,
-		Connected: now, State: reg.State, Reported: now,
+		Connected: now, State: state, Reported: now,
 	})
 	replaced := d.sessions[id]
 	d.sessions[id] = sess
@@ -123,13 +136,20 @@ func (d *Draal) register(ctx context.Context, conn node.Conn, s node.Stream, reg
 		}
 	}()
 
-	last := reg.State
+	last := state
 	if err := wire.Write(s, &wire.Response{Registered: &wire.Registered{}}); err == nil {
 		for {
 			var st wire.State
 			if err := wire.Read(s, &st); err != nil {
 				break
 			}
+			if !knownPhase(st.Phase) {
+				d.log.Warn("a zathras reported a phase draal does not know, and does not speak the protocol: closing its connection",
+					"zathras", id, "name", reg.Name, "phase", clean(string(st.Phase), maxSignal))
+				conn.Close()
+				break
+			}
+			st = bound(st)
 			d.fleet.Report(id, epoch, st, d.cfg.Now())
 			last = st
 		}
@@ -153,6 +173,25 @@ func (d *Draal) register(ctx context.Context, conn node.Conn, s node.Stream, reg
 		conn.Close()
 		d.log.Info("zathras gone", "zathras", id, "service", reg.Service, "name", reg.Name)
 	}
+}
+
+// validRegister returns the bad-request a registration is refused with,
+// or nil: a service that is a DNS label, a name and a version as
+// validName and validVersion have them, and a phase draal knows.
+func validRegister(reg *wire.Register) error {
+	if err := wire.ValidService(reg.Service); err != nil {
+		return err
+	}
+	if err := validName(reg.Name); err != nil {
+		return err
+	}
+	if err := validVersion(reg.Version); err != nil {
+		return err
+	}
+	if !knownPhase(reg.State.Phase) {
+		return wire.Errorf(wire.CodeBadRequest, "%q is no phase of a zathras", clean(string(reg.State.Phase), maxSignal))
+	}
+	return nil
 }
 
 // reap closes the connection of every zathras that has not reported for
