@@ -69,9 +69,10 @@ One Go module, `github.com/fables-for-robots/great-machine`, one program:
 | `great-machine shell SERVICE [ZATHRAS]` | a shell in the container of a zathras |
 | `great-machine tui` | the terminal UI |
 
-`ZATHRAS` is a name or the beginning of one. It may be left out when the
-service has one zathras. A name that matches none, or more than one, ends
-the command with the names there are.
+`ZATHRAS` is a name, the beginning of one, or the beginning of an endpoint
+ID, which tells apart two zathrases that were given the same name. It may
+be left out when the service has one zathras. What matches none, or more
+than one, ends the command with the names and endpoint IDs there are.
 
 `--parallel N` (`GREAT_MACHINE_PARALLEL`, default 1) is how many zathrases
 are restarted at a time; 0 is all of them at once. `--detach` starts the
@@ -171,8 +172,8 @@ response of the operation or an error:
 |---|---|
 | `bad-request` | the request is malformed, or names something that cannot be |
 | `unauthorized` | the peer may not do this |
-| `not-found` | no such service, generation or zathras |
-| `unavailable` | the zathras is not connected |
+| `not-found` | no such service or generation |
+| `unavailable` | the zathras is not connected; draal forgets one that has gone, so this is also the answer for one that never was |
 | `internal` | draal or the zathras failed |
 
 ### 5.1 zathras and draal
@@ -256,8 +257,10 @@ ID, name, the time it connected and its state.
    a temporary store, as `jaccard-store push-dir` imports a directory, and
    pushed with the `client` package of jaccard-store, `--jobs` at a time. A
    store path that is a single file is pushed as a reference whose root is
-   the file. The first path that fails ends the command; nothing was rolled
-   out.
+   the file. A store path that is itself a symbolic link cannot be a
+   reference (a link exists only as an entry of a directory), so a closure
+   that has one is refused, with its name, before anything is pushed. The
+   first path that fails ends the command; nothing was rolled out.
 5. **The rollout.** draal is sent the service, the binary, the arguments,
    the names of the closure and `--parallel`. It records a new generation
    and a rollout and answers at once.
@@ -347,6 +350,11 @@ generation. When the last rollout halted, the service is frozen: only a
 zathras that is `idle` is sent the stable generation, if there is one, and
 no other zathras is touched until the operator rolls out or rolls back.
 
+A `prepare` or an `activate` that fails while no rollout is under way has
+no rollout to halt. It is logged, and sent again after 30 seconds, for as
+long as it fails: a new pod whose store cannot be reached for a while does
+not stay `idle` for ever.
+
 ## 7. zathras
 
 zathras is the first process of the app container. It runs the service,
@@ -372,8 +380,12 @@ keeps it running, and tells draal.
 
 ### 7.2 As the first process
 
-- zathras waits for every child of the container, its own and the orphans
-  it inherits, so that none stays a zombie.
+- Every child of the container is waited for, its own and the orphans it
+  inherits, so that none stays a zombie. For this the program, as process
+  1, starts itself again as a child and does nothing else but pass
+  SIGTERM, SIGINT and SIGHUP on to it and wait for every child there is.
+  The zathras that does the work is that child, and the container ends
+  with its exit status.
 - On SIGTERM or SIGINT it stops the service as in 7.1, ends the shells and
   exits with 0. It starts nothing while it does. The pod's
   `terminationGracePeriodSeconds` has to be longer than `--stop-timeout`.
@@ -391,7 +403,8 @@ has outlived the rollout by closing its stream, which ends the request.
   zathras, so `kubectl logs` shows what it always shows.
 - They are also cut into lines and kept in a ring of the last 400. A line
   is kept with its time and its stream. A line of more than 16 KiB is cut
-  into several.
+  into several, and bytes that are no valid UTF-8 are replaced, so that a
+  service which writes anything at all leaves a log that can be read.
 - zathras adds lines of its own to the ring, as a third stream, when it
   starts the service and when the service ends: the generation, the binary
   and the process ID; the exit status, the time it ran and when it is
@@ -519,7 +532,10 @@ views of the web page: services, a service, a zathras with its state, its
 figures as sparklines and its log, followed live. From a zathras, a key
 opens the shell: the TUI gives the terminal to the session and takes it
 back when the shell has ended or `Ctrl-]` was typed. `great-machine shell`
-is the same session without the TUI around it.
+is the same session without the TUI around it. Its exit status is that of
+the shell. With a standard input that is no terminal
+(`echo uptime | great-machine shell web`) the input is passed on as it is,
+and at its end the shell is told that its input has ended.
 
 ## 11. Packages
 
@@ -529,12 +545,14 @@ Every package is at the top level of the module; there is no `internal/`.
 |---|---|---|
 | `wire` | messages, framing, error codes | |
 | `node` | keys, the endpoint of draal, dialing draal; over the `node` package of jaccard-store where that fits | go-iroh |
-| `logring` | the ring of lines and its followers | |
-| `stats` | samples from cgroup v2 and `/proc/net/dev` | |
-| `reaper` | waits for every child and tells who asked | |
-| `supervisor` | starts, stops and restarts the service; backoff | `reaper`, `logring` |
+| `node/nodetest` | a network in memory, for tests without iroh | `node` |
+| `logring` | the ring of lines and its followers | `wire` |
+| `stats` | samples from cgroup v2 and `/proc/net/dev` | `wire` |
+| `reaper` | as process 1: runs the program as its child and waits for every child | |
+| `supervisor` | starts, stops and restarts the service; backoff | `logring`, `wire` |
+| `testservice` | a program for the tests: exits, hangs or ignores SIGTERM on request | |
 | `preload` | the client of the sidecar's preload endpoint | |
-| `ptyshell` | shell sessions on a pseudo-terminal | `reaper` |
+| `ptyshell` | shell sessions on a pseudo-terminal | |
 | `health` | the HTTP health check | |
 | `zathras` | the init: the above, and the connection to draal | `wire`, `node` |
 | `db`, `db/dbq` | migrations, queries, what sqlc makes of them | |
@@ -553,7 +571,10 @@ Every package is at the top level of the module; there is no `internal/`.
 | `e2e` | tests of the whole | |
 
 `supervisor`, `logring`, `stats`, `rollout` and `fleet` know nothing of
-iroh, and are tested without it.
+iroh, and are tested without it: `wire` is the messages and their
+encoding, and has nothing of iroh in it either. `rollout` is one function
+without state, which is given the last rollout of a service and what its
+zathrases report, and answers what is to be done.
 
 ## 12. Build and delivery
 
@@ -570,7 +591,11 @@ iroh, and are tested without it.
   arm64, is made by Nix of the same derivation: the program, a static
   busybox for `/bin/sh` and the shell's tools, and CA certificates. Its
   entrypoint is `great-machine`. It is the image of the app container of a
-  pod, and of draal.
+  pod, and of draal. The pod mounts the sidecar's store over `/nix/store`,
+  so nothing in the image may be a link into its own store: the program,
+  busybox and the certificates are copied in as files. gonixgo does not
+  cross-compile, so each architecture is built on a runner of its own and
+  the two are joined under one tag.
 - **`deploy/pod.yaml`** is a whole pod: the sidecar as jaccard-nfs-nix-store
   documents it, and the app container with `great-machine zathras`,
   `/nix/store` mounted with `HostToContainer` propagation, and a readiness
@@ -623,26 +648,41 @@ Tests use the package `testing` of the standard library.
   operator client and through HTTP; a peer that is no operator, refused;
   the health check of a zathras, which fails before the rollout, passes
   when the service runs and fails again when the service has exited.
-- **As the first process**: a test that runs zathras as PID 1 of a
-  container and checks that orphans are reaped and that SIGTERM ends the
-  service, run on Linux by a script as jaccard-nfs-nix-store has one.
+- **As the first process**: a script that runs a small program, which
+  enters as the program does, as process 1 of a container, and checks
+  that the work is done by a child, that an orphan leaves no zombie, that
+  SIGTERM reaches the child and that the container ends with the child's
+  exit status. That a zathras which is told to end stops its service is
+  tested with the supervisor and in the tests of the whole.
 - **The page**: type check and build. Its logic is in what it is sent.
 
 ## 15. To be settled first
 
 The plan begins with these, as each can change something above:
 
-1. **go-iroh.** That draal can open streams on a connection it accepted,
-   and how soon a peer that vanished is noticed. Whether the `node` package
-   of jaccard-store can bind and dial for `great-machine/1`, or
-   great-machine needs its own.
-2. **gonixgo.** That it builds a package that embeds a directory, from a
-   source tree into which another derivation's output was put, and that
-   the result runs on a static busybox image for both platforms.
-3. **Store paths that are no directories.** That a single file, and a
-   symbolic link, as a store path can be pushed and are served by the
-   sidecar. If a symbolic link cannot, `rollout` refuses a closure that has
-   one and names it.
+1. **go-iroh.** Settled while the plan was written, against go-iroh
+   v0.3.0 on loopback: both sides of a connection open streams and accept
+   them, several at a time. A stream is not seen by the peer before
+   something was written to it, which every request of this protocol
+   does first. A peer that was killed is noticed after 6 to 9 seconds
+   with an idle timeout of 6 seconds and a keep-alive of 2. The endpoint
+   of draal is bound by the `node` package of jaccard-store; the dialing
+   is great-machine's own code after that model, since jaccard-store's
+   keeps the connection to itself. Over a relay, and on Linux, none of
+   this was measured.
+2. **gonixgo.** Half settled while the plan of stage 1 was written: it
+   builds the program without cgo on macOS and on arm64 Linux, and the
+   image made of it runs. The amd64 image was evaluated and not built.
+   Still open, for stage 2: that it builds a package that embeds a
+   directory, from a source tree into which another derivation's output
+   was put.
+3. **Store paths that are no directories.** Settled while the plan was
+   written, against jaccard-store v0.7.0: a single file is imported and
+   pushed by the same calls as a directory, and comes back identical. A
+   symbolic link cannot be pushed as a link, since the import follows it,
+   so `rollout` refuses a closure that has one (6.1). That the sidecar
+   serves a single-file reference was read in its design and its code,
+   and is still to be seen running on Linux.
 
 ## 16. Order of work
 
