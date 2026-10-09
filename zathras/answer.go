@@ -24,6 +24,8 @@ func (a *Agent) answer(ctx context.Context, s node.Stream, req *wire.Request) {
 			return
 		}
 		wire.Write(s, &wire.Response{Activated: &wire.Activated{}})
+	case req.Logs != nil:
+		a.logs(ctx, s, req.Logs)
 	default:
 		wire.WriteError(s, wire.Errorf(wire.CodeBadRequest, "a zathras answers prepare, activate, logs and shell, and this request is none of them"))
 	}
