@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -566,6 +567,28 @@ func TestAPeerThatIsNoOperatorIsRefused(t *testing.T) {
 	_, resp, err := ask(t, stranger, &wire.Request{Register: &wire.Register{Service: "web", Name: "me", State: idle()}})
 	if err != nil || resp.Registered == nil {
 		t.Errorf("register as a stranger = %+v, %v", resp, err)
+	}
+}
+
+func TestARefusalAboutAZathrasNamesNoService(t *testing.T) {
+	w := startWorld(t, testConfig(t))
+	z := w.zathras(10, "secretsvc", "secret-1", idle())
+	stranger := w.dial(strangerID)
+
+	connected := requests(z.id)
+	absent := requests(nodetest.ID(77))
+	for _, name := range []string{"history", "logs", "shell"} {
+		_, _, errIn := ask(t, stranger, connected[name])
+		_, _, errOut := ask(t, stranger, absent[name])
+		if wire.CodeOf(errIn) != wire.CodeUnauthorized || wire.CodeOf(errOut) != wire.CodeUnauthorized {
+			t.Fatalf("%s as a stranger = %v, %v; want unauthorized twice", name, errIn, errOut)
+		}
+		if errIn.Error() != errOut.Error() {
+			t.Errorf("%s: the refusal differs with the zathras: %q and %q", name, errIn, errOut)
+		}
+		if strings.Contains(errIn.Error(), "secretsvc") {
+			t.Errorf("%s: the refusal names the service: %q", name, errIn)
+		}
 	}
 }
 

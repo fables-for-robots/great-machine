@@ -44,6 +44,11 @@ func (d *Draal) admit(peer wire.ID, req *wire.Request) error {
 	}
 	if err := d.cfg.Authz.Authorize(peer, op, service); err != nil {
 		d.log.Warn("refused", "peer", peer, "operation", op, "service", service)
+		if zathras != nil {
+			// The answer is the same whether the zathras is connected or
+			// not, and names no service.
+			return wire.Errorf(wire.CodeUnauthorized, "%s is no operator and may not %s", peer, op)
+		}
 		return err
 	}
 	if !connected {
