@@ -68,7 +68,9 @@ fi
 
 # (b) The orphan, a sleep whose parent has ended, leaves no zombie. First
 # it has to be there, as a child of process 1 (in busybox it is a shell,
-# which has sleep built in); then it has to go.
+# which has sleep built in); then it has to go. The orphan sleeps 5 seconds,
+# so the bound of the loop below, 300 steps of 0.1 second, which is 30
+# seconds, is far above that and leaves room for a slow runner.
 orphan=$(docker logs "$name" 2>&1 | sed -n 's/^orphan: pid \([0-9]*\)$/\1/p')
 [ -n "$orphan" ] || fail "(b) no line of the orphan"
 states | grep -q "^$orphan ([^)]*) [^Z] 1 " ||
@@ -76,7 +78,7 @@ states | grep -q "^$orphan ([^)]*) [^Z] 1 " ||
 i=0
 while states | grep -q "^$orphan ([^)]*) [^Z] "; do
 	i=$((i + 1))
-	[ "$i" -lt 100 ] || fail "(b) the orphan did not end"
+	[ "$i" -lt 300 ] || fail "(b) the orphan did not end"
 	sleep 0.1
 done
 sleep 0.5

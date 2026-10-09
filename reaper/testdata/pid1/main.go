@@ -38,7 +38,7 @@ func main() {
 		signal.Notify(term, syscall.SIGTERM)
 		// The shell ends at once and leaves the sleep behind, which
 		// the kernel hands to process 1.
-		shell := exec.Command("/bin/sh", "-c", "sleep 2 & echo orphan: pid $!")
+		shell := exec.Command("/bin/sh", "-c", "sleep 5 & echo orphan: pid $!")
 		shell.Stdout, shell.Stderr = os.Stdout, os.Stderr
 		if err := shell.Run(); err != nil {
 			fmt.Println("making the orphan:", err)
