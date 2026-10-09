@@ -35,10 +35,14 @@ type Allowlist struct {
 }
 
 // NewAllowlist returns the allowlist of the operators given. With none,
-// nobody can act as an operator.
+// nobody can act as an operator. An empty ID is skipped: it would make an
+// operator of a peer with no ID. IDs are compared exactly as they are.
 func NewAllowlist(operators []wire.ID) Allowlist {
 	set := make(map[wire.ID]struct{}, len(operators))
 	for _, id := range operators {
+		if id == "" {
+			continue
+		}
 		set[id] = struct{}{}
 	}
 	return Allowlist{operators: set}

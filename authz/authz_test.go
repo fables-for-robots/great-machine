@@ -112,3 +112,23 @@ func TestTheListIsCopied(t *testing.T) {
 		t.Errorf("a change of the slice after NewAllowlist locked alice out: %v", err)
 	}
 }
+
+// An empty ID in the list makes nobody an operator, not even a peer with
+// no ID.
+func TestAnEmptyIDIsSkipped(t *testing.T) {
+	a := NewAllowlist([]wire.ID{"", alice})
+	if err := a.Authorize("", OpShell, "web"); wire.CodeOf(err) != wire.CodeUnauthorized {
+		t.Errorf("the peer with no ID: %v, want unauthorized", err)
+	}
+	if err := a.Authorize(alice, OpShell, "web"); err != nil {
+		t.Errorf("alice beside the empty ID: %v", err)
+	}
+}
+
+// IDs are compared exactly: the same ID in upper case is another peer.
+func TestIDsAreComparedExactly(t *testing.T) {
+	a := NewAllowlist([]wire.ID{alice})
+	if err := a.Authorize(wire.ID(strings.ToUpper(string(alice))), OpShell, "web"); wire.CodeOf(err) != wire.CodeUnauthorized {
+		t.Errorf("alice in upper case: %v, want unauthorized", err)
+	}
+}
