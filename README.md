@@ -334,7 +334,7 @@ and an app container:
 ```yaml
 containers:
   - name: app
-    image: ghcr.io/fables-for-robots/great-machine:latest
+    image: ghcr.io/fables-for-robots/great-machine:v0.1.0
     command: ["great-machine", "zathras"]
     env:
       - { name: GREAT_MACHINE_DRAAL, value: <endpoint id of draal> }
@@ -354,7 +354,10 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
   arm64, holds the program, a static busybox for `/bin/sh` and the tools
   of a shell session, CA certificates and a `/tmp`. Nothing in it needs
   its own `/nix/store`, which the sidecar's is mounted over. It is the
-  image of draal too.
+  image of draal too. Name it by a release tag, as `v0.1.0`, the first
+  release, which exists once it has been tagged, and keep draal and every
+  zathras on the same tag: a draal and a zathras of different versions may
+  not speak the same protocol.
 
 ## Security
 

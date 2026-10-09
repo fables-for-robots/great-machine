@@ -19,6 +19,8 @@ spec:
     # An init container that restarts is a sidecar: it is started before
     # the app containers and stopped after them.
     - name: nix-store
+      # The tag its own repository documents. Pin it to a release of that
+      # project in production: its versions are that project's to choose.
       image: ghcr.io/amber-store/jaccard-nfs-nix-store:latest
       restartPolicy: Always
       securityContext:
@@ -54,7 +56,11 @@ spec:
     - name: app
       # The image has zathras, a shell and its tools, and nothing of the
       # service: that comes from the store.
-      image: ghcr.io/fables-for-robots/great-machine:latest
+      # The same tag as draal: draal and every zathras are kept on one tag,
+      # because a draal and a zathras of different versions may not speak
+      # the same protocol. v0.1.0 is the first release, which exists once
+      # it has been tagged.
+      image: ghcr.io/fables-for-robots/great-machine:v0.1.0
       command: ["great-machine", "zathras"]
       env:
         - name: GREAT_MACHINE_DRAAL
