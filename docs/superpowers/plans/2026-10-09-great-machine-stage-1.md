@@ -20,7 +20,7 @@
 - Tests use the standard library's `testing` only. No assertion library.
 - Logging is `log/slog`. Errors are wrapped with `%w`.
 - Every flag has an environment variable, and the flag wins. The names and defaults are those of section 3 of the spec.
-- The values of the spec, verbatim: report every 2 s; a zathras is gone after 10 s without a report; redial after 1 s, doubling, up to 30 s; a service that ends within 30 s of its start is restarted after 1 s, doubling, up to 2 min; SIGKILL 2 min after SIGTERM; a ring of 400 lines of at most 16 KiB; 15 min of samples; draal waits 15 s after its start; a rollout that is `preparing` for 30 min is halted; the health check is `GET /healthz` on `:9890`.
+- The values of the spec, verbatim: report every 2 s; a zathras is gone after 10 s without a report; redial after 1 s, doubling, up to 30 s; a service that ends within 30 s of its start is restarted after 1 s, doubling, up to 2 min; SIGKILL 2 min after SIGTERM; a ring of 400 lines of at most 16 KiB; 15 min of samples; draal waits 45 s after its start; a zathras that left during a rollout without being done holds its completion for 2 min; a rollout that is `preparing` for 30 min is halted; the health check is `GET /healthz` on `:9890`.
 - Every one of those durations is a field of a `Config` with the spec's value as its default, so that a test makes it short. No test sleeps for a duration of the spec.
 - A test that needs a program builds it into `t.TempDir()`. Nothing that was built is left in the repository or anywhere else.
 - Work happens on a branch, not on `main`. Commit messages follow `Area: what was done`, as the history has them.
@@ -1316,6 +1316,27 @@ task uses.
 | 21 | [cli](2026-10-09-great-machine-stage-1/task-21-cli.md) | the commands `draal`, `zathras`, `id`, `rollout`, `rollback`, `status`, `logs`, `shell` | 2 to 20 |
 | 22 | [e2e](2026-10-09-great-machine-stage-1/task-22-e2e.md) | tests of the whole over go-iroh on loopback | 3, 5, 9, 11, 16, 17 |
 | 23 | [Delivery](2026-10-09-great-machine-stage-1/task-23-delivery.md) | the image, `deploy/`, the release workflow, the README | 21 |
+
+## Departures made while the plan was carried out
+
+The task files are the plan as it was written. Each task was reviewed
+after it was done, and where a review found a defect in the plan's own
+code, the code was changed by a ruling. The code and the specification
+are what holds now; these are the places where they differ from the task
+files:
+
+| Task | What changed, and why |
+|---|---|
+| 3 node | Concurrent calls of a listener's `Accept` take turns (go-iroh refuses a second one at once, and the loop spun on that). Two tests of "a close is noticed at once" wait 3 seconds, not 10, which was longer than the idle timeout. |
+| 5 supervisor | A quick exit writes its line to the ring before the state is published, as every other path does. A test compares the copies of the output by their beginning. |
+| 10 reaper | The orphan of the container test lives 5 seconds, not 2. |
+| 11 zathras | The tests give draal 2 seconds to answer a registration, not 40 ms. |
+| 15 rollout, and 16b (added) | A zathras that left during a rollout without being done holds its completion for 2 minutes (`Absent`, `AbsentGrace`), and draal records who left. Draal waits 45 seconds after its start, not 15. Specification 6.2 has the rule and what it leaves open. |
+| 16 draal | A refusal about a zathras names no service. The reconciler reads a service's last rollout before and after it looks at the members, and decides only when both readings agree: a defect that Task 16b had brought in, found by a test that failed under load. |
+| 18 closure | A path inside the store that ends outside it through a link is refused. |
+| 20 term | The doc of `Attach` says that input typed after a session ended on a terminal is lost; tests of that path were added. Stage 3 has to make that read interruptible. |
+| 21 cli | `logs -f` ends with 0 when it is interrupted before the first line. `rollout` closes its connection to draal before the push and dials again after it. |
+| 23 delivery | The deployment files name the image by a release tag. The README has the rules above. |
 
 ## What was run while this plan was written
 

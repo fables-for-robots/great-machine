@@ -146,7 +146,9 @@ Authorize(peer EndpointID, op Operation, service string) error
 | everything else | the endpoint IDs given with `--operator` |
 
 A request that is refused is answered `unauthorized` and logged with the
-peer and the operation.
+peer and the operation. A refusal about a zathras is the same whether
+that zathras is connected or not, and names no service: a peer that is no
+operator does not learn who is there.
 
 This function is the one place that decides. Tokens of
 [clamp](https://github.com/amber-store/clamp) are meant to replace the
@@ -243,14 +245,19 @@ ID, name, the time it connected and its state.
 
 `great-machine rollout SERVICE PATH [-- ARG...]`:
 
-1. **The binary.** A `PATH` inside `/nix/store` is taken as written. Any
-   other path is resolved through its symbolic links, as `realpath` does,
-   and has to end inside `/nix/store` (so `./result/bin/web` works). The
-   binary has to be there. A Mach-O binary is refused: the pods run Linux.
+1. **The binary.** A `PATH` inside `/nix/store` is taken as written, and
+   refused when, through its symbolic links, it ends outside the store: a
+   link to another store path is what a wrapper is, a link out of the
+   store names a file that is in no closure. Any other path is resolved
+   through its symbolic links, as `realpath` does, and has to end inside
+   `/nix/store` (so `./result/bin/web` works). The binary has to be
+   there. A Mach-O binary is refused: the pods run Linux.
 2. **The closure.** `nix-store --query --requisites` of the store path the
    binary is in.
 3. **The store.** draal is asked for the jaccard-store server and the
-   prefix.
+   prefix, and the connection to draal is closed. The push dials with
+   the operator's key as well, and two endpoints with one key put each
+   other out at the relay: the key has one endpoint at a time.
 4. **The push.** The server is asked which of the references
    `prefix + name` it has. A store path never changes under its name, so
    one that is there is not pushed again. Every other path is imported into
@@ -261,9 +268,11 @@ ID, name, the time it connected and its state.
    reference (a link exists only as an entry of a directory), so a closure
    that has one is refused, with its name, before anything is pushed. The
    first path that fails ends the command; nothing was rolled out.
-5. **The rollout.** draal is sent the service, the binary, the arguments,
-   the names of the closure and `--parallel`. It records a new generation
-   and a rollout and answers at once.
+5. **The rollout.** draal is dialed again and sent the service, the
+   binary, the arguments, the names of the closure and `--parallel`. It
+   records a new generation and a rollout and answers at once. If draal
+   cannot be reached now, the closure was pushed and nothing was rolled
+   out, and the command says so: running it again pushes nothing.
 6. **Following.** The command watches the fleet and shows the rollout until
    it has completed or halted. It exits with 0 when the rollout completed
    and with 1 when it halted or was superseded, having printed the reason.
@@ -554,6 +563,13 @@ is the same session without the TUI around it. Its exit status is that of
 the shell. With a standard input that is no terminal
 (`echo uptime | great-machine shell web`) the input is passed on as it is,
 and at its end the shell is told that its input has ended.
+
+**Before the TUI can give the terminal to a session**, the session's read
+of the terminal has to be made interruptible. As stage 1 leaves it, a
+session on a terminal that ends for another reason than `Ctrl-]` leaves
+a read of the terminal behind, which takes the next thing that is typed
+and drops it. `great-machine shell` ends its process after the session,
+so nothing is lost there. A TUI lives on.
 
 ## 11. Packages
 
