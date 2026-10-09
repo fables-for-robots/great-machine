@@ -17,6 +17,12 @@ import (
 // that long unless it fails.
 const patience = 10 * time.Second
 
+// soon is how long a test waits for what a Close must bring about at the
+// peer. It has to be well under the idle timeout of the dial, 6 seconds: a
+// peer that was not told would notice by itself after that, and a wait
+// that long would pass without the Close having done anything.
+const soon = 3 * time.Second
+
 // notYet is how long a test waits for what must not happen.
 const notYet = 250 * time.Millisecond
 
@@ -65,11 +71,17 @@ type result struct {
 // wait returns what arrives on ch, and fails the test when nothing does.
 func wait[T any](t *testing.T, ch <-chan T, what string) T {
 	t.Helper()
+	return waitFor(t, patience, ch, what)
+}
+
+// waitFor is wait with a bound of its own.
+func waitFor[T any](t *testing.T, bound time.Duration, ch <-chan T, what string) T {
+	t.Helper()
 	select {
 	case v := <-ch:
 		return v
-	case <-time.After(patience):
-		t.Fatalf("%s: nothing after %v", what, patience)
+	case <-time.After(bound):
+		t.Fatalf("%s: nothing after %v", what, bound)
 		panic("not reached")
 	}
 }
@@ -428,14 +440,14 @@ func testConn(t *testing.T, pair connPair) {
 				t.Fatalf("Close: %v", err)
 			}
 			wait(t, closer.Done(), "Done of the side that closed")
-			wait(t, other.Done(), "Done of the other side")
+			waitFor(t, soon, other.Done(), "Done of the other side")
 			for range 2 {
 				if err := wait(t, accepts, "an AcceptStream that waited"); err == nil {
 					t.Error("an AcceptStream that waited returned a stream")
 				}
 			}
 			for range 2 {
-				if err := wait(t, reads, "a Read that waited"); err == nil || err == io.EOF {
+				if err := waitFor(t, soon, reads, "a Read that waited"); err == nil || err == io.EOF {
 					t.Errorf("a Read that waited returned %v; want an error that is not io.EOF", err)
 				}
 			}

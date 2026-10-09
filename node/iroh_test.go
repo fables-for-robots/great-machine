@@ -5,7 +5,9 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/wire"
@@ -175,8 +177,8 @@ func TestListenerCloseEndsItsConnections(t *testing.T) {
 	if err := l.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	wait(t, server.Done(), "Done of the connection that was accepted")
-	wait(t, client.Done(), "Done of the connection that was dialed")
+	waitFor(t, soon, server.Done(), "Done of the connection that was accepted")
+	waitFor(t, soon, client.Done(), "Done of the connection that was dialed")
 }
 
 func TestListenerAcceptsSeveralConnections(t *testing.T) {
@@ -268,4 +270,97 @@ func TestTheConnectionOutlivesTheContextOfItsDial(t *testing.T) {
 	server := accept(t, l)
 	open(t, client, server, "after the context of the dial")
 	open(t, server, client, "and back")
+}
+
+// Calls of Accept may be concurrent: they take turns, and none of them
+// spins while it waits for its turn.
+func TestConcurrentAcceptsTakeTurns(t *testing.T) {
+	l := listen(t, newKey(t))
+	type accepted struct {
+		c   node.Conn
+		err error
+	}
+	got := make(chan accepted, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), patience)
+	defer cancel()
+	for range 2 {
+		go func() {
+			c, err := l.Accept(ctx)
+			got <- accepted{c, err}
+		}()
+	}
+	keys := []node.Key{newKey(t), newKey(t)}
+	for _, k := range keys {
+		dial(t, k, l)
+	}
+	seen := make(map[wire.ID]bool)
+	for range 2 {
+		a := wait(t, got, "an Accept")
+		if a.err != nil {
+			t.Fatalf("Accept: %v", a.err)
+		}
+		t.Cleanup(func() { a.c.Close() })
+		seen[a.c.RemoteID()] = true
+	}
+	if len(seen) != 2 || !seen[keys[0].ID()] || !seen[keys[1].ID()] {
+		t.Errorf("the two Accepts returned the connections of %v, want those of %s and %s", seen, keys[0].ID(), keys[1].ID())
+	}
+}
+
+// counter is a slog.Handler that counts the records it gets.
+type counter struct{ n *atomic.Int64 }
+
+func (c counter) Enabled(context.Context, slog.Level) bool  { return true }
+func (c counter) Handle(context.Context, slog.Record) error { c.n.Add(1); return nil }
+func (c counter) WithAttrs([]slog.Attr) slog.Handler        { return c }
+func (c counter) WithGroup(string) slog.Handler             { return c }
+
+func TestAnAcceptWaitingForItsTurnGivesUpWithItsContext(t *testing.T) {
+	var logged atomic.Int64
+	ctx0, cancel0 := context.WithTimeout(context.Background(), patience)
+	defer cancel0()
+	l, err := node.Listen(ctx0, node.ListenConfig{Key: newKey(t), Local: true, Log: slog.New(counter{&logged})})
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	t.Cleanup(func() { l.Close() })
+	first := make(chan error, 1)
+	holding, release := context.WithCancel(context.Background())
+	defer release()
+	go func() {
+		_, err := l.Accept(holding)
+		first <- err
+	}()
+	// Let the first Accept take its turn.
+	time.Sleep(notYet)
+
+	short, stop := context.WithTimeout(context.Background(), notYet)
+	defer stop()
+	failed := make(chan error, 1)
+	go func() {
+		_, err := l.Accept(short)
+		failed <- err
+	}()
+	if err := waitFor(t, soon, failed, "the Accept that waited for its turn"); err == nil {
+		t.Error("the Accept that waited for its turn returned a connection")
+	}
+	// A call that waits for its turn does not spin: the old loop logged
+	// thousands of failed accepts in this time.
+	if n := logged.Load(); n > 20 {
+		t.Errorf("Accept logged %d records while it waited for its turn; it spins", n)
+	}
+	// A third waits for its turn, and Close ends it.
+	third := make(chan error, 1)
+	go func() {
+		_, err := l.Accept(context.Background())
+		third <- err
+	}()
+	time.Sleep(notYet)
+	if err := l.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := waitFor(t, soon, third, "the Accept that waited for its turn at Close"); err == nil {
+		t.Error("the Accept that waited for its turn returned a connection after Close")
+	}
+	waitFor(t, soon, first, "the Accept that held the turn")
 }

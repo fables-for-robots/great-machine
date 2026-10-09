@@ -63,7 +63,7 @@ func Listen(ctx context.Context, cfg ListenConfig) (Listener, error) {
 		ep.Shutdown(context.Background())
 		return nil, fmt.Errorf("listen: %w", context.Cause(ctx))
 	}
-	return &listener{ep: ep, stop: stop, log: logger(cfg.Log), conns: make(map[*conn]struct{})}, nil
+	return &listener{ep: ep, stop: stop, log: logger(cfg.Log), turn: make(chan struct{}, 1), conns: make(map[*conn]struct{})}, nil
 }
 
 // listener is a Listener over an endpoint of go-iroh.
@@ -71,6 +71,9 @@ type listener struct {
 	ep   *iroh.Endpoint
 	stop context.CancelFunc
 	log  *slog.Logger
+	// turn is a lock with a slot for one: go-iroh lets one call of Accept
+	// wait at a time and fails the others at once.
+	turn chan struct{}
 
 	mu     sync.Mutex
 	closed bool
@@ -94,7 +97,18 @@ func (l *listener) LocalAddr() netip.AddrPort {
 // Accept returns the next connection whose handshake has completed. A
 // handshake that fails is not reported: Accept goes on to the next, and
 // returns an error only when ctx is done or the listener is closed.
+//
+// Calls may be concurrent: they take turns, and one that waits for its
+// turn gives up with its ctx or when the listener is closed.
 func (l *listener) Accept(ctx context.Context) (Conn, error) {
+	select {
+	case l.turn <- struct{}{}:
+		defer func() { <-l.turn }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-l.ep.Closed():
+		return nil, errors.New("accept: the listener is closed")
+	}
 	for {
 		ic, err := l.ep.Accept(ctx)
 		if err == nil {
