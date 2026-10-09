@@ -61,7 +61,7 @@ func (r *Ring) SetClock(now func() time.Time) {
 // become U+FFFD, and a text of more than maxLine bytes becomes several
 // lines.
 func (r *Ring) Add(stream, text string) {
-	text = strings.ToValidUTF8(text, "�")
+	text = strings.ToValidUTF8(text, "\uFFFD")
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	at := r.now()
