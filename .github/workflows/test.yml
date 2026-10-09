@@ -44,3 +44,12 @@ jobs:
         run: |
           nix build --option allow-unsafe-native-code-during-evaluation true
           ./result/bin/great-machine version
+      # The image as a release builds it, and what a pod asks of it: that
+      # it runs with another store mounted over /nix/store.
+      - name: image
+        run: |
+          nix build .#image --option allow-unsafe-native-code-during-evaluation true
+          docker load < result
+          docker run --rm --tmpfs /nix/store ghcr.io/fables-for-robots/great-machine:nix version
+          docker run --rm --tmpfs /nix/store --entrypoint sh ghcr.io/fables-for-robots/great-machine:nix \
+            -c 'test -d /tmp && test -s /etc/ssl/certs/ca-certificates.crt'
