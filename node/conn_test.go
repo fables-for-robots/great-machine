@@ -402,6 +402,82 @@ func testConn(t *testing.T, pair connPair) {
 		open(t, server, client, "another")
 	})
 
+	// The peer reads nothing more, and this side has a Write that cannot
+	// end: it is more than a stream holds unread (512 KiB of window, and
+	// 64 KiB that go-iroh buffers before that). Close has to end it.
+	t.Run("Close of a stream ends a Write of this side that waits", func(t *testing.T) {
+		client, server := pair(t)
+		opened, accepted := open(t, client, server, "request")
+		const (
+			size = 4 << 20 // what is written at once
+			read = 1 << 20 // what the peer reads of it before it stops
+		)
+		written := make(chan result, 1)
+		go func() {
+			n, err := opened.Write(make([]byte, size))
+			written <- result{n: n, err: err}
+		}()
+		// The Write is under way for certain once the peer has read a part
+		// of it, and it cannot return, because nobody reads the rest.
+		part := make(chan error, 1)
+		go func() {
+			_, err := io.ReadFull(accepted, make([]byte, read))
+			part <- err
+		}()
+		if err := wait(t, part, "the peer's Read of the first part"); err != nil {
+			t.Fatalf("the peer's Read of the first part: %v", err)
+		}
+		select {
+		case r := <-written:
+			t.Fatalf("a Write of %d bytes returned %d, %v, and the peer has read %d of them", size, r.n, r.err, read)
+		case <-time.After(notYet):
+		}
+
+		closed := make(chan error, 1)
+		go func() { closed <- opened.Close() }()
+		if err := waitFor(t, soon, closed, "Close while a Write waits"); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		r := waitFor(t, soon, written, "the Write that waited")
+		if r.err == nil || r.n >= size {
+			t.Errorf("the Write that waited returned %d, %v; want an error and less than %d", r.n, r.err, size)
+		}
+		// The peer is not told that this was all: it reads an error, and
+		// not the end.
+		got := waitFor(t, soon, readAll(accepted), "the peer's Read after the Close")
+		if got.err == nil {
+			t.Errorf("the peer read %d bytes more and then the end; want an error, because not all that was written came", len(got.data))
+		}
+		if _, err := opened.Write([]byte("x")); err == nil {
+			t.Error("a Write after Close did not fail")
+		}
+		// The connection is as good as before.
+		open(t, client, server, "another")
+	})
+
+	// The orderly end, with a peer that reads only afterwards: every Write
+	// has returned when Close is called, so nothing is taken away.
+	t.Run("Close of a stream delivers what was written to a peer that reads later", func(t *testing.T) {
+		client, server := pair(t)
+		opened, accepted := open(t, client, server, "request")
+		want := bytes.Repeat([]byte("0123456789abcdef"), 16<<10) // 256 KiB, in the window
+		for rest := want; len(rest) > 0; {
+			n := min(len(rest), 10_000)
+			if _, err := opened.Write(rest[:n]); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			rest = rest[n:]
+		}
+		if err := opened.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		time.Sleep(notYet) // the peer is late
+		r := wait(t, readAll(accepted), "the peer's Read")
+		if r.err != nil || !bytes.Equal(r.data, want) {
+			t.Errorf("the peer read %d bytes, %v; want the %d that were written and the end", len(r.data), r.err, len(want))
+		}
+	})
+
 	for _, who := range []string{"the side that dialed", "the side that accepted"} {
 		t.Run("Close of the connection by "+who, func(t *testing.T) {
 			client, server := pair(t)

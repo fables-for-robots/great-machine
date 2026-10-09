@@ -33,11 +33,21 @@ type Stream interface {
 	// CloseWrite ends what this side sends. The peer reads io.EOF after
 	// what was written. This side can still read.
 	CloseWrite() error
-	// Close ends the stream in both directions. What this side wrote
-	// before is still delivered, and the peer reads io.EOF after it. A
-	// Write of the peer fails, at once or when it next waits, and so does
-	// a Read of this side. Close may be called after CloseWrite and more
-	// than once.
+	// Close ends the stream in both directions, and returns at once.
+	//
+	// When no Write of this side is under way, the end is orderly: what
+	// this side wrote before is still delivered, and the peer reads
+	// io.EOF after it.
+	//
+	// When a Write of this side has not returned, because the peer does
+	// not read, the stream is broken off instead: that Write fails, what
+	// this side wrote and the peer has not read may be lost, and the peer
+	// reads an error and not io.EOF. A side that wants its last words
+	// read lets its Write return before it calls Close.
+	//
+	// Either way a Write of the peer fails, at once or when it next
+	// waits, a Read of this side fails, and every later Write of this
+	// side fails. Close may be called after CloseWrite and more than once.
 	Close() error
 }
 
