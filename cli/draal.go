@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -40,6 +41,8 @@ func draalCommand() *cli.Command {
 				Usage: "endpoint `ID` of the jaccard-store server that closures are pushed to (required)"},
 			&cli.StringFlag{Name: "jaccard-prefix", EnvVars: []string{"JACCARD_PREFIX"},
 				Usage: "`PREFIX` put before the name of a store path to make its reference; the same value the sidecars are given (required)"},
+			&cli.StringFlag{Name: "web-addr", EnvVars: []string{"GREAT_MACHINE_WEB_ADDR"}, Value: "127.0.0.1:8080",
+				Usage: "`ADDR`ess the web page listens on; empty for no web page"},
 			&cli.StringFlag{Name: "bind", EnvVars: []string{"GREAT_MACHINE_BIND"},
 				Usage: "UDP `IP:PORT` the iroh endpoint binds (default: every address, a port the system picks)"},
 		},
@@ -58,6 +61,7 @@ type draalConfig struct {
 	data      string
 	operators []wire.ID
 	store     wire.StoreInfo
+	webAddr   string         // "" for no web page
 	bind      netip.AddrPort // the zero value: every address, a port the system picks
 }
 
@@ -92,6 +96,11 @@ func readDraal(c *cli.Context) (draalConfig, error) {
 	}
 	if cfg.store.Prefix, err = required(c, "jaccard-prefix", "JACCARD_PREFIX"); err != nil {
 		return draalConfig{}, err
+	}
+	if cfg.webAddr = strings.TrimSpace(c.String("web-addr")); cfg.webAddr != "" {
+		if _, _, err := net.SplitHostPort(cfg.webAddr); err != nil {
+			return draalConfig{}, usageError("--web-addr: %q is not an address to listen on: want HOST:PORT, such as 127.0.0.1:8080, or nothing for no web page", cfg.webAddr)
+		}
 	}
 	if bind := c.String("bind"); bind != "" {
 		if cfg.bind, err = netip.ParseAddrPort(bind); err != nil {

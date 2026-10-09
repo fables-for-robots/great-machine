@@ -84,6 +84,9 @@ func TestInvalidCommandLines(t *testing.T) {
 		{"draal: the variable stands in for --operator", map[string]string{"GREAT_MACHINE_OPERATORS": idA + ",bob"},
 			[]string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/"}, `--operator: "bob" is not an endpoint ID`},
 		{"draal: a bad --bind", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--bind", "4433"}, `--bind: "4433" is not an address to bind`},
+		{"draal: a bad --web-addr", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--web-addr", "8080"}, `--web-addr: "8080" is not an address to listen on`},
+		{"draal: the variable stands in for --web-addr", map[string]string{"GREAT_MACHINE_WEB_ADDR": "localhost"},
+			[]string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/"}, `--web-addr: "localhost" is not an address to listen on`},
 		{"draal: an argument", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "now"}, `draal takes no argument, got "now"`},
 
 		// zathras.
@@ -140,6 +143,7 @@ func TestReadDraal(t *testing.T) {
 		data:      "/var/lib/draal",
 		operators: []wire.ID{wire.ID(idA), wire.ID(idB)},
 		store:     wire.StoreInfo{Server: wire.ID(idC), Prefix: "nix/"},
+		webAddr:   "127.0.0.1:8080",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("from the variables: got %+v, want %+v", got, want)
@@ -152,10 +156,52 @@ func TestReadDraal(t *testing.T) {
 		data:      "data",
 		operators: []wire.ID{wire.ID(idC), wire.ID(idA)},
 		store:     wire.StoreInfo{Server: wire.ID(idA), Prefix: "store/"},
+		webAddr:   "127.0.0.1:8080",
 		bind:      netip.MustParseAddrPort("0.0.0.0:4433"),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("from the flags: got %+v, want %+v", got, want)
+	}
+}
+
+// TestReadDraalWebAddr: --web-addr has a default, its variable stands in
+// for it, the flag wins, and an empty value is no web page.
+func TestReadDraalWebAddr(t *testing.T) {
+	cleanEnvironment(t)
+	var got draalConfig
+	reader := func(c *cli.Context) (err error) {
+		got, err = readDraal(c)
+		return err
+	}
+	args := []string{"--data", "d", "--jaccard-server", idA, "--jaccard-prefix", "nix/"}
+	with := func(more ...string) []string { return append(append([]string{}, args...), more...) }
+
+	read(t, draalCommand(), reader, args...)
+	if got.webAddr != "127.0.0.1:8080" {
+		t.Errorf("the default: got %q, want 127.0.0.1:8080", got.webAddr)
+	}
+	read(t, draalCommand(), reader, with("--web-addr", "")...)
+	if got.webAddr != "" {
+		t.Errorf("an empty flag: got %q, want no web page", got.webAddr)
+	}
+	read(t, draalCommand(), reader, with("--web-addr", " [::1]:9000 ")...)
+	if got.webAddr != "[::1]:9000" {
+		t.Errorf("the flag: got %q, want [::1]:9000", got.webAddr)
+	}
+
+	t.Setenv("GREAT_MACHINE_WEB_ADDR", "localhost:8081")
+	read(t, draalCommand(), reader, args...)
+	if got.webAddr != "localhost:8081" {
+		t.Errorf("the variable: got %q, want localhost:8081", got.webAddr)
+	}
+	read(t, draalCommand(), reader, with("--web-addr", ":8082")...)
+	if got.webAddr != ":8082" {
+		t.Errorf("the flag over the variable: got %q, want :8082", got.webAddr)
+	}
+	t.Setenv("GREAT_MACHINE_WEB_ADDR", "")
+	read(t, draalCommand(), reader, args...)
+	if got.webAddr != "" {
+		t.Errorf("an empty variable: got %q, want no web page", got.webAddr)
 	}
 }
 
