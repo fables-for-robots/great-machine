@@ -9,6 +9,7 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/fables-for-robots/great-machine/fleet"
@@ -139,10 +140,17 @@ func (d *decider) preparing() {
 		d.activating()
 		return
 	}
-	// A rollout that is still preparing so long after it was made is halted.
+	// A rollout that is still preparing so long after it was made is
+	// halted, with the names of those that had not prepared.
 	deadline := d.in.Rollout.Created.Add(d.in.PrepareTimeout)
 	if !d.in.Now.Before(deadline) {
-		d.halt(fmt.Sprintf("still preparing after %s", d.in.PrepareTimeout))
+		var late []string
+		for _, m := range d.members {
+			if !hasPrepared(m, d.target) {
+				late = append(late, m.Name)
+			}
+		}
+		d.halt(fmt.Sprintf("still preparing after %s: %s", d.in.PrepareTimeout, some(late)))
 		return
 	}
 	for _, m := range d.members {
@@ -347,6 +355,18 @@ func ended(exit *wire.Exit, generation uint64) string {
 	default:
 		return fmt.Sprintf("exited with status %d after %s", exit.Status, short(exit.Ran))
 	}
+}
+
+// namesShown is how many names some shows.
+const namesShown = 5
+
+// some returns the first names joined by commas, and how many more there
+// are.
+func some(names []string) string {
+	if len(names) <= namesShown {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s and %d more", strings.Join(names[:namesShown], ", "), len(names)-namesShown)
 }
 
 // short is d as a person reads it: 2.1s, not 2.123456789s.

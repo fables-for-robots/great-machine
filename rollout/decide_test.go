@@ -1,6 +1,7 @@
 package rollout
 
 import (
+	"fmt"
 	"maps"
 	"math/rand/v2"
 	"reflect"
@@ -154,9 +155,36 @@ func TestPreparing(t *testing.T) {
 		in.Now = deadline
 		check(t, Decide(in), Decision{
 			State:   wire.RolloutHalted,
-			Reason:  "still preparing after 30m0s",
+			Reason:  "still preparing after 30m0s: web-a, web-b, web-c",
 			Awaited: 3,
 		})
+	})
+
+	t.Run("the timeout names who had not prepared", func(t *testing.T) {
+		cases := []struct {
+			unprepared int
+			want       string
+		}{
+			{1, "still preparing after 30m0s: web-1"},
+			{5, "still preparing after 30m0s: web-1, web-2, web-3, web-4, web-5"},
+			{7, "still preparing after 30m0s: web-1, web-2, web-3, web-4, web-5 and 2 more"},
+		}
+		for _, tc := range cases {
+			// Behind those that had not prepared, by name, one that had.
+			var members []fleet.Member
+			for i := range tc.unprepared {
+				members = append(members, member(fmt.Sprintf("web-%d", i+1), running(1, hour)))
+			}
+			members = append(members, member("web-9", running(1, hour), prepared(2)))
+			in := input(newRollout(wire.RolloutPreparing, 2, 1), 1, members...)
+			in.Now = deadline
+			check(t, Decide(in), Decision{
+				State:    wire.RolloutHalted,
+				Reason:   tc.want,
+				Prepared: 1,
+				Awaited:  tc.unprepared + 1,
+			})
+		}
 	})
 
 	t.Run("not a moment before the timeout", func(t *testing.T) {
@@ -1064,7 +1092,7 @@ func TestAbsent(t *testing.T) {
 		in.Now = t0.Add(prepareTimeout)
 		check(t, Decide(in), Decision{
 			State:   wire.RolloutHalted,
-			Reason:  "still preparing after 30m0s",
+			Reason:  "still preparing after 30m0s: web-a, web-b, web-c",
 			Awaited: 3,
 		})
 	})
