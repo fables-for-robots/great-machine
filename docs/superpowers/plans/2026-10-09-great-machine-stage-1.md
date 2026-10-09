@@ -1339,6 +1339,10 @@ files:
 | 23 delivery | The deployment files name the image by a release tag. The README has the rules above. |
 | after the whole-branch review | Draal validates a registration and bounds what a zathras reports, a failure's reason and the samples it keeps; it limits the streams of a connection and the time a stream's first message may take; a command that is not answered fails after a time, and every failed command is logged; a request with two fields set is refused. Smaller: SIGHUP is handled as SIGTERM, an empty operator ID is ignored, two defects of `push`, a flag behind SERVICE in `rollout`. Specification 4 ("What draal accepts from a peer") and 6.2 have the rules. |
 
+The ledger of the execution, with every ruling, every finding that a
+review deferred, and what is still open, is in
+[`2026-10-09-great-machine-stage-1/ledger.md`](2026-10-09-great-machine-stage-1/ledger.md).
+
 ## What was run while this plan was written
 
 The code of the tasks is not a sketch. It was written in scratch modules,
