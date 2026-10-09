@@ -12,6 +12,18 @@ import (
 // the stream or the connection has ended.
 func (a *Agent) answer(ctx context.Context, s node.Stream, req *wire.Request) {
 	switch {
+	case req.Prepare != nil:
+		if err := a.prepare(ctx, req.Prepare); err != nil {
+			wire.WriteError(s, err)
+			return
+		}
+		wire.Write(s, &wire.Response{Prepared: &wire.Prepared{}})
+	case req.Activate != nil:
+		if err := a.activate(req.Activate); err != nil {
+			wire.WriteError(s, err)
+			return
+		}
+		wire.Write(s, &wire.Response{Activated: &wire.Activated{}})
 	default:
 		wire.WriteError(s, wire.Errorf(wire.CodeBadRequest, "a zathras answers prepare, activate, logs and shell, and this request is none of them"))
 	}
