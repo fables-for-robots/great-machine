@@ -5,6 +5,7 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/fables-for-robots/great-machine/authz"
 	"github.com/fables-for-robots/great-machine/node"
@@ -60,12 +61,16 @@ func (d *Draal) admit(peer wire.ID, req *wire.Request) error {
 }
 
 // operate answers one request of an operator through the methods of
-// Controller, and returns when the peer has ended the stream.
+// Controller, and returns when the peer has ended the stream, or, after a
+// refusal, when RefuseWait has passed.
 func (d *Draal) operate(ctx context.Context, peer wire.ID, s node.Stream, req *wire.Request) {
+	if err := d.admit(peer, req); err != nil {
+		d.refuse(s, err)
+		return
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	err := d.admit(peer, req)
-	if err == nil && req.Shell != nil {
+	if req.Shell != nil {
 		d.serveShell(ctx, cancel, s, *req.Shell)
 		return
 	}
@@ -93,13 +98,20 @@ func (d *Draal) operate(ctx context.Context, peer wire.ID, s node.Stream, req *w
 		}
 		return true
 	}
-	if err == nil {
-		err = d.respond(ctx, peer, req, send)
-	}
-	if err != nil {
+	if err := d.respond(ctx, peer, req, send); err != nil {
 		if werr := wire.WriteError(out, err); werr != nil {
 			unwritten(werr)
 		}
+		s.CloseWrite()
+		// A refusal is not held for the peer: it has RefuseWait to end
+		// the stream.
+		wait := time.NewTimer(d.cfg.RefuseWait)
+		defer wait.Stop()
+		select {
+		case <-ctx.Done():
+		case <-wait.C:
+		}
+		return
 	}
 	s.CloseWrite()
 	<-ctx.Done()
@@ -198,7 +210,7 @@ func (d *Draal) respond(ctx context.Context, peer wire.ID, req *wire.Request, se
 func (d *Draal) serveShell(ctx context.Context, cancel context.CancelFunc, s node.Stream, req wire.ShellRequest) {
 	sh, err := d.Shell(ctx, req.Zathras, req)
 	if err != nil {
-		refuse(s, err)
+		d.refuse(s, err)
 		return
 	}
 	defer sh.Close()

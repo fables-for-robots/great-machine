@@ -33,6 +33,9 @@ type Config struct {
 	GoneAfter      time.Duration    // 0: 10 seconds
 	WatchEvery     time.Duration    // 0: 1 second
 	History        time.Duration    // 0: 15 minutes
+	RequestWait    time.Duration    // 0: 5 seconds, for the first frame of a stream
+	RefuseWait     time.Duration    // 0: 2 seconds, for the peer to end a refused stream
+	MaxStreams     int              // 0: 64 streams of a connection served at a time
 	Now            func() time.Time // nil: time.Now
 	Log            *slog.Logger     // nil: slog.Default()
 
@@ -71,6 +74,15 @@ func (cfg Config) withDefaults() Config {
 	}
 	if cfg.History == 0 {
 		cfg.History = 15 * time.Minute
+	}
+	if cfg.RequestWait == 0 {
+		cfg.RequestWait = 5 * time.Second
+	}
+	if cfg.RefuseWait == 0 {
+		cfg.RefuseWait = 2 * time.Second
+	}
+	if cfg.MaxStreams == 0 {
+		cfg.MaxStreams = 64
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
