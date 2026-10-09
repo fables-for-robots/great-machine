@@ -15,6 +15,7 @@ import (
 	"github.com/fables-for-robots/great-machine/db"
 	"github.com/fables-for-robots/great-machine/draal"
 	"github.com/fables-for-robots/great-machine/node"
+	"github.com/fables-for-robots/great-machine/web"
 	"github.com/fables-for-robots/great-machine/wire"
 	"github.com/urfave/cli/v2"
 )
@@ -63,6 +64,13 @@ type draalConfig struct {
 	store     wire.StoreInfo
 	webAddr   string         // "" for no web page
 	bind      netip.AddrPort // the zero value: every address, a port the system picks
+	// local is for tests: the iroh endpoint uses no relay, announces
+	// nothing and is bound to 127.0.0.1 unless bind says otherwise. No
+	// flag sets it.
+	local bool
+	// listenWeb is for tests: what binds the address of the web page.
+	// Nil means net.Listen. No flag sets it.
+	listenWeb func(network, addr string) (net.Listener, error)
 }
 
 // readDraal reads the command line of draal.
@@ -131,12 +139,26 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 	if len(cfg.operators) == 0 {
 		log.Warn("no --operator was given: nobody can act as an operator over iroh")
 	}
-	listener, err := node.Listen(ctx, node.ListenConfig{Key: key, Bind: cfg.bind, Log: log})
+	listener, err := node.Listen(ctx, node.ListenConfig{Key: key, Bind: cfg.bind, Local: cfg.local, Log: log})
 	if err != nil {
 		return fmt.Errorf("binding the iroh endpoint: %w", err)
 	}
 	defer func() { err = errors.Join(err, listener.Close()) }()
 	log.Info("serving", "endpoint", string(listener.ID()), "addr", listener.LocalAddr().String(), "operators", len(cfg.operators))
+
+	// The web page listens before draal serves: an address that is taken
+	// ends the command here, with the endpoint and the database closed
+	// by what is deferred above.
+	var pageListener net.Listener
+	if cfg.webAddr != "" {
+		listen := cfg.listenWeb
+		if listen == nil {
+			listen = net.Listen
+		}
+		if pageListener, err = listen("tcp", cfg.webAddr); err != nil {
+			return fmt.Errorf("the web page: %w", err)
+		}
+	}
 
 	d := draal.New(draal.Config{
 		DB:    database,
@@ -144,7 +166,41 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 		Store: cfg.store,
 		Log:   log,
 	})
-	if err := d.Serve(ctx, listener); err != nil && ctx.Err() == nil {
+
+	// The order of the end, once ctx is done: the web page is stopped
+	// first, its WebSockets with it, and only then does Serve get to
+	// know, through a context of its own. The endpoint and the database
+	// are closed after Serve has returned, as before.
+	serving, stopServing := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopServing()
+	pageFailed := make(chan error, 1)
+	if pageListener == nil {
+		defer context.AfterFunc(ctx, stopServing)()
+	} else {
+		page := startWeb(pageListener, web.New(web.Config{Controller: d, Log: log}), webStopWait, log)
+		// For the ways out of this function that are not the end of ctx.
+		defer page.Stop()
+		announceWeb(log, cfg.webAddr, pageListener.Addr(), web.IsLoopback(cfg.webAddr), web.Built())
+		go func() {
+			select {
+			case <-ctx.Done():
+			case err := <-page.Failed():
+				pageFailed <- err
+			case <-serving.Done():
+				return
+			}
+			page.Stop()
+			stopServing()
+		}()
+	}
+
+	err = d.Serve(serving, listener)
+	select {
+	case err := <-pageFailed:
+		return err
+	default:
+	}
+	if err != nil && ctx.Err() == nil {
 		return err
 	}
 	log.Info("stopping")
