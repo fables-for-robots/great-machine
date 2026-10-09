@@ -1337,6 +1337,7 @@ files:
 | 20 term | The doc of `Attach` says that input typed after a session ended on a terminal is lost; tests of that path were added. Stage 3 has to make that read interruptible. |
 | 21 cli | `logs -f` ends with 0 when it is interrupted before the first line. `rollout` closes its connection to draal before the push and dials again after it. |
 | 23 delivery | The deployment files name the image by a release tag. The README has the rules above. |
+| after the whole-branch review | Draal validates a registration and bounds what a zathras reports, a failure's reason and the samples it keeps; it limits the streams of a connection and the time a stream's first message may take; a command that is not answered fails after a time, and every failed command is logged; a request with two fields set is refused. Smaller: SIGHUP is handled as SIGTERM, an empty operator ID is ignored, two defects of `push`, a flag behind SERVICE in `rollout`. Specification 4 ("What draal accepts from a peer") and 6.2 have the rules. |
 
 ## What was run while this plan was written
 
