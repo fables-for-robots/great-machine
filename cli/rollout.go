@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync/atomic"
 
 	"github.com/fables-for-robots/great-machine/closure"
@@ -92,6 +93,13 @@ func splitArguments(args []string) (own, service []string) {
 func readRollout(c *cli.Context) (rolloutConfig, error) {
 	own, args := splitArguments(c.Args().Slice())
 	usage := "usage: great-machine rollout " + c.Command.ArgsUsage
+	// The library stops reading flags at SERVICE, so a flag behind it
+	// would be taken for PATH or for one too many.
+	for _, arg := range own[min(len(own), 1):] {
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			return rolloutConfig{}, usageError("rollout: the flag %s has to come before SERVICE, and the arguments of the service behind --", arg)
+		}
+	}
 	switch {
 	case len(own) == 0:
 		return rolloutConfig{}, usageError("rollout: SERVICE is missing; %s", usage)

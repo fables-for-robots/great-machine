@@ -24,17 +24,25 @@ var Version = "dev"
 // of the remote shell, and a command that was interrupted while it
 // followed a rollout returns 130.
 //
-// The context of a command ends with the first SIGINT or SIGTERM. From
-// then on signals are the system's again, so a second one ends the
+// The context of a command ends with the first SIGINT, SIGTERM or SIGHUP.
+// From then on signals are the system's again, so a second one ends the
 // process at once.
 func Run(args []string, stdout, stderr io.Writer) int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signalContext()
 	defer stop()
+	return run(ctx, newApp(stdout, stderr), args)
+}
+
+// signalContext returns the context of a command, which ends with the
+// first of the signals, and a function that ends it. From then on signals
+// are the system's again.
+func signalContext() (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		<-ctx.Done()
 		stop()
 	}()
-	return run(ctx, newApp(stdout, stderr), args)
+	return ctx, stop
 }
 
 // commands returns every command of the program.

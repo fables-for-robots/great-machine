@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"os/signal"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/urfave/cli/v2"
 )
@@ -119,5 +123,27 @@ func TestRunHelp(t *testing.T) {
 		if stderr.Len() != 0 {
 			t.Errorf("Run(%q): stderr is %q, want nothing", args, stderr.String())
 		}
+	}
+}
+
+// SIGHUP ends the context of a command as SIGTERM does: the reaper passes
+// it on to zathras, which is to stop its service.
+func TestSIGHUPEndsTheContext(t *testing.T) {
+	// The test's own subscription keeps SIGHUP from ending the test
+	// process, whatever signalContext does with it.
+	guard := make(chan os.Signal, 1)
+	signal.Notify(guard, syscall.SIGHUP)
+	defer signal.Stop(guard)
+	ctx, stop := signalContext()
+	defer stop()
+
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatalf("kill: %v", err)
+	}
+	<-guard // it has come
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the context of a command did not end with SIGHUP")
 	}
 }

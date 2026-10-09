@@ -20,9 +20,10 @@ func shellCommand() *cli.Command {
 		ArgsUsage: "SERVICE [ZATHRAS]",
 		Description: "ZATHRAS is a name or the beginning of one, or of an endpoint ID. It may\n" +
 			"be left out when the service has one zathras.\n\n" +
-			"Ctrl-] leaves the shell without ending it. With a standard input that is\n" +
-			"no terminal (echo uptime | great-machine shell web) the input is passed\n" +
-			"on and the shell ends with it. The exit status is that of the shell.",
+			"Ctrl-] ends the session: the remote shell is hung up, as when its\n" +
+			"terminal is closed, and what it runs ends with it. With a standard input\n" +
+			"that is no terminal (echo uptime | great-machine shell web) the input is\n" +
+			"passed on and the shell ends with it. The exit status is that of the shell.",
 		Flags: operatorFlags(),
 		Action: func(c *cli.Context) error {
 			t, err := readTarget(c)
