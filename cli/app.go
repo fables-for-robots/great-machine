@@ -20,7 +20,9 @@ var Version = "dev"
 
 // Run runs the command line and returns the exit status: 0, 1 for a
 // failure, 2 for a command line that was not valid. A failure is written
-// to stderr as "great-machine: <error>".
+// to stderr as "great-machine: <error>". `shell` returns the exit status
+// of the remote shell, and a command that was interrupted while it
+// followed a rollout returns 130.
 //
 // The context of a command ends with the first SIGINT or SIGTERM. From
 // then on signals are the system's again, so a second one ends the
@@ -37,7 +39,17 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 // commands returns every command of the program.
 func commands() []*cli.Command {
-	return []*cli.Command{versionCommand()}
+	return []*cli.Command{
+		draalCommand(),
+		zathrasCommand(),
+		idCommand(),
+		rolloutCommand(),
+		rollbackCommand(),
+		statusCommand(),
+		logsCommand(),
+		shellCommand(),
+		versionCommand(),
+	}
 }
 
 // newApp returns the program with its commands, writing to stdout and
@@ -89,6 +101,16 @@ func run(ctx context.Context, app *cli.App, args []string) int {
 	err := app.RunContext(ctx, args)
 	if err == nil {
 		return 0
+	}
+	// A command that chooses its exit status returns a cli.ExitCoder: the
+	// status of the remote shell, or 130 after an interrupt. Its message
+	// is printed like any other, and one that is empty is not printed.
+	var coder cli.ExitCoder
+	if errors.As(err, &coder) {
+		if msg := coder.Error(); msg != "" {
+			fmt.Fprintln(app.ErrWriter, "great-machine:", msg)
+		}
+		return coder.ExitCode()
 	}
 	fmt.Fprintln(app.ErrWriter, "great-machine:", err)
 	var u *usage
