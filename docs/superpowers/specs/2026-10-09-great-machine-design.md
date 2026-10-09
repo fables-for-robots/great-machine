@@ -304,8 +304,9 @@ goes, and whenever a rollout is made. A draal that was restarted, and a
 zathras that was gone and is back, are therefore carried on with: nothing
 of a rollout is kept in memory that the reports do not give back.
 
-After it starts, draal waits 15 seconds before the reconciler does
-anything, so that the zathrases are back before it decides.
+After it starts, draal waits 45 seconds before the reconciler does
+anything, so that the zathrases are back before it decides: a zathras
+dials again after 30 seconds at most.
 
 **Preparing.** Every connected zathras that has not prepared the target is
 sent `prepare`. The zathras posts the closure to the preload endpoint of
@@ -337,9 +338,19 @@ Then:
 - A zathras whose phase is `idle` has nothing to lose: it is sent `prepare`
   and `activate` at once and is not counted against `parallel`. It can fail
   like any other.
-- When every connected zathras is done, the rollout is `completed`.
-- A zathras that goes is no longer looked at. If it comes back it is
-  waiting, under way or done by what it reports.
+- When every connected zathras is done, and none that left during the
+  rollout is still being waited for, the rollout is `completed`.
+- A zathras that goes is sent nothing and frees its place in the batch. If
+  it comes back it is waiting, under way or done by what it reports.
+- **A zathras that left during a rollout without being done holds the
+  completion of the rollout for 2 minutes.** Without this, a fleet that
+  loses draal for longer than the 10 seconds after which a zathras counts
+  as gone would complete the rollout by its absence, and on its return
+  every zathras would be moved to the new stable generation at once. A
+  zathras that is back within the 2 minutes takes its place in the
+  rollout again. One that stays away longer is gone, and the rollout
+  completes over those who are there. Draal keeps who left in memory, and
+  carries it over to a rollout that supersedes the one they left during.
 
 **No rollout under way.** A service that never had a rollout has nothing
 to run, and its zathrases stay `idle`. When the last rollout of a service
@@ -349,6 +360,13 @@ missed a rollout) is sent `prepare` and `activate` for the stable
 generation. When the last rollout halted, the service is frozen: only a
 zathras that is `idle` is sent the stable generation, if there is one, and
 no other zathras is touched until the operator rolls out or rolls back.
+
+This convergence is not paced: every zathras that is not on the stable
+generation is moved at once. That is right for a new pod, and for one
+that missed a rollout which has run on the others since. It is also what
+happens to a fleet that returns after more than the 2 minutes above, or
+after a restart of draal from which it stayed away longer than the 45
+seconds: a known limit of this design.
 
 A `prepare` or an `activate` that fails while no rollout is under way has
 no rollout to halt. It is logged, and sent again after 30 seconds, for as
