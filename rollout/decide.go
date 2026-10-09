@@ -35,10 +35,11 @@ type Input struct {
 	Activating map[wire.ID]uint64
 	// Failed: the last failure of a zathras, if it had one.
 	Failed map[wire.ID]Failure
-	// Absent: the zathrases that left since this rollout was made, without
-	// being done, and when each left, by the clock of Now and of
-	// Rollout.Created. The caller removes one when it is back. Each holds
-	// the rollout open for AbsentGrace after it left.
+	// Absent: the zathrases that left while a rollout of the service was
+	// under way, this one or one it superseded, without being done on its
+	// target, and that are not back; with when each left, by the clock of
+	// Now. The caller removes one when it is back. Each holds the rollout
+	// open for AbsentGrace after it left.
 	Absent         map[wire.ID]time.Time
 	StableAfter    time.Duration // 30 seconds
 	PrepareTimeout time.Duration // 30 minutes
@@ -243,12 +244,18 @@ func (d *decider) settled(frozen bool) {
 	}
 }
 
-// done says whether m runs the target and has for StableAfter. It goes by
-// what m reports alone: no time of m's clock is compared with Now.
+// done says whether m is done on the target.
 func (d *decider) done(m fleet.Member) bool {
-	return m.State.Generation == d.target &&
-		m.State.Phase == wire.PhaseRunning &&
-		m.State.RunningFor >= d.in.StableAfter
+	return Done(m.State, d.target, d.in.StableAfter)
+}
+
+// Done says whether a zathras that reports st is done on the target: it
+// runs the target and has for stableAfter. It goes by the report alone: no
+// time of the zathras' clock is compared with another.
+func Done(st wire.State, target uint64, stableAfter time.Duration) bool {
+	return st.Generation == target &&
+		st.Phase == wire.PhaseRunning &&
+		st.RunningFor >= stableAfter
 }
 
 // busy says whether a command to m is on its way.

@@ -1265,3 +1265,36 @@ func TestNeverTwoCommandsToOne(t *testing.T) {
 		})
 	}
 }
+
+// Done is what Decide counts as activated, and what draal asks of a
+// zathras that leaves.
+func TestDone(t *testing.T) {
+	cases := []struct {
+		name string
+		m    fleet.Member
+		want bool
+	}{
+		{"it runs the target and has for longer than StableAfter", member("web-a", running(2, hour)), true},
+		{"it runs the target and has for StableAfter exactly", member("web-a", running(2, stableAfter)), true},
+		{"it runs the target and has for less than StableAfter", member("web-a", running(2, stableAfter-time.Nanosecond)), false},
+		{"it has just started the target", member("web-a", running(2, 0)), false},
+		{"it runs another generation", member("web-a", running(1, hour)), false},
+		{"it runs a later generation", member("web-a", running(3, hour)), false},
+		{"it has prepared the target and runs another", member("web-a", running(1, hour), prepared(2)), false},
+		{"the target is in backoff", member("web-a", backoff(2)), false},
+		{"the target is stopping", member("web-a", stopping(2)), false},
+		{"it is idle", member("web-a", idle()), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Done(tc.m.State, 2, stableAfter); got != tc.want {
+				t.Errorf("Done = %v, want %v", got, tc.want)
+			}
+			// Decide counts the same.
+			in := input(newRollout(wire.RolloutActivating, 2, 0), 1, tc.m)
+			if got := Decide(in).Activated == 1; got != tc.want {
+				t.Errorf("Decide counts it activated: %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

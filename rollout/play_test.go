@@ -25,8 +25,11 @@ type sim struct {
 	preparing  map[wire.ID]uint64
 	activating map[wire.ID]uint64
 	failed     map[wire.ID]Failure
-	// absent: who left during the rollout without being done, and when.
-	// It holds the rollout open for grace, which is 0 unless a test sets it.
+	// absent: who left during a rollout under way without being done, and
+	// when. As in draal, it is carried over to a rollout that supersedes the
+	// one they left during, and emptied when the last rollout is no longer
+	// under way. It holds the rollout open for grace, which is 0 unless a
+	// test sets it.
 	absent map[wire.ID]time.Time
 	grace  time.Duration
 
@@ -66,8 +69,8 @@ func (s *sim) begin(generation uint64, parallel int) {
 		r.ID = s.rollout.ID + 1
 	}
 	s.rollout = r
-	// Who left before it was made did not leave during it.
-	clear(s.absent)
+	// Who left during the rollout it supersedes, and is not back, holds this
+	// one as well: what is absent is kept.
 }
 
 func (s *sim) member(id wire.ID) *fleet.Member {
@@ -86,9 +89,7 @@ func (s *sim) leave(name string) fleet.Member {
 	if m == nil {
 		s.t.Fatalf("%s is not there", name)
 	}
-	st := m.State
-	done := st.Generation == s.rollout.Generation && st.Phase == wire.PhaseRunning && st.RunningFor >= stableAfter
-	if s.rollout.State.UnderWay() && !done {
+	if s.rollout.State.UnderWay() && !Done(m.State, s.rollout.Generation, stableAfter) {
 		s.absent[m.ID] = s.now
 	}
 	s.members = slices.DeleteFunc(s.members, func(o *fleet.Member) bool { return o == m })
@@ -158,6 +159,9 @@ func (s *sim) decide() Decision {
 		s.rollout.State, s.rollout.Reason = d.State, d.Reason
 		if d.State == wire.RolloutCompleted {
 			s.stable = s.rollout.Generation
+		}
+		if !d.State.UnderWay() {
+			clear(s.absent)
 		}
 	}
 	s.most = max(s.most, s.restarting())
@@ -553,4 +557,74 @@ func TestPlayOneLeavesForGood(t *testing.T) {
 	if end := left.Add(absentGrace); completed.Before(end) || !completed.Before(end.Add(10*time.Second)) {
 		t.Errorf("completed %v after web-5 left, want at the first decision from %v on", completed.Sub(left), absentGrace)
 	}
+}
+
+// Three leave in the middle of a rollout, and a second rollout supersedes
+// it while they are away: they hold the second one as they held the first.
+// When they are back it goes on at its pace and completes.
+func TestPlayAbsencesAreCarriedOverASupersede(t *testing.T) {
+	s := newSim(t, 1, five()...)
+	s.grace = absentGrace
+	s.begin(2, 1)
+	var gone []fleet.Member
+	waited := 0 // decisions of the second rollout with all who are there done
+	s.play(func(step int) {
+		switch {
+		case step == 3:
+			if n := len(s.activated(2)); n == 0 || n >= 3 {
+				t.Fatalf("%d were sent activate for 2 before they left, want some and not the three that leave", n)
+			}
+			for _, name := range []string{"web-3", "web-4", "web-5"} {
+				gone = append(gone, s.leave(name))
+			}
+		case step == 4:
+			s.begin(3, 2)
+			s.restart() // draal ends the commands of the rollout that was superseded
+		case step > 4 && gone != nil:
+			if !s.rollout.State.UnderWay() {
+				t.Fatalf("the second rollout is %s while they are away, want it under way", s.rollout.State)
+			}
+			if s.allDone() {
+				waited++
+			}
+			if waited == 2 {
+				for _, m := range gone {
+					s.join(m)
+				}
+				gone = nil
+			}
+		}
+	})
+	if waited != 2 {
+		t.Fatalf("the second rollout ended before all who were there were done (%d decisions)", waited)
+	}
+	if s.rollout.State != wire.RolloutCompleted || s.rollout.Generation != 3 || s.stable != 3 {
+		t.Fatalf("the rollout of %d is %s (%s) and stable %d, want 3 completed",
+			s.rollout.Generation, s.rollout.State, s.rollout.Reason, s.stable)
+	}
+	if got, want := s.generations(), "[web-1=3 web-2=3 web-3=3 web-4=3 web-5=3]"; got != want {
+		t.Errorf("the fleet runs %s, want %s", got, want)
+	}
+	if s.most > 2 {
+		t.Errorf("%d were restarting at once, want 2 at most", s.most)
+	}
+	// decide has checked that nobody was sent activate for a generation it
+	// runs already; so everyone was sent it once.
+	if got := s.activated(3); !slices.Equal(got, fiveNames) {
+		t.Errorf("activated for 3 in the order %v, want %v: by name, each once", got, fiveNames)
+	}
+	if len(s.absent) != 0 {
+		t.Errorf("absent after the rollout completed: %v, want nobody", slices.Collect(maps.Keys(s.absent)))
+	}
+}
+
+// allDone says whether every zathras that is there is done on the target
+// of the rollout.
+func (s *sim) allDone() bool {
+	for _, m := range s.members {
+		if !Done(m.State, s.rollout.Generation, stableAfter) {
+			return false
+		}
+	}
+	return true
 }
