@@ -328,8 +328,9 @@ func sortFleet(f wire.Fleet) wire.Fleet {
 }
 
 // cappedState returns what a zathras reports with its words capped: its
-// binary, its arguments (64 of them at most), and how it ended last.
+// phase, its binary, its arguments (64 of them at most), and how it ended last.
 func cappedState(st wire.State) wire.State {
+	st.Phase = wire.Phase(capped(string(st.Phase)))
 	st.Binary = capped(st.Binary)
 	if len(st.Args) > 0 {
 		args := make([]string, 0, min(len(st.Args), 65))

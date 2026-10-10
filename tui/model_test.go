@@ -969,3 +969,37 @@ func TestEverySizeOfTerminal(t *testing.T) {
 		}
 	}
 }
+
+// The phase is the one word of a zathras that every view draws, and
+// neither wire nor draal checks it: the model keeps it to the limit.
+func TestThePhaseOfAZathrasIsKeptToTheLimit(t *testing.T) {
+	m, _ := onZathras(80, 24, "web", 2)
+	f := fixtureFleet()
+	for i := range f.Services {
+		for j := range f.Services[i].Zathrases {
+			if f.Services[i].Zathrases[j].ID == m.zathras {
+				f.Services[i].Zathrases[j].State.Phase = wire.Phase(strings.Repeat("x", 1<<20))
+			}
+		}
+	}
+	m.update(fleetMsg{epoch: m.epoch, fleet: f})
+	check := func(where string, phase wire.Phase) {
+		t.Helper()
+		if len(phase) > fieldCap+48 || !strings.HasSuffix(string(phase), " bytes more)") {
+			t.Errorf("%s: the phase is %d bytes, ending %q; want it kept to the limit with the note", where, len(phase), string(phase[max(len(phase)-20, 0):]))
+		}
+	}
+	check("m.seen", m.seen.State.Phase)
+	found := false
+	for _, svc := range m.fleet.Services {
+		for _, z := range svc.Zathrases {
+			if z.ID == m.zathras {
+				found = true
+				check("m.fleet", z.State.Phase)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the zathras is not in the fleet")
+	}
+}
