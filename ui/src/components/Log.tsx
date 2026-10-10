@@ -191,7 +191,11 @@ export default function Log(props: {
       // the pauses of every connection of the page. When it has not,
       // nothing is asked until it is back; and while draal itself does
       // not answer, the connection of the fleet is the one that tries.
-      if (present() && connection() !== "lost") {
+      // With 1001 draal says that it is ending: the log is opened again
+      // when the connection to draal is back (the effect on lives does
+      // that), and a retry before would only add a second row that says
+      // less than draal's own.
+      if (event.code !== 1001 && present() && connection() !== "lost") {
         timer = setTimeout(open, pause(attempt++, Math.random()));
       }
     };
