@@ -695,8 +695,10 @@ func TestRunTheKillThatComesLateDoesNothing(t *testing.T) {
 	killAfter = 0
 	term.stop()
 	waitFor(t, "the timer to fire", reached["fired"])
-	if err := term.end(); !errors.Is(err, context.Canceled) {
-		t.Errorf("Run = %v, want the error of its context", err)
+	// The program ended by itself: it was not cut off, and Run says
+	// nothing of a cut.
+	if err := term.end(); err != context.Canceled {
+		t.Errorf("Run = %v, want the bare error of its context", err)
 	}
 	// From here on nothing may be written: the mark is set before the
 	// timer is let go.
@@ -767,8 +769,10 @@ func TestRunTheKillWinsOverAQuitThatIsOnItsWay(t *testing.T) {
 	waitFor(t, "the message to quit to come to the program", quitting)
 	letGo("killing")
 	waitFor(t, "the timer to return", reached["done"])
-	if err := term.end(); !errors.Is(err, context.Canceled) {
-		t.Errorf("Run = %v, want the error of its context", err)
+	// The program was cut off, though it returned at once behind the
+	// kill: Run says so.
+	if err := term.end(); !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "cut off") {
+		t.Errorf("Run = %v, want the error of its context and that the terminal UI was cut off", err)
 	}
 	term.quiet()
 	out, _, _ := strings.Cut(term.written(), returnedMark)

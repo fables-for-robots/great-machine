@@ -58,17 +58,25 @@ const tickEvery = time.Second
 // had its first fleet ConnectWait after Dial was called.
 //
 // Run returns within a bounded time of ctx being done, whatever the
-// program and the Operator do. A program that has not ended killAfter
-// after ctx was done (an Update that does not return) is ended as it
-// is: the terminal is restored, and Run returns the error of ctx in a
-// sentence that says so, leaving behind the goroutine that is stuck and
-// what it holds. (A program that had begun to end by itself by then is
-// not ended a second time: should it stay in its last view, Run returns
-// all the same, and says that the terminal may not be as it was.) And when something asked of the Operator does not
-// return closeAfter after it was told to end (a Dial, a Watch or a
-// Close that does not honour its context), Run returns what it would
-// have returned, says so in the log of its Config, and leaves behind
-// the goroutines that wait for the Operator, and its connection.
+// program and the Operator do, but for one thing: a terminal that takes
+// no output (a session over a network that has stalled) holds the
+// renderer in its write, and with it the giving back of the terminal,
+// and Run returns only when the terminal takes output again or goes. It
+// is left so, since to return without giving the terminal back would
+// leave it raw and on the alternate screen.
+//
+// A program that has not ended killAfter after ctx was done (an Update
+// that does not return) is ended as it is: the terminal is restored,
+// and Run returns the error of ctx in a sentence that says so, leaving
+// behind the goroutine that is stuck and what it holds. (A program that
+// had begun to end by itself by then is not ended a second time: should
+// it stay in its last view, Run returns all the same, and says that the
+// terminal may not be as it was.) And when something asked of the
+// Operator does not return closeAfter after it was told to end (a Dial,
+// a Watch or a Close that does not honour its context), Run returns
+// what it would have returned, says so in the log of its Config, and
+// leaves behind the goroutines that wait for the Operator, and its
+// connection.
 //
 // The text of every error Run returns that has words of draal in it is
 // safe to print on a terminal: it went through the function everything
@@ -175,17 +183,24 @@ func run(ctx context.Context, cfg Config, drawn func(view string), opts ...tea.P
 	case err = <-ran:
 		// The program has ended and given the terminal back. A timer
 		// that fires from here on does nothing, and one that is at work
-		// is waited for.
+		// is waited for. One that was at work has cut the program off,
+		// which is then why it ended.
 		ending.Lock()
 		decided = true
 		ending.Unlock()
+		select {
+		case <-killed:
+			cut = true
+		default:
+		}
 	case <-killed:
-		// The terminal is restored. The program returns when its Update
-		// does; Run does not wait for that.
+		// The terminal is restored, and the program was cut off, whether
+		// it returns now or later. It returns when its Update does; Run
+		// does not wait for that.
+		cut = true
 		select {
 		case err = <-ran:
 		case <-time.After(cutAfter):
-			cut = true
 		}
 	case <-late:
 		// The program took the message to quit and has not ended by the
