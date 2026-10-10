@@ -560,7 +560,9 @@ func TestLogsWithFollowGoOnUntilThePageCloses(t *testing.T) {
 }
 
 // Review Focus 2: a zathras that goes while its log is open. The socket
-// ends with a reason and not in silence.
+// ends with a reason and not in silence. The reason says that the log
+// has ended and no more: the channel closes too when only the stream of
+// the log broke, and the zathras is there still.
 func TestLogsOfAZathrasThatGoesEndWithTheReason(t *testing.T) {
 	more := make(chan wire.LogLine)
 	srv := serveSockets(t, Config{Controller: &fake{logs: linesOf(nil, more, nil)}})
@@ -569,11 +571,11 @@ func TestLogsOfAZathrasThatGoesEndWithTheReason(t *testing.T) {
 	var got wire.LogLine
 	nextText(t, c, &got)
 
-	// The zathras goes: draal closes the channel of its lines.
+	// The zathras goes, or the stream of its log breaks: draal closes the
+	// channel of its lines.
 	close(more)
-	msg := wantError(t, c, wire.CodeUnavailable)
-	if !strings.Contains(msg, string(zathrasA)) || !strings.Contains(msg, "gone") {
-		t.Errorf("the message is %q, want it to name the zathras and say that it is gone", msg)
+	if msg, want := wantError(t, c, wire.CodeUnavailable), "the log of zathras "+string(zathrasA)+" has ended"; msg != want {
+		t.Errorf("the message is %q, want %q", msg, want)
 	}
 }
 
@@ -778,6 +780,54 @@ func TestServerThatEndsClosesItsSocketsAsGoingAway(t *testing.T) {
 		t.Fatal("the shell was not closed with the server")
 	}
 	settled(t, before)
+}
+
+// Final review E1: the server ends while a log has a line ready, and
+// another behind it, without pause. The page is told that draal is
+// shutting down all the same: nothing is written under a context that
+// has ended, which the library answers by cutting the connection before
+// the close can say why.
+//
+// Every run reaches the case, and none by luck: the fake ends the server
+// from inside the call the handler makes for the log, so the handler
+// comes to its loop with its context done and a line ready, and no
+// write is under way at that instant. (Before the fix a run failed
+// whenever the line was picked over the context and the library got as
+// far as the write, one time in a few.)
+func TestServerThatEndsWhileALogHasLinesReadyClosesItAsGoingAway(t *testing.T) {
+	for run := range 50 {
+		base, shutDown := context.WithCancel(context.Background())
+		line := wire.LogLine{Stream: "stdout", Text: "a line that is always ready"}
+		ready := func(ctx context.Context, _ wire.ID, _ bool) (<-chan wire.LogLine, error) {
+			// More lines are ready than the handler can come to take
+			// once its context is done: whenever it looks, one is there.
+			out := make(chan wire.LogLine, 64)
+			for range cap(out) {
+				out <- line
+			}
+			shutDown()
+			<-ctx.Done()
+			return out, nil
+		}
+		srv := serveUnder(t, base, Config{Controller: &fake{logs: ready}})
+		before := runtime.NumGoroutine()
+		c := dial(t, srv, "/api/zathras/"+string(zathrasA)+"/logs?follow=1")
+		// Whatever was written before the close is read past: none need
+		// have been.
+		ctx, cancel := context.WithTimeout(context.Background(), deadline)
+		var err error
+		for err == nil {
+			_, _, err = c.Read(ctx)
+		}
+		cancel()
+		var closed websocket.CloseError
+		if !errors.As(err, &closed) || closed.Code != websocket.StatusGoingAway || closed.Reason != "draal is shutting down" {
+			t.Fatalf("run %d: the socket ended with %v, want it closed as going away with the reason", run, err)
+		}
+		c.CloseNow()
+		settled(t, before)
+		srv.Close()
+	}
 }
 
 // The close of a socket is bounded. When the server ends, the handlers of

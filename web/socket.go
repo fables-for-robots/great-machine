@@ -210,7 +210,18 @@ func (s *socket) ping() {
 // write sends one message. A page that does not take it within WriteWait
 // loses its socket: the library closes a socket whose write ran out of
 // time, as half a message may be on its way.
+//
+// For the same reason the library cuts the connection of a write whose
+// context has ended, at once when it has ended already. So nothing is
+// written when the socket's context is done: a handler that picked a
+// line or a piece that was ready over the end of its context is told
+// that the socket has ended, and goes to done, which says why with the
+// close. (A write that is under way when the context ends is cut, as
+// before.)
 func (s *socket) write(typ websocket.MessageType, data []byte) error {
+	if err := s.ctx.Err(); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(s.ctx, s.h.cfg.WriteWait)
 	defer cancel()
 	if err := s.conn.Write(ctx, typ, data); err != nil {
@@ -371,9 +382,12 @@ func (h *handler) logs(w http.ResponseWriter, r *http.Request) {
 				s.end()
 				return
 			}
-			// Review Focus 2: a log that is followed ends only when the
-			// zathras has gone, and the page is told so.
-			s.fail(wire.Errorf(wire.CodeUnavailable, "the log of zathras %s has ended: the zathras is gone", id))
+			// Review Focus 2: a log that is followed does not end in
+			// silence. The channel closes when the zathras has gone and
+			// also when only the stream of its log broke, so the page is
+			// told what holds for both: that the log has ended. Whether
+			// the zathras is connected, the page has from the fleet.
+			s.fail(wire.Errorf(wire.CodeUnavailable, "the log of zathras %s has ended", id))
 			return
 		case <-s.ctx.Done():
 			return
