@@ -199,15 +199,3 @@ func TestProgressClosedInAStep(t *testing.T) {
 		t.Errorf("the screen: %q, fresh line: %v", lines, fresh)
 	}
 }
-
-func TestByteSize(t *testing.T) {
-	tests := []struct {
-		n    uint64
-		want string
-	}{{0, "0 B"}, {1023, "1023 B"}, {1536, "1.5 KiB"}, {126353408, "120.5 MiB"}, {3 << 30, "3.0 GiB"}}
-	for _, tt := range tests {
-		if got := byteSize(tt.n); got != tt.want {
-			t.Errorf("byteSize(%d) = %q, want %q", tt.n, got, tt.want)
-		}
-	}
-}

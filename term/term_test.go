@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -37,10 +39,17 @@ type fakeSession struct {
 	out  chan []byte // what Read returns next; closed: the shell has ended
 	exit int
 
+	// stuck, when it is set, gets a value from every Write, which then
+	// waits until release is closed: a session that takes no input.
+	stuck   chan struct{}
+	release chan struct{}
+
 	mu      sync.Mutex
 	input   []byte
 	resizes [][2]uint16
-	panics  bool // Read panics
+	panics  bool  // Read panics
+	failure error // what Read returns at the end, in place of io.EOF
+	hungUp  bool  // out is closed
 }
 
 func newFakeSession(exit int) *fakeSession {
@@ -56,12 +65,21 @@ func (f *fakeSession) Read(p []byte) (int, error) {
 	}
 	b, ok := <-f.out
 	if !ok {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.failure != nil {
+			return 0, f.failure
+		}
 		return 0, io.EOF
 	}
 	return copy(p, b), nil
 }
 
 func (f *fakeSession) Write(p []byte) (int, error) {
+	if f.stuck != nil {
+		f.stuck <- struct{}{}
+		<-f.release
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.input = append(f.input, p...)
@@ -77,6 +95,33 @@ func (f *fakeSession) Resize(cols, rows uint16) error {
 
 func (f *fakeSession) Wait(ctx context.Context) (int, error) { return f.exit, nil }
 
+// hangUp ends the session, as the Close of a real one does: Read returns
+// the end. It may be called more than once.
+func (f *fakeSession) hangUp() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.hungUp {
+		f.hungUp = true
+		close(f.out)
+	}
+}
+
+// fail ends the session with an error.
+func (f *fakeSession) fail(err error) {
+	f.mu.Lock()
+	f.failure = err
+	f.mu.Unlock()
+	f.hangUp()
+}
+
+// panicNext makes the Read after the one that waits panic.
+func (f *fakeSession) panicNext() {
+	f.mu.Lock()
+	f.panics = true
+	f.mu.Unlock()
+	f.out <- []byte("the last words")
+}
+
 func (f *fakeSession) got() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -89,19 +134,26 @@ func (f *fakeSession) sizes() [][2]uint16 {
 	return append([][2]uint16(nil), f.resizes...)
 }
 
-// attached is what an Attach that runs in a goroutine returned.
+// attached is what an Attach that runs in a goroutine returned, or what
+// it panicked with.
 type attached struct {
 	exit     int
 	detached bool
 	err      error
+	panicked string
 }
 
 // start runs an attachment in a goroutine.
 func start(ctx context.Context, a *attachment) <-chan attached {
 	done := make(chan attached, 1)
 	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				done <- attached{panicked: fmt.Sprint(v)}
+			}
+		}()
 		exit, detached, err := a.run(ctx)
-		done <- attached{exit, detached, err}
+		done <- attached{exit: exit, detached: detached, err: err}
 	}()
 	return done
 }
@@ -150,7 +202,7 @@ func TestAttachInputIsNoTerminal(t *testing.T) {
 	waitFor(t, "the end of the input", func() bool { return s.got() == "up\x1dtime\n\x04" })
 	select {
 	case r := <-done:
-		t.Fatalf("Attach returned %+v at the end of the input, before the shell had ended", r)
+		t.Fatalf("Attach returned %+v (err: %v) at the end of the input, before the shell had ended", r, r.err)
 	default:
 	}
 
@@ -256,7 +308,42 @@ func TestAttachPipeToRealShell(t *testing.T) {
 	}
 }
 
+// `great-machine shell web < commands` and `< /dev/null`: a file and a
+// device that are neither a terminal nor a pipe are waited for and read as
+// a pipe is.
+func TestAttachInputIsAFile(t *testing.T) {
+	commands := t.TempDir() + "/commands"
+	if err := os.WriteFile(commands, []byte("uptime\nexit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ name, path, want string }{
+		{"a file", commands, "uptime\nexit\n\x04"},
+		{"/dev/null", os.DevNull, "\x04"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			before := baseline()
+			in, err := os.Open(c.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer in.Close()
+			s := newFakeSession(0)
+			done := start(context.Background(), newAttachment(in, io.Discard, s))
+			waitFor(t, "the end of the input", func() bool { return s.got() == c.want })
+			s.hangUp()
+			if got := await(t, done); got.err != nil || got.exit != 0 {
+				t.Errorf("Attach = %+v (err: %v)", got, got.err)
+			}
+			settled(t, before)
+		})
+	}
+}
+
+// A pipe is left to the next reader as a terminal is: what is written to
+// it after Attach has returned is not read by Attach.
 func TestAttachContextDone(t *testing.T) {
+	before := baseline()
 	r, w := pipe(t)
 	s := newFakeSession(0)
 	var out bytes.Buffer
@@ -273,24 +360,25 @@ func TestAttachContextDone(t *testing.T) {
 	if !errors.Is(got.err, context.Canceled) || got.detached {
 		t.Errorf("Attach = %d, %v, %v; want the error of the context", got.exit, got.detached, got.err)
 	}
+	select {
+	case <-a.inputEnded:
+	default:
+		t.Error("the reading of the input is still going after Attach has returned")
+	}
 
-	// The goroutine that reads the input is still there. What it reads
-	// now reaches nobody, and neither does what the session writes.
 	if _, err := w.Write([]byte("after")); err != nil {
 		t.Fatal(err)
 	}
-	w.Close()
-	select {
-	case <-a.inputEnded:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the reading of the input did not end with the input")
+	if next := readNext(t, r, len("after")); next != "after" {
+		t.Errorf("the next reader of the pipe read %q, want %q", next, "after")
 	}
 	if s.got() != "before" {
 		t.Errorf("the session was sent %q after Attach had returned", s.got())
 	}
+	// Nor does what the session writes now reach anybody.
 	s.out <- []byte("late")
-	close(s.out)
-	waitFor(t, "the session to be read to its end", func() bool { return len(s.out) == 0 })
+	s.hangUp()
+	settled(t, before)
 	if out.Len() != 0 {
 		t.Errorf("%q was written after Attach had returned", out.String())
 	}
@@ -410,69 +498,318 @@ func noSizeAfterReturn(t *testing.T, master *os.File, s *fakeSession) {
 	}
 }
 
-// The path that leaves a reader on a terminal: Attach ends with nothing
-// typed. The terminal is restored, and the key typed next is read by the
-// goroutine that was left, and dropped: the session never gets it.
-func TestAttachTerminalLeftoverReader(t *testing.T) {
-	cases := []struct {
-		name  string
-		end   func(s *fakeSession, cancel func())
-		check func(t *testing.T, got attached)
-	}{
-		{"the shell ends",
-			func(s *fakeSession, cancel func()) { close(s.out) },
-			func(t *testing.T, got attached) {
-				if got.err != nil || got.detached || got.exit != 42 {
-					t.Errorf("Attach = %d, %v, %v; want 42, false, nil", got.exit, got.detached, got.err)
-				}
-			}},
-		{"the context is done",
-			func(s *fakeSession, cancel func()) { cancel() },
-			func(t *testing.T, got attached) {
-				if !errors.Is(got.err, context.Canceled) || got.detached {
-					t.Errorf("Attach = %d, %v, %v; want the error of the context", got.exit, got.detached, got.err)
-				}
-			}},
+// baseline returns how many goroutines there are before a test begins
+// anything. The first signal.Notify of a process starts a goroutine that
+// stays for good: it is started here, so that it is not taken for one of
+// Attach.
+func baseline() int {
+	_, stop := notifyResize()
+	stop()
+	return runtime.NumGoroutine()
+}
+
+// settled waits until there are no more goroutines than before: nothing
+// of what the test began since is left.
+func settled(t *testing.T, before int) {
+	t.Helper()
+	end := time.Now().Add(5 * time.Second)
+	for runtime.NumGoroutine() > before {
+		if time.Now().After(end) {
+			buf := make([]byte, 1<<20)
+			t.Fatalf("%d goroutines, %d before:\n%s", runtime.NumGoroutine(), before, buf[:runtime.Stack(buf, true)])
+		}
+		time.Sleep(time.Millisecond)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			master, tty := terminal(t)
-			cooked := mode(t, tty)
-			s := newFakeSession(42)
-			a := newAttachment(tty, io.Discard, s)
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			done := start(ctx, a)
-			waitFor(t, "the size", func() bool { return len(s.sizes()) == 1 })
+}
 
-			c.end(s, cancel)
-			c.check(t, await(t, done))
-			if !reflect.DeepEqual(mode(t, tty), cooked) {
-				t.Error("the terminal was not restored")
-			}
-			// The goroutine is left reading: it has not ended on its own.
-			select {
-			case <-a.inputEnded:
-				t.Fatal("the reading of the terminal ended with nothing typed")
-			default:
-			}
+// readNext reads n bytes of f with plain Reads, as whoever reads the
+// terminal after Attach does. It fails the test when they do not come:
+// somebody else has read them.
+func readNext(t *testing.T, f *os.File, n int) string {
+	t.Helper()
+	got := make(chan string, 1)
+	go func() {
+		buf := make([]byte, n)
+		m, _ := io.ReadFull(f, buf)
+		got <- string(buf[:m])
+	}()
+	select {
+	case s := <-got:
+		return s
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out reading %d bytes that were typed after Attach had returned: something else read them", n)
+		return ""
+	}
+}
 
-			// The next input of the user is read by it and dropped. A line
-			// feed completes the line now that the terminal is cooked again.
-			if _, err := master.Write([]byte("z\n")); err != nil {
+// waysOut are the ways Attach returns on a terminal that still works.
+var waysOut = []struct {
+	name  string
+	end   func(t *testing.T, master *os.File, s *fakeSession, cancel func())
+	check func(t *testing.T, got attached)
+}{
+	{"the shell ends",
+		func(t *testing.T, master *os.File, s *fakeSession, cancel func()) { s.hangUp() },
+		func(t *testing.T, got attached) {
+			if got.err != nil || got.detached || got.exit != 42 || got.panicked != "" {
+				t.Errorf("Attach = %+v (err: %v); want 42, false, nil", got, got.err)
+			}
+		}},
+	{"the context is done",
+		func(t *testing.T, master *os.File, s *fakeSession, cancel func()) { cancel() },
+		func(t *testing.T, got attached) {
+			if !errors.Is(got.err, context.Canceled) || got.detached {
+				t.Errorf("Attach = %+v (err: %v); want the error of the context", got, got.err)
+			}
+		}},
+	{"the session fails",
+		func(t *testing.T, master *os.File, s *fakeSession, cancel func()) {
+			s.fail(errors.New("the connection was lost"))
+		},
+		func(t *testing.T, got attached) {
+			if got.err == nil || !strings.Contains(got.err.Error(), "the connection was lost") || got.detached {
+				t.Errorf("Attach = %+v (err: %v); want the error of the session", got, got.err)
+			}
+		}},
+	{"a detach",
+		func(t *testing.T, master *os.File, s *fakeSession, cancel func()) {
+			if _, err := master.Write([]byte{Detach}); err != nil {
 				t.Fatal(err)
 			}
-			select {
-			case <-a.inputEnded:
-			case <-time.After(5 * time.Second):
-				t.Fatal("the reading of the terminal did not end with the next input")
+		},
+		func(t *testing.T, got attached) {
+			if got.err != nil || !got.detached {
+				t.Errorf("Attach = %+v (err: %v); want detached", got, got.err)
 			}
-			if s.got() != "" {
-				t.Errorf("the session was sent %q after Attach had returned", s.got())
+		}},
+	{"a panic",
+		func(t *testing.T, master *os.File, s *fakeSession, cancel func()) { s.panicNext() },
+		func(t *testing.T, got attached) {
+			if !strings.Contains(got.panicked, "the session went wrong") {
+				t.Errorf("Attach = %+v (err: %v); want the panic of the session passed on", got, got.err)
 			}
-			noSizeAfterReturn(t, master, s)
+		}},
+}
+
+// Review Focus 1, the terminal after a shell: whichever way Attach
+// returns, the terminal is in the mode it was in, nothing of Attach reads
+// it any more, and what is typed from then on is read, whole and in
+// order, by whoever reads the terminal next. The terminal UI is such a
+// reader: it reads the terminal again as soon as Attach has returned.
+//
+// Each way out is tried on a terminal in its usual mode, as `great-machine
+// shell` finds it, where the next reader gets lines, and on one that was
+// raw before, where it gets every byte as it is typed.
+func TestAttachLeavesTheTerminalToTheNextReader(t *testing.T) {
+	for _, raw := range []bool{false, true} {
+		for _, c := range waysOut {
+			name := c.name + ", the terminal in its usual mode"
+			typed := []string{"one\n", "two\n", "three\n"}
+			if raw {
+				name = c.name + ", the terminal raw before"
+				typed = []string{"o", "ne", "\x1b[A", "\x03", "two"}
+			}
+			t.Run(name, func(t *testing.T) {
+				before := baseline()
+				master, tty := terminal(t)
+				if raw {
+					if _, err := xterm.MakeRaw(int(tty.Fd())); err != nil {
+						t.Fatal(err)
+					}
+				}
+				was := mode(t, tty)
+				s := newFakeSession(42)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := start(ctx, newAttachment(tty, io.Discard, s))
+
+				// The size is sent when the terminal is raw. From then on
+				// what is typed reaches the session as it is typed.
+				waitFor(t, "the size", func() bool { return len(s.sizes()) == 1 })
+				if _, err := master.Write([]byte("ls\r")); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "what was typed", func() bool { return s.got() == "ls\r" })
+
+				c.end(t, master, s, cancel)
+				c.check(t, await(t, done))
+				if !reflect.DeepEqual(mode(t, tty), was) {
+					t.Error("the terminal is not in the mode it was in")
+				}
+
+				// Typed after Attach has returned, in pieces.
+				want := ""
+				for _, piece := range typed {
+					if _, err := master.Write([]byte(piece)); err != nil {
+						t.Fatal(err)
+					}
+					want += piece
+				}
+				if got := readNext(t, tty, len(want)); got != want {
+					t.Errorf("the next reader of the terminal read %q, want %q", got, want)
+				}
+				if s.got() != "ls\r" {
+					t.Errorf("the session was sent %q, want what was typed while attached alone", s.got())
+				}
+
+				// The caller closes the session, and then nothing is left.
+				s.hangUp()
+				settled(t, before)
+				if !raw {
+					noSizeAfterReturn(t, master, s)
+				}
+			})
+		}
+	}
+}
+
+// Review Focus 1: what was typed and not read when Attach returned stays
+// in the terminal. The session takes no input here, so that Attach has
+// read the first key and not the second when its context ends it; the
+// Write that waits ends when the caller closes the session, and reads
+// nothing after that.
+func TestAttachLeavesWhatItHasNotRead(t *testing.T) {
+	before := baseline()
+	master, tty := terminal(t)
+	if _, err := xterm.MakeRaw(int(tty.Fd())); err != nil {
+		t.Fatal(err)
+	}
+	was := mode(t, tty)
+	s := newFakeSession(0)
+	s.stuck, s.release = make(chan struct{}), make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	a := newAttachment(tty, io.Discard, s)
+	done := start(ctx, a)
+	waitFor(t, "the size", func() bool { return len(s.sizes()) == 1 })
+
+	if _, err := master.Write([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-s.stuck:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first key was not written to the session")
+	}
+	// Attach is in the Write of the first key, and reads nothing.
+	if _, err := master.Write([]byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if got := await(t, done); !errors.Is(got.err, context.Canceled) {
+		t.Errorf("Attach = %+v (err: %v); want the error of the context", got, got.err)
+	}
+	if !reflect.DeepEqual(mode(t, tty), was) {
+		t.Error("the terminal is not in the mode it was in")
+	}
+	if _, err := master.Write([]byte("c")); err != nil {
+		t.Fatal(err)
+	}
+	if got := readNext(t, tty, 2); got != "bc" {
+		t.Errorf("the next reader of the terminal read %q, want %q", got, "bc")
+	}
+
+	// The caller closes the session: the Write returns, and the goroutine
+	// that was in it ends without reading the terminal again.
+	close(s.release)
+	s.hangUp()
+	select {
+	case <-a.inputEnded:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the goroutine that reads the terminal did not end with the Write it was in")
+	}
+	if _, err := master.Write([]byte("d")); err != nil {
+		t.Fatal(err)
+	}
+	if got := readNext(t, tty, 1); got != "d" {
+		t.Errorf("the next reader of the terminal read %q, want %q", got, "d")
+	}
+	settled(t, before)
+}
+
+// A panic of the goroutine that reads the session is passed on also while
+// the session takes no input: the Write that waits is not waited for,
+// which would swallow the panic and hold Attach for good.
+func TestAttachPanicWhileAWriteWaits(t *testing.T) {
+	before := baseline()
+	master, tty := terminal(t)
+	cooked := mode(t, tty)
+	s := newFakeSession(0)
+	s.stuck, s.release = make(chan struct{}), make(chan struct{})
+	done := start(context.Background(), newAttachment(tty, io.Discard, s))
+	waitFor(t, "the size", func() bool { return len(s.sizes()) == 1 })
+	if _, err := master.Write([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-s.stuck:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the key was not written to the session")
+	}
+
+	s.panicNext()
+	if got := await(t, done); !strings.Contains(got.panicked, "the session went wrong") {
+		t.Errorf("Attach = %+v (err: %v); want the panic of the session passed on", got, got.err)
+	}
+	if !reflect.DeepEqual(mode(t, tty), cooked) {
+		t.Error("the terminal was not restored")
+	}
+	close(s.release)
+	settled(t, before)
+}
+
+// The terminal fails: its other end is closed, as when the window is.
+// Attach returns with an error and leaves nothing.
+func TestAttachTerminalFails(t *testing.T) {
+	before := baseline()
+	master, tty := terminal(t)
+	s := newFakeSession(0)
+	done := start(context.Background(), newAttachment(tty, io.Discard, s))
+	waitFor(t, "the size", func() bool { return len(s.sizes()) == 1 })
+	master.Close()
+	got := await(t, done)
+	if got.err == nil || !strings.Contains(got.err.Error(), "reading the terminal") || got.detached {
+		t.Errorf("Attach = %+v (err: %v); want an error of reading the terminal", got, got.err)
+	}
+	s.hangUp()
+	settled(t, before)
+}
+
+// Review Focus 5, a terminal resized while a shell is open: every change
+// of size reaches the session, and the signal that tells of it, which
+// interrupts a wait for input, loses nothing of what is typed meanwhile.
+func TestAttachSizeChangesWhileTyping(t *testing.T) {
+	before := baseline()
+	master, tty := terminal(t)
+	s := newFakeSession(0)
+	done := start(context.Background(), newAttachment(tty, io.Discard, s))
+	waitFor(t, "the first size", func() bool { return len(s.sizes()) == 1 })
+
+	want := ""
+	for i := range 50 {
+		size := [2]uint16{uint16(81 + i), uint16(25 + i)}
+		if err := pty.Setsize(master, &pty.Winsize{Cols: size[0], Rows: size[1]}); err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Kill(os.Getpid(), syscall.SIGWINCH); err != nil {
+			t.Fatal(err)
+		}
+		key := fmt.Sprintf("%d,", i)
+		if _, err := master.Write([]byte(key)); err != nil {
+			t.Fatal(err)
+		}
+		want += key
+		waitFor(t, "the size", func() bool {
+			sizes := s.sizes()
+			return sizes[len(sizes)-1] == size
 		})
 	}
+	waitFor(t, "what was typed", func() bool { return s.got() == want })
+
+	s.hangUp()
+	if got := await(t, done); got.err != nil || got.detached {
+		t.Errorf("Attach = %+v (err: %v)", got, got.err)
+	}
+	settled(t, before)
 }
 
 func TestAttachTerminalShellEnds(t *testing.T) {

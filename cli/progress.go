@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/fables-for-robots/great-machine/human"
 	xterm "golang.org/x/term"
 )
 
@@ -156,10 +157,10 @@ func (p *progress) fail(err error) {
 	}
 	d := p.now().Sub(s.start)
 	if p.live {
-		fmt.Fprintf(p.out, "\r\033[K%s\n", liveLine("✗", s.name, took(d), how))
+		fmt.Fprintf(p.out, "\r\033[K%s\n", liveLine("✗", s.name, human.Took(d), how))
 		return
 	}
-	fmt.Fprintf(p.out, "%s: %s after %s\n", s.name, how, took(d))
+	fmt.Fprintf(p.out, "%s: %s after %s\n", s.name, how, human.Took(d))
 }
 
 // finish ends the show with a last line: what came of it all, and the
@@ -224,14 +225,14 @@ func (p *progress) run(stop <-chan struct{}, stopped chan<- struct{}) {
 // leave writes the line a step leaves behind. p.mu is held.
 func (p *progress) leave(mark, name string, d time.Duration, summary string) {
 	if p.live {
-		fmt.Fprintf(p.out, "\r\033[K%s\n", liveLine(mark, name, took(d), summary))
+		fmt.Fprintf(p.out, "\r\033[K%s\n", liveLine(mark, name, human.Took(d), summary))
 		return
 	}
 	if summary == "" {
-		fmt.Fprintf(p.out, "%s (%s)\n", name, took(d))
+		fmt.Fprintf(p.out, "%s (%s)\n", name, human.Took(d))
 		return
 	}
-	fmt.Fprintf(p.out, "%s: %s (%s)\n", name, summary, took(d))
+	fmt.Fprintf(p.out, "%s: %s (%s)\n", name, summary, human.Took(d))
 }
 
 // draw shows the running step: over its line on a terminal, and elsewhere
@@ -249,7 +250,7 @@ func (p *progress) draw(now time.Time) {
 		if s.counts {
 			rest = fmt.Sprintf("%s  %d/%d", bar(s.done, s.total), s.done, s.total)
 		}
-		line := liveLine(string(spinner[p.frame%len(spinner)]), s.name, took(now.Sub(s.start)), rest)
+		line := liveLine(string(spinner[p.frame%len(spinner)]), s.name, human.Took(now.Sub(s.start)), rest)
 		fmt.Fprintf(p.out, "\r\033[K%s", fit(line, p.width()))
 		return
 	}
@@ -257,7 +258,7 @@ func (p *progress) draw(now time.Time) {
 		return
 	}
 	s.said, s.saidDone = now, s.done
-	fmt.Fprintf(p.out, "%s: %d/%d after %s\n", s.name, s.done, s.total, took(now.Sub(s.start)))
+	fmt.Fprintf(p.out, "%s: %d/%d after %s\n", s.name, s.done, s.total, human.Took(now.Sub(s.start)))
 }
 
 // liveLine is a line on a terminal: a mark, what is done, for how long,

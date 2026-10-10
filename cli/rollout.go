@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/fables-for-robots/great-machine/closure"
+	"github.com/fables-for-robots/great-machine/human"
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/operator"
 	"github.com/fables-for-robots/great-machine/push"
@@ -187,7 +188,7 @@ func runRollout(ctx context.Context, cfg rolloutConfig, deps rolloutDeps, stdout
 	case result.Pushed == 0:
 		p.done("nothing to push")
 	default:
-		p.done(fmt.Sprintf("%d paths, %s", result.Pushed, byteSize(steps.bytes.Load())))
+		p.done(fmt.Sprintf("%d paths, %s", result.Pushed, human.Bytes(steps.bytes.Load())))
 	}
 
 	p.begin("connecting to draal")

@@ -42,18 +42,34 @@ const endOfInput = 0x04
 // exit is the exit status of the shell, and detached says that Detach
 // ended Attach and the shell still runs. A ctx that is done ends Attach
 // with the error of ctx. The session is not closed: that is the caller's
-// to do, and it ends what Attach has left reading.
+// to do, and it ends what Attach has left: the reading of the session,
+// and a Write to it that had not returned when ctx was done.
 //
-// On a terminal, when Attach returns for any reason but a detach, a
-// goroutine is left reading the terminal: a read of a terminal cannot be
-// interrupted the way this code reads it. The next input the user types, a
-// key or a line, is read by that goroutine and dropped, and it never
-// reaches the session. This does not matter to a caller whose process ends
-// after Attach, as `great-machine shell` does. A caller that lives on, the
-// terminal UI, must not call Attach on a terminal until that read is made
-// interruptible. After a detach nothing is left reading.
+// When Attach returns, for whatever reason, nothing of it reads in any
+// more: what is typed next is read by whoever reads in next. A caller
+// that lives on, as the terminal UI does, may read the terminal again at
+// once. What was typed and not read when Attach returned is still in the
+// terminal; what Attach had read and the session had not taken by then is
+// lost.
 //
-// Nothing is written to the session or to out once Attach has returned.
+// Attach is to be the only reader of in while it runs. On a terminal
+// another reader does no more harm than to take keys away: each key goes
+// to one of the two, and Attach still returns when it is to. While it is
+// attached, a read of the terminal returns at once, with nothing, when
+// nothing was typed (VMIN and VTIME are 0), which another reader has to
+// bear. In a file that is no terminal, a pipe above all, another reader
+// can take what Attach was about to read: Attach then waits in a read that
+// nothing ends but the next input or the end of in, returns only then,
+// and has read that input.
+//
+// Nothing is written to the session or to out once Attach has returned,
+// with one exception, when ctx ended it: a Write that was under way then
+// is not waited for, neither the one to the session nor the one to out,
+// since a session that takes no input, or a terminal that is held
+// (Ctrl-S), would keep Attach from returning. So one piece of what the
+// shell wrote, 32 KiB at most, may still be arriving on out when Attach
+// has returned for its context. Nothing follows it.
+//
 // Two more things where the documentation of the session leaves room:
 //
 //   - In a file that is no terminal the byte of Detach is data like any
@@ -87,9 +103,16 @@ type attachment struct {
 	// time, and toOut output to out, each until Attach returns.
 	toSession, toOut gate
 
-	// inputEnded is closed when the goroutine that reads in has ended,
-	// which may be long after Attach returned.
+	// inputEnded is closed when the goroutine that reads in has ended.
+	// That is before Attach returns, but when ctx ended Attach while a
+	// Write to the session had not returned: then it is when that Write
+	// returns. It reads in no more either way.
 	inputEnded chan struct{}
+
+	// Two hooks for tests. found is called when the reader has found
+	// input and before it reads it; stopped when the reading has stopped
+	// and before the terminal is restored.
+	found, stopped func()
 }
 
 func newAttachment(in *os.File, out io.Writer, s Session) *attachment {
@@ -108,14 +131,29 @@ func (a *attachment) run(ctx context.Context) (exit int, detached bool, err erro
 	fd := int(a.in.Fd())
 	a.tty = xterm.IsTerminal(fd)
 
+	in, err := newReader(a.in)
+	if err != nil {
+		return 0, false, err
+	}
+	in.found = a.found
+	// For the ways out before the reading has begun. On the others it is
+	// stopped earlier, below.
+	defer in.stop()
+
 	// Shutting the gates is deferred first and so happens last, when the
-	// terminal is restored. A Write that is under way is waited for, but
-	// not when ctx is done: a session that takes no more input would keep
-	// Attach from returning. That Write may then end after Attach.
+	// reading of in has stopped and the terminal is restored. A Write that
+	// is under way is waited for, and with it the goroutine that reads in,
+	// but not when ctx is done or a panic is passed on: a session that
+	// takes no more input would keep Attach from returning. That Write may
+	// then end after Attach.
 	wait := true
+	started := false
 	defer func() {
 		a.toSession.shut(wait)
 		a.toOut.shut(wait)
+		if wait && started {
+			<-a.inputEnded
+		}
 	}()
 
 	// A goroutine tells how it ended here. There is room for every one of
@@ -130,6 +168,10 @@ func (a *attachment) run(ctx context.Context) (exit int, detached bool, err erro
 		// Deferred, so that it happens however this function is left: by
 		// a return, or by the panic below.
 		defer xterm.Restore(fd, state)
+		// A read of the terminal is not to wait: see reader.
+		if err := in.noWait(); err != nil {
+			return 0, false, fmt.Errorf("term: making the terminal raw: %w", err)
+		}
 
 		a.sendSize()
 		changed, stop := notifyResize()
@@ -142,16 +184,23 @@ func (a *attachment) run(ctx context.Context) (exit int, detached bool, err erro
 		})
 	}
 
-	// Neither goroutine is waited for when Attach returns. The one that
-	// reads in cannot be interrupted while it waits in Read on a terminal:
-	// it ends with the next input of the user, or never. That input, a key
-	// or a line, is the user's and it is lost: the goroutine reads it, finds
-	// its gate shut and drops it, and nobody else gets it. The gate keeps it
-	// from the session, which is why the session is not harmed; the user
-	// is. After a detach nothing is left, the goroutine returned by itself.
-	// The one that reads the session ends when the caller closes the
-	// session, and what it reads after Attach has returned is dropped too.
-	a.spawn(results, a.input)
+	// Deferred last and so done first, while the terminal is still raw:
+	// from here on nothing of Attach reads in. What is typed from now on,
+	// and what was typed and not read, is in the terminal for whoever
+	// reads it next. The order matters: the mode that is restored may be
+	// one in which a read waits, and a read that waits holds stop up.
+	defer func() {
+		in.stop()
+		if a.stopped != nil {
+			a.stopped()
+		}
+	}()
+
+	// The goroutine that reads the session is not waited for when Attach
+	// returns: it ends when the caller closes the session, and what it
+	// reads after Attach has returned is dropped.
+	started = true
+	a.spawn(results, func() (result, bool) { return a.input(in) })
 	a.spawn(results, func() (result, bool) { return a.output(ctx), true })
 
 	select {
@@ -162,7 +211,9 @@ func (a *attachment) run(ctx context.Context) (exit int, detached bool, err erro
 		if r.panicked != "" {
 			// A panic in a goroutine would end the program with the
 			// terminal left raw. It goes on from here instead, behind the
-			// deferred Restore.
+			// deferred Restore. Nothing is waited for on the way: a Write
+			// to the session that does not return would swallow it.
+			wait = false
 			panic(r.panicked)
 		}
 		return r.exit, r.detached, r.err
@@ -193,9 +244,10 @@ func (a *attachment) sendSize() {
 }
 
 // input copies in to the session. It ends Attach when Detach was typed or
-// the terminal cannot be read. The end of an input that is no terminal
-// does not end Attach: the shell is told, and ends when it will.
-func (a *attachment) input() (result, bool) {
+// the terminal cannot be read, and ends by itself when the reading is
+// stopped. The end of an input that is no terminal does not end Attach:
+// the shell is told, and ends when it will.
+func (a *attachment) input(in *reader) (result, bool) {
 	defer close(a.inputEnded)
 	send := func(p []byte) bool {
 		return a.toSession.do(func() error {
@@ -206,7 +258,10 @@ func (a *attachment) input() (result, bool) {
 	buf := make([]byte, 4096)
 	last := byte('\n')
 	for {
-		n, err := a.in.Read(buf)
+		n, err := in.Read(buf)
+		if errors.Is(err, errStopped) {
+			return result{}, false
+		}
 		data := buf[:n]
 		if a.tty {
 			if i := bytes.IndexByte(data, Detach); i >= 0 {

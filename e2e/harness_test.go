@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -81,6 +82,7 @@ type pod struct {
 
 	mu        sync.Mutex
 	conn      node.Conn // the latest connection to draal
+	away      bool      // it does not dial draal: see keepAway
 	preloaded []string  // the bodies the preload endpoint was sent
 }
 
@@ -251,6 +253,12 @@ func (h *harness) startPod(name string) *pod {
 		Name:    name,
 		Version: "e2e",
 		Dial: func(ctx context.Context) (node.Conn, error) {
+			p.mu.Lock()
+			away := p.away
+			p.mu.Unlock()
+			if away {
+				return nil, errors.New("the test keeps this zathras away from draal")
+			}
 			conn, err := h.dial(ctx, key)
 			if err == nil {
 				p.mu.Lock()
@@ -292,6 +300,22 @@ func (p *pod) cut() {
 	if conn != nil {
 		conn.Close()
 	}
+}
+
+// keepAway closes the connection the zathras has to draal, and keeps it
+// from dialing draal again until comeBack.
+func (p *pod) keepAway() {
+	p.mu.Lock()
+	p.away = true
+	p.mu.Unlock()
+	p.cut()
+}
+
+// comeBack lets the zathras dial draal again.
+func (p *pod) comeBack() {
+	p.mu.Lock()
+	p.away = false
+	p.mu.Unlock()
 }
 
 // preloads returns everything the preload endpoint was sent.

@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/fables-for-robots/great-machine/tui"
 	"github.com/urfave/cli/v2"
 )
 
@@ -56,6 +57,7 @@ func commands() []*cli.Command {
 		statusCommand(),
 		logsCommand(),
 		shellCommand(),
+		tuiCommand(tuiDeps{in: os.Stdin, out: os.Stdout, run: tui.Run}),
 		versionCommand(),
 	}
 }

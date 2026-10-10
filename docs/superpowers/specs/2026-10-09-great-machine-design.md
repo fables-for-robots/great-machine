@@ -617,23 +617,88 @@ build: draal then serves one line that says the page was not built.
 ## 10. Terminal UI
 
 `great-machine tui` is a [Bubble Tea](https://github.com/charmbracelet/bubbletea)
-program that talks to draal as the other operator commands do. It has the
-views of the web page: services, a service, a zathras with its state, its
-figures as sparklines and its log, followed live. From a zathras, a key
-opens the shell: the TUI gives the terminal to the session and takes it
-back when the shell has ended or `Ctrl-]` was typed, which ends the
-session: the remote shell is hung up. `great-machine shell`
-is the same session without the TUI around it. Its exit status is that of
-the shell. With a standard input that is no terminal
-(`echo uptime | great-machine shell web`) the input is passed on as it is,
-and at its end the shell is told that its input has ended.
+program (version 2) that talks to draal as the other operator commands
+do: it takes `--draal` and `--key` and no argument, and draal lets it in
+by its allowlist. It needs a terminal as its standard input and its
+standard output, and says so with status 2 when either is none. It ends
+with 0 when the user quits, with 130 when it is interrupted, and with 1
+and draal's refusal when draal refuses the operator at the first dial. It
+can roll nothing out and nothing back.
 
-**Before the TUI can give the terminal to a session**, the session's read
-of the terminal has to be made interruptible. As stage 1 leaves it, a
-session on a terminal that ends for another reason than `Ctrl-]` leaves
-a read of the terminal behind, which takes the next thing that is typed
-and drops it. `great-machine shell` ends its process after the session,
-so nothing is lost there. A TUI lives on.
+It has the views of the web page, one at a time: the services; a service
+with its zathrases, the rollout under way and its last rollouts; a zathras
+with its state, its figures of the last 15 minutes as sparklines and the
+last 400 lines of its log, followed live. The keyboard alone drives it.
+Its colours are the terminal's own sixteen, so that it is light or dark
+as the terminal is, and it has no theme of its own; `NO_COLOR` is
+respected. It is made for 80 columns and 24 rows, uses more, draws down
+to 50 columns and 12 rows, and says so in one line below that.
+
+**Nothing that draal or a zathras sent reaches the terminal as it came.**
+A log line is what a program in a container wrote, and on a terminal an
+escape sequence can set the title, move the cursor over what is shown, or
+be answered by the terminal as if it had been typed. Every name, state,
+reason, refusal and log line is drawn through one function that takes
+control characters and escape sequences out; a log line keeps its colours
+by being read and drawn again in the terminal UI's own. The text of the
+error the command prints when it ends has been through the same function.
+The exception is a shell that the user opened: its output is the user's.
+
+When the connection is lost the terminal UI says so and for how long,
+keeps what it showed, dials again after 1 second and then after pauses
+that double up to 30 seconds (a key asks at once), and is back on the
+view it was on. A draal that takes the connection and does not answer
+within a minute is given up and dialed again, like one that could not be
+reached.
+
+**The terminal is left as it was found** on every way out: the user
+quits, the terminal UI is interrupted or told to end, it fails, a shell
+ends or is left. A terminal UI that does not end within 5 seconds of
+being told to is cut off, with the terminal restored, and says so. The
+one thing it waits for without a bound is a terminal that takes no
+output (a session over a network that has stalled): to end then would
+leave the terminal as it is, so it ends when the terminal takes output
+again or goes.
+
+What a zathras may send is bounded where it is taken: a word (a name, a
+phase, a reason, an argument, a refusal) is kept to 4 KiB and says how
+much was left out, and of its arguments and of the generations it has
+prepared 64 are shown. A column is never counted narrower than a terminal
+draws it, so that no name pushes the rest of its row off the screen.
+
+From a zathras that is connected, `s` opens the shell. The TUI asks draal
+for the session and keeps its screen until it is there, saying that the
+shell is being opened and that `Esc` gives it up; what draal refuses is
+said there too. Then it leaves its screen, writes one line that says
+whose shell it is, and gives the terminal to the session. It takes the
+terminal back when the shell has ended or `Ctrl-]` was typed; either way
+the session is closed, which hangs the remote shell up. From `s` until
+the shell has ended the TUI acts on no other key: what is typed while
+the shell is being opened is dropped, and while the shell has the
+terminal every key is the shell's and the TUI draws nothing. (In the few
+milliseconds in which the terminal changes hands a key may be dropped,
+and one typed in the instant before the shell takes the terminal may be
+the shell's or, rarely, be acted on by the TUI after the shell.) Afterwards it shows the
+fleet as it is then, and says how the shell ended. What ends the TUI ends
+the shell with it, and so does the connection to draal when it is lost,
+and a zathras that goes. A shell that does not end with the TUI is left
+behind after two seconds, and writes nothing to the terminal from then
+on.
+
+`great-machine shell` is the same session without the TUI around it. Its
+exit status is that of the shell. With a standard input that is no
+terminal (`echo uptime | great-machine shell web`) the input is passed on
+as it is, and at its end the shell is told that its input has ended.
+
+**A session's read of the terminal can be ended.** When the session
+returns, for whatever reason, nothing of it reads the terminal any more,
+so that the TUI, which lives on, loses no key. As stage 1 left it, a
+session on a terminal that ended for another reason than `Ctrl-]` left a
+read of the terminal behind, which took the next thing that was typed and
+dropped it; `great-machine shell` ends its process after the session, so
+nothing was lost there. Likewise a client of draal that is closed ends
+every watch, log and shell it started: the TUI dials again whenever the
+connection was lost, for as long as it runs.
 
 ## 11. Packages
 
@@ -662,7 +727,10 @@ Every package is at the top level of the module; there is no `internal/`.
 | `closure` | the closure of a store path, by `nix-store` | |
 | `push` | store paths to jaccard-store | jaccard-store, amber-store core |
 | `web` | the HTTP API and the embedded page | `draal` |
-| `tui` | the terminal UI | `operator` |
+| `tui` | the terminal UI, over an interface that the client of `operator` satisfies | `wire`, `term`, `human` |
+| `tui/tuitest` | a pseudo-terminal for the tests that run the terminal UI as a whole; part of no program | |
+| `human` | how a size, a duration, an age, a rate and a time are written for a person | `wire` |
+| `demo` | a made-up fleet behind `draal.Controller`, for developing the page (`web/demo`) and the terminal UI (`tui/demo`) | `draal` |
 | `term` | a remote shell session on the local terminal | |
 | `cli` | the commands, with urfave/cli | |
 | `cmd/great-machine` | `main` | `cli` |
@@ -759,6 +827,16 @@ Tests use the package `testing` of the standard library.
   attempts to connect, the lines it keeps of a log, the lines of the
   charts, and where a zathras stands in a rollout. What is drawn is
   looked at against a made-up fleet behind the real API (`web/demo`).
+- **The terminal UI**: its model without a terminal and without a
+  network, as a function of the messages it gets: every key, the
+  connection lost and back on every view, an answer that comes late.
+  What it draws at every size of terminal down to one column and one
+  row, and of a fleet whose every string is escape sequences, also by
+  fuzzing. The program in a pseudo-terminal, for the terminal on every
+  way out and around a shell. In `e2e`, in a pseudo-terminal against a
+  real draal with real zathrases: the fleet, a rollout, a log, a shell,
+  a zathras that goes while its shell is open, and draal lost and back.
+  What is drawn is looked at against the made-up fleet (`tui/demo`).
 
 ## 15. To be settled first
 
