@@ -20,6 +20,7 @@ import (
 	"github.com/creack/pty"
 	xterm "golang.org/x/term"
 
+	"github.com/fables-for-robots/great-machine/human"
 	"github.com/fables-for-robots/great-machine/tui/tuitest"
 	"github.com/fables-for-robots/great-machine/wire"
 )
@@ -1017,7 +1018,7 @@ func TestRunConnectWait(t *testing.T) {
 		return func(ctx context.Context) (Operator, error) { return op, nil }
 	}
 	waits := func(cfg *Config) { cfg.ConnectWait = connectWait }
-	said := fmt.Sprintf("draal did not answer within %v", connectWait)
+	said := "no answer within " + human.Took(connectWait)
 	// givenUpAndBack checks what follows an attempt that was given up:
 	// the screen says so, the second attempt answers and is shown, and
 	// the model was told of each attempt once.

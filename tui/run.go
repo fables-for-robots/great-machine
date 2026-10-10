@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/fables-for-robots/great-machine/human"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
@@ -626,7 +627,7 @@ func (r *runner) dial(epoch int) {
 			current := r.conn == c
 			r.mu.Unlock()
 			if current && r.ctx.Err() == nil {
-				r.send(dialFailedMsg{epoch: epoch, err: fmt.Errorf("draal did not answer within %v", r.cfg.ConnectWait)})
+				r.send(dialFailedMsg{epoch: epoch, err: errors.New("no answer within " + human.Took(r.cfg.ConnectWait))})
 			}
 			return
 		}

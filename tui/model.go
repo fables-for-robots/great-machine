@@ -60,7 +60,8 @@ const (
 // dialedMsg says that Dial has connected and the watch was begun.
 type dialedMsg struct{ epoch int }
 
-// dialFailedMsg says that Dial, or the beginning of the watch, failed.
+// dialFailedMsg says that Dial, or the beginning of the watch, failed,
+// or that the two had not answered within ConnectWait.
 type dialFailedMsg struct {
 	epoch int
 	err   error
