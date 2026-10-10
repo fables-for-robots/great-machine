@@ -170,9 +170,11 @@ func (r *reader) Read(p []byte) (int, error) {
 // it reports a hangup for a pseudo-terminal whose other end is closed, on
 // Linux and on macOS, where nothing else does (on macOS even the requests
 // for the mode and the size still succeed). It is asked without waiting,
-// and only once select and a read have disagreed. Should poll not know a
-// device, it reports nothing and the terminal is taken for alive: hence
-// the pause in Read.
+// and only once select and a read have disagreed. A device that poll does
+// not know is taken for alive, hence the pause in Read: poll reports such
+// a device with nothing or, as macOS does for /dev/tty, with POLLNVAL,
+// which is therefore no hangup. A descriptor that is not open at all has
+// failed select before poll is asked.
 func (r *reader) gone() bool {
 	fds := []unix.PollFd{{Fd: int32(r.fd), Events: unix.POLLIN}}
 	for {
@@ -180,8 +182,16 @@ func (r *reader) gone() bool {
 		if err == unix.EINTR {
 			continue
 		}
-		return err == nil && fds[0].Revents&(unix.POLLHUP|unix.POLLERR|unix.POLLNVAL) != 0
+		return err == nil && hungUp(fds[0].Revents)
 	}
+}
+
+// hungUp says whether the events poll reported are those of a terminal
+// whose other end is closed: a hangup or an error, which is what Linux
+// reports for it, both together. POLLNVAL is none: it says that poll does
+// not know the device.
+func hungUp(revents int16) bool {
+	return revents&(unix.POLLHUP|unix.POLLERR) != 0
 }
 
 // stop ends the reading: a Read that waits returns errStopped, and so does

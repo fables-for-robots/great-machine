@@ -273,3 +273,27 @@ func TestReaderReadIntoNoRoom(t *testing.T) {
 		t.Errorf("Read after stop = %v, want errStopped", err)
 	}
 }
+
+// On macOS poll answers POLLNVAL for /dev/tty, a device it does not know,
+// whether or not the terminal is alive, and a terminal that is alive must
+// not be taken for gone.
+func TestADeviceThatPollDoesNotKnowIsTakenForAlive(t *testing.T) {
+	cases := []struct {
+		name    string
+		revents int16
+		want    bool
+	}{
+		{"nothing", 0, false},
+		{"readable", unix.POLLIN, false},
+		{"not known", unix.POLLNVAL, false},
+		{"not known and readable", unix.POLLNVAL | unix.POLLIN, false},
+		{"hangup", unix.POLLHUP, true},
+		{"error", unix.POLLERR, true},
+		{"hangup and error", unix.POLLHUP | unix.POLLERR, true},
+	}
+	for _, c := range cases {
+		if got := hungUp(c.revents); got != c.want {
+			t.Errorf("hungUp(%s) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
