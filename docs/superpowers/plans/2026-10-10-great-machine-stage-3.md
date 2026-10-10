@@ -106,7 +106,9 @@ that shares it. While it is attached, a terminal is in a mode in which a
 read returns at once with nothing when there is nothing (`VMIN` and
 `VTIME` 0), so that another reader of the same terminal, which may take a
 key first, cannot hold `Attach` up; a read of nothing is told from a
-terminal that has gone by asking `poll` for a hangup.
+terminal that has gone by asking `poll` for a hangup. A device that
+`poll` does not know is taken for alive: macOS answers for `/dev/tty`
+that the request is invalid, which is therefore no hangup.
 
 What holds besides:
 
@@ -211,10 +213,11 @@ type Config struct {
 	// Draal is how the header names draal: the start of its endpoint ID.
 	Draal string
 	// Each of these has a default when it is zero:
-	RetryFirst time.Duration    // the first pause before Dial is tried again; 1 second
-	RetryMax   time.Duration    // the longest pause; 30 seconds
-	Now        func() time.Time // time.Now
-	Log        *slog.Logger     // nowhere: a terminal UI has no place to log to
+	RetryFirst  time.Duration    // the first pause before Dial is tried again; 1 second
+	RetryMax    time.Duration    // the longest pause; 30 seconds
+	ConnectWait time.Duration    // how long Dial and the first fleet may take before draal is tried again; 1 minute
+	Now         func() time.Time // time.Now
+	Log         *slog.Logger     // nowhere: a terminal UI has no place to log to
 }
 
 // Run runs the terminal UI until the user quits, which is nil, or ctx is
@@ -236,7 +239,16 @@ What draal refuses at the first dial, which is `Dial` and the first
 operator is not on the allowlist, and trying again changes nothing. Once
 draal has let the operator in, a later `unauthorized` is shown in the
 header and tried again like any other loss. A draal that does not answer
-is tried again from the start. A failure of the terminal UI itself (a
+is tried again from the start: one that cannot be reached, because its
+dial fails, and one that takes the connection and then says nothing,
+because from the call of `Dial` until the first fleet has come draal has
+`ConnectWait`, a minute. When that runs out the attempt is given up (its
+context ended, what was dialed closed), the terminal UI says "no answer
+within 1m00s", and draal is dialed again after the pause, as after a dial
+that failed. Whether draal answered or was given up is decided once: the
+terminal UI is never live on a connection that it hung up.
+
+A failure of the terminal UI itself (a
 panic in the model, in a view, or in a goroutine of the program) ends
 `Run` with an error that says so, with the terminal restored; nothing of
 it is written to the terminal.
@@ -248,6 +260,13 @@ the terminal restored, and `Run` says so in its error, in which
 does not return is waited for five seconds and then left, with a warning
 to `Config.Log`. What is left behind in either case is the goroutine that
 was stuck and what it holds; the process is about to end.
+
+One thing `Run` waits for without a bound: **a terminal that takes no
+output** (a session over a network that has stalled). The renderer is
+then held in its write, and with it the giving back of the terminal, by
+the program as by the cut. `Run` returns when the terminal takes output
+again or goes. To return before would leave the terminal raw and on the
+alternate screen, which is the one thing `Run` is never to do.
 
 How the program ends is decided once: a program that has taken its
 message to quit is ending by itself and is not cut off, and one that is
@@ -310,7 +329,8 @@ terminal and its screen meanwhile: a notice says that the shell is being
 opened and that `Esc` gives it up. What draal refuses, and a request that
 fails, is a notice; the screen is never left for it. When the session is
 there, the terminal UI leaves the alternate screen, writes one line that
-says whose shell it is and that `Ctrl-]` leaves it, gives the terminal to
+says whose shell it is (60 cells of its name at most) and that `Ctrl-]`
+leaves it, gives the terminal to
 the session (`term.Attach`, through Bubble Tea's `tea.Exec`) and takes it
 back when the shell has ended or `Ctrl-]` was typed; either way the
 session is closed, which hangs the shell up. Back in the terminal UI a
@@ -346,7 +366,11 @@ terminal. A shell that does not end with the context of `Run` (a session
 that does not return) is left behind after two seconds, and after half of
 the five seconds of the cut at the latest, with the terminal put back in
 the mode it was given away in, so that the program ends in its usual way
-and the cut never comes while a shell has the terminal. A panic of the
+and the cut never comes while a shell has the terminal. What a shell
+writes goes to the terminal through a writer that is shut when the
+terminal is taken back, on every way out: a shell that was left behind
+and comes loose later writes nothing (but the one piece that was being
+written when it was shut, which is not waited for). A panic of the
 session ends the terminal UI as a panic of its own does, with the
 terminal restored.
 
@@ -369,8 +393,12 @@ same time with the same stream and text as one that is held.
 
 An answer is taken only when it is the answer to the newest request of
 its kind, so that an older one that comes last changes nothing. A field
-of words (a name, a reason, an argument, a refusal) is kept to 4 KiB and
-says how much was left out; of the arguments 64 are kept. A sample that
+of words (a name, a phase, a reason, an argument, a refusal, the error
+of a shell) is kept to 4 KiB and says how much was left out; of the
+arguments 64 are kept, and of the generations a zathras has prepared 64
+are shown, with the number of the rest. A character is counted as wide as
+the wider of the renderer's two ways of counting has it, so that a column
+is never counted narrower than a terminal draws it. A sample that
 is more than an hour ahead of the terminal UI's own clock is left out, so
 that one wrong sample cannot move the window of the figures away from
 every true one; a zathras whose clock is that far ahead has no
@@ -451,6 +479,81 @@ The spec as it was approved did not have these. Each is in the spec now
 | **The terminal is given away only for a session that exists, and from `s` until the shell has ended no key is acted on** but `Esc`, which gives an opening up. | A review showed both sides of the moment the terminal changes hands. Bubble Tea carries out a request to give the terminal away some milliseconds after it was made, and a key typed in between was the terminal UI's: `s` twice opened two shells one after the other, `q` behind `s` quit the terminal UI under the shell. And as first built the terminal was given away before draal had answered: the user sat on their own screen with keys echoing, which later went to the shell, and only an interrupt of the whole terminal UI led out. | A key typed between `s` and the shell having the terminal is lost, whoever it was meant for. While a shell is being opened `q` quits nothing; `Esc` first. Within a few milliseconds of the terminal changing hands a key may be dropped, and one typed in the instant before the shell takes the terminal may be the shell's or be acted on after the shell. |
 | **While a shell has the terminal the terminal UI takes no message at all** (Bubble Tea's `tea.Exec`), and a shell that does not end with the terminal UI is left behind after two seconds. | Giving the terminal away whole is what makes every key the shell's and none the terminal UI's. Nothing of the program can then end a shell, so the shell ends by its own context; one that does not must not keep the terminal from being restored. | Nothing is drawn behind a shell, and what happened meanwhile is seen when it ends. A session that was left behind is hung up by the end of the process. |
 | **`tui.RunDrawn` and the package `tui/tuitest` are part of the module though only tests use them.** | The tests of `cli` and of `e2e` run the terminal UI as a whole and have to read its screen. Reading it out of the bytes the renderer writes failed about once in five runs on Linux: the renderer writes what changed, in pieces. A package of test helpers that three packages share cannot be a `_test.go` file. | One exported function that a program has no use for. `tuitest` imports `testing`; no program imports `tuitest`. |
+
+## Departures made while the plan was carried out
+
+The plan was carried out on 2026-10-10, task by task, each by one agent
+from its task file and each reviewed by another, and the whole then
+reviewed once more. Every review finding, every ruling and what was
+deferred is in [the ledger](2026-10-10-great-machine-stage-3/ledger.md).
+The task files are left as they were when the tasks were done from them;
+where the code now differs from them, this table says so. The contract
+above and the spec's section 10 say what the code does now.
+
+Before any mend, the code of every task as it was committed was the same,
+file by file and by its hash, as the tree this plan was checked in.
+
+| Where | What differs from the task file | Why |
+|---|---|---|
+| Task 1, `term/read_unix.go` | what `poll` reports is a hangup only with `POLLHUP` or `POLLERR`, not with `POLLNVAL`; a test of that rule | Task 1's review: macOS answers `POLLNVAL` for `/dev/tty`, a device its `poll` does not know, so a terminal that was alive was taken for gone when another reader took a key. |
+| Task 2, Step 7 | the step's `sed` does nothing with the `sed` of macOS; the same was done by hand | BSD sed. |
+| Tasks 4 and 5, the steps that add a dependency | `go mod tidy` after the code, not `go get` alone, makes the new requirements direct | As in stage 2. |
+| Task 4, `tui/text.go` | a character that is no nonspacing or enclosing mark is counted as the larger of the renderer's two counts for it (at most 2); spacing marks were counted 0. Tests of that, and of `capped` and `named`, which had none | Task 4's review: a name of base characters with spacing marks (Devanagari, Myanmar) was drawn up to seven times as wide as it was counted, and pushed the rest of its row off the screen. |
+| Task 5, `tui/model.go` | the phase a zathras reports is kept to 4 KiB like its other words | Task 5's review: it is a free string that nothing checks on the way, and every view draws it. |
+| Tasks 6, 7, 8 and 11, the steps "look at it, in a real terminal" | not done | They need a person at a terminal. Open; see below. |
+| Task 7, `tui/tui.go`, `tui/run.go` | **`Config.ConnectWait`** (1 minute): from the call of `Dial` until the first fleet, draal has that long; then the attempt is given up, the model is told "no answer within 1m00s", and it is dialed again like a dial that failed. Whether draal answered or was given up is decided once (`verdict`) | Task 7's review: a draal that took the connection and never answered the first watch left "Connecting to draal …" on the screen for good, with no dial again, against the contract's "a draal that does not answer is tried again from the start". The contract has one field more for it. |
+| Task 8, the repeated run of `tui` | needs `-timeout`: fifty runs with the race detector took 646 s on the loaded machine, and go test gives 600 | The machine was shared with the reviews. |
+| Task 8, `tui/shell.go` | what the goroutine of a shell writes to the terminal goes through a writer (`shutOut`) that is shut on every way out of the shell; once shut it throws away what it is given and says that it wrote it | Task 8's review: a shell that was left behind after the grace, and came loose later, wrote its output to the terminal after `Run` had returned (5 runs of 5 with a line queued); the test whose comment said it held this had a session with nothing to write. |
+| Task 10, `e2e/tui_test.go` | one test more, `TestTUIDraalLostWhileAShellIsOpen`: the real draal is stopped while a shell opened from the terminal UI has the terminal, and the shell ends by itself | Task 8's and Task 10's reviews: the only test of it ended a fake by hand. It passed at once: the real client's read fails when draal goes. |
+| Task 11, `README.md` | one sentence more: a draal that takes the connection and does not answer within a minute is given up and dialed again | Task 11's review, after Task 7's mend. |
+| Task 11, Step 4 | `git add -A` was not run; the commit is the README alone | The execution's rule: files are added by name. |
+| `tui/shell.go`, `shellSentence` | why a shell failed (a refusal, or the error of a session) is kept to 4 KiB | The final review: it was cleaned and not capped; 3 MiB of it cost 0.2 to 0.7 s for every message. |
+| `tui/run.go`, the end of `Run` | a program that was cut off says so in `Run`'s error also when it returns at once behind the cut; the comment of `Run` names the terminal that takes no output | The final review, and Task 7's review before it: the contract says that `Run` says so. |
+| `tui/run.go`, `do` | a connection that is hung up has its context ended at once, before the goroutine that closes it runs | Deferred by Task 8's review: a shell's look at that context raced with the goroutine. |
+| `tui/view_zathras.go` | of the generations a zathras has prepared 64 are named, with the number of the rest | The final review: a million of them cost 0.2 s for every message. The model keeps the list whole, since where a zathras stands in a rollout reads it. |
+| `tui/shell.go`, the line above a shell | 60 cells of the name at most, cut in the middle | The final review: a name of 4 KiB was some fifty lines on the user's own screen. |
+| `tui/model.go`, `tui/styles.go`, `demo/fleet.go` | `rolloutsFrom`, `fatal` and `stHead`, which nothing read, are gone; the demo's comments name both of its users | The final review. |
+| Commits | each ends with the attribution of the agent that made it | The agents' sessions say so. |
+
+What stays open, each with its reason in the ledger:
+
+- **A person at a real terminal has not used it.** The screens were read
+  in a terminal emulator when the plan was written, and the tests run it
+  in pseudo-terminals. The keys under another keyboard layout or protocol,
+  and what a terminal answers to Bubble Tea's own questions after the
+  program has ended, can only be seen there.
+- **Nothing was run on x86_64 Linux**, which is what the workflow on
+  GitHub runs. The branch vets for it. The final review expects a failure
+  there, if one comes, to be one of the waits on pseudo-terminals under
+  load, and says to run again before diagnosing.
+- **`Run` waits for a terminal that takes no output** (the exception the
+  contract now names).
+- On the path of the cut, a panic or a failure of the program that comes
+  behind the cut is said as the cut alone. The cancel at once of a
+  connection that is hung up is right by reading and held by no test
+  that fails without it. `term.Attach` of a shell that ends in the
+  instant its context ends can still go the way that waits for a write
+  to the session.
+- Some fifty findings that the task reviews rated minor and the final
+  review said may stay, among them: no test that a request under way when
+  a client is closed fails with `ErrClosed` (the terminal UI does not rely
+  on it); the "runs" field of a zathras is cleaned and wrapped whole for
+  three rows; the terminal UI's dial has 2 seconds per attempt in the
+  tests of `e2e`; `tui/run.go` and `tui/text.go` are large.
+- Three waiting times are constants and no field of a `Config`: the 10 ms
+  of `term`'s reader between reads that got nothing, the 50 ms between
+  batches of a log, and the second of the clock's tick. They are paces,
+  not bounds on anything that could fail.
+- **For stage 1's code, not this branch:** a service that a zathras started
+  outlives a zathras whose process is killed (it is in a process group of
+  its own, and nothing ends it with its parent). In the tests that is a
+  test process that is killed or runs out of time: one such service was
+  found running eight hours after a run made while this plan was written.
+
+At the end, on the head of the branch (the last commit of code is
+799838a): `gofmt -l .` prints nothing, `go vet ./...` is clean, and
+`go test ./...` passes uncached in all 30 packages on arm64 macOS and on
+arm64 Linux in a container; the Nix build works and names `tui`.
 
 ## What was run while this plan was written
 

@@ -647,12 +647,24 @@ The exception is a shell that the user opened: its output is the user's.
 When the connection is lost the terminal UI says so and for how long,
 keeps what it showed, dials again after 1 second and then after pauses
 that double up to 30 seconds (a key asks at once), and is back on the
-view it was on.
+view it was on. A draal that takes the connection and does not answer
+within a minute is given up and dialed again, like one that could not be
+reached.
 
 **The terminal is left as it was found** on every way out: the user
 quits, the terminal UI is interrupted or told to end, it fails, a shell
 ends or is left. A terminal UI that does not end within 5 seconds of
-being told to is cut off, with the terminal restored.
+being told to is cut off, with the terminal restored, and says so. The
+one thing it waits for without a bound is a terminal that takes no
+output (a session over a network that has stalled): to end then would
+leave the terminal as it is, so it ends when the terminal takes output
+again or goes.
+
+What a zathras may send is bounded where it is taken: a word (a name, a
+phase, a reason, an argument, a refusal) is kept to 4 KiB and says how
+much was left out, and of its arguments and of the generations it has
+prepared 64 are shown. A column is never counted narrower than a terminal
+draws it, so that no name pushes the rest of its row off the screen.
 
 From a zathras that is connected, `s` opens the shell. The TUI asks draal
 for the session and keeps its screen until it is there, saying that the
@@ -668,7 +680,10 @@ milliseconds in which the terminal changes hands a key may be dropped,
 and one typed in the instant before the shell takes the terminal may be
 the shell's or, rarely, be acted on by the TUI after the shell.) Afterwards it shows the
 fleet as it is then, and says how the shell ended. What ends the TUI ends
-the shell with it.
+the shell with it, and so does the connection to draal when it is lost,
+and a zathras that goes. A shell that does not end with the TUI is left
+behind after two seconds, and writes nothing to the terminal from then
+on.
 
 `great-machine shell` is the same session without the TUI around it. Its
 exit status is that of the shell. With a standard input that is no
