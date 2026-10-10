@@ -193,6 +193,14 @@ export function isRefusal(v: unknown): v is Refusal {
   return typeof e === "object" && e !== null && typeof (e as { message?: unknown }).message === "string";
 }
 
+/** Says whether v is a fleet as /api/watch sends one: an object that is
+ *  no refusal and has services, whatever they are (normaliseFleet makes
+ *  a list of them). The last message of a socket that draal ends for a
+ *  failure is a refusal, and is none. */
+export function isFleet(v: unknown): v is { services: unknown } {
+  return typeof v === "object" && v !== null && !Array.isArray(v) && !isRefusal(v) && "services" in v;
+}
+
 /** The fleet of a message, with every list a list: services and
  *  zathrases that are null or absent are empty. This is the one place
  *  where the page distrusts the shape of what draal sends. */

@@ -22,8 +22,8 @@ export function pause(attempt: number, chance: number): number {
 }
 
 /** The state of a connection that is kept: connecting until the first
- *  message ever, live after a message, lost from the end of a socket
- *  until the next message. */
+ *  message ever that was taken, live after such a message, lost from the
+ *  end of a socket until the next one. */
 export type Connection = "connecting" | "live" | "lost";
 
 /** What a kept connection needs of a socket. A WebSocket is one. */
@@ -38,8 +38,11 @@ export interface SocketLike {
 export interface KeepOptions {
   /** Opens a socket. */
   open: () => SocketLike;
-  /** A message of the socket that is open. */
-  onMessage: (data: unknown) => void;
+  /** A message of the socket that is open. It says whether it took the
+   *  message as what the connection is kept for: draal's last message
+   *  on a socket that fails is a refusal, which is none. A message is
+   *  handed on before the state it leads to. */
+  onMessage: (data: unknown) => boolean;
   /** The state, whenever it changes. */
   onState: (state: Connection) => void;
   /** setTimeout and clearTimeout, or what stands for them in a test. */
@@ -59,7 +62,8 @@ export interface Kept {
 }
 
 /** Opens a socket and keeps one open: when it ends, another is opened
- *  after a pause, and the pauses grow until a message arrives. */
+ *  after a pause, and the pauses grow until a message arrives that is
+ *  taken. */
 export function keep(options: KeepOptions): Kept {
   const setTimer = options.setTimer ?? ((run, ms) => setTimeout(run, ms));
   const clearTimer = options.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>));
@@ -120,11 +124,14 @@ export function keep(options: KeepOptions): Kept {
       if (stopped || socket !== s) {
         return;
       }
-      // A message is what shows that draal is there: the pauses start
-      // over.
+      // A message that is taken is what shows that draal is there: the
+      // pauses start over. One that is not, a refusal, shows nothing:
+      // a socket that gave no more is one that gave nothing.
+      if (!options.onMessage(event.data)) {
+        return;
+      }
       attempt = 0;
       set("live");
-      options.onMessage(event.data);
     };
     s.onclose = () => ended(s);
     s.onerror = () => ended(s);

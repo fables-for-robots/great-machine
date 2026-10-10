@@ -62,7 +62,11 @@ function world(chance = 1) {
       sockets.push(s);
       return s;
     },
-    onMessage: (data) => messages.push(data),
+    // What the test calls a refusal is a message that is not taken.
+    onMessage: (data) => {
+      messages.push(data);
+      return data !== "refusal";
+    },
     onState: (s) => states.push(s),
     setTimer: (run, ms) => {
       const t = { run, ms, cleared: false };
@@ -135,6 +139,64 @@ describe("a connection that is kept", () => {
     expect(w.timers.map((t) => t.ms)).toEqual([1000, 2000, 4000]);
   });
 
+  // Final review A1: draal's last message on a socket that fails is a
+  // refusal. It is no fleet, and no sign that draal is there.
+  test("a socket that gave only a message that was not taken is one that gave nothing", () => {
+    const w = world();
+    w.last().say("fleet");
+    w.last().end();
+    expect(w.timers.map((t) => t.ms)).toEqual([1000]);
+
+    // draal is there and fails: every socket says so and ends.
+    for (let i = 0; i < 3; i++) {
+      w.elapse();
+      w.last().say("refusal");
+      expect(w.states).toEqual(["live", "lost"]);
+      w.last().end();
+    }
+    // The pause after such a socket is longer than the one before it.
+    expect(w.timers.map((t) => t.ms)).toEqual([1000, 2000, 4000, 8000]);
+    expect(w.messages).toEqual(["fleet", "refusal", "refusal", "refusal"]);
+
+    // A fleet after that is taken, and the pauses start over.
+    w.elapse();
+    w.last().say("fleet again");
+    expect(w.states).toEqual(["live", "lost", "live"]);
+    w.last().end();
+    expect(w.timers[w.timers.length - 1]!.ms).toBe(1000);
+  });
+
+  test("a first socket that gave only a message that was not taken leaves the page connecting, then lost", () => {
+    const w = world();
+    w.last().say("refusal");
+    expect(w.states).toEqual([]);
+    w.last().end();
+    expect(w.states).toEqual(["lost"]);
+  });
+
+  // Final review A2: who hears that the connection is live finds what
+  // the message brought already taken.
+  test("the message is handed on before the state is live", () => {
+    const order: string[] = [];
+    const sockets: FakeSocket[] = [];
+    keep({
+      open: () => {
+        const s = new FakeSocket();
+        sockets.push(s);
+        return s;
+      },
+      onMessage: () => {
+        order.push("message");
+        return true;
+      },
+      onState: (s) => order.push(s),
+      setTimer: () => 0,
+      clearTimer: () => {},
+    });
+    sockets[0]!.say("fleet");
+    expect(order).toEqual(["message", "live"]);
+  });
+
   test("the end of a socket counts once, though it says so twice", () => {
     const w = world();
     const first = w.last();
@@ -194,7 +256,7 @@ describe("a connection that is kept", () => {
       open: () => {
         throw new Error("no socket");
       },
-      onMessage: () => {},
+      onMessage: () => true,
       onState: (s) => states.push(s),
       setTimer: (_run, ms) => pauses.push(ms),
       clearTimer: () => {},

@@ -3,7 +3,7 @@ import { createEffect, createMemo, For, Show } from "solid-js";
 import mark from "../assets/mark-white.png";
 import { isID } from "../api/types";
 import { ago, shortID } from "../format";
-import { connection, findZathras, freshAt, now, received } from "../state/fleet";
+import { connection, findZathras, freshAt, now, received, refusal } from "../state/fleet";
 
 // A step of the path: what it is called and where it leads.
 interface Crumb {
@@ -98,11 +98,16 @@ export default function Layout(props: RouteSectionProps) {
           <p>
             <Show
               when={received()}
-              fallback="draal does not answer. The page keeps trying, with pauses that grow to half a minute."
+              fallback={`${
+                refusal() ? "draal answers, and does not send the fleet." : "draal does not answer."
+              } The page keeps trying, with pauses that grow to half a minute.`}
             >
               The connection to draal is lost. What is below is the fleet as it was {ago(freshAt(), now())}; the page keeps
               trying and carries on from here when draal is back.
             </Show>
+            {/* Final review A1: when draal ended the socket of the fleet
+                with a refusal, its own sentence says why. It is text. */}
+            <Show when={refusal()}> What draal said last: “{refusal()}”.</Show>
           </p>
         </div>
       </Show>
