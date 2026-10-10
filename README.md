@@ -308,9 +308,14 @@ an IP address, or whatever name a tunnel, a forward or a proxy gives it.
   elsewhere while the port is reachable from it.
 
 **Behind a proxy.** A proxy in front of draal has to authenticate whoever
-it lets through: it is then all the authentication there is. It may pass
-requests on under any name. A proxy that does not authenticate puts a
-shell in every container on the network it listens on.
+it lets through: it is then all the authentication there is. The name
+under which the proxy is reached may be any name, but the proxy has to
+pass on the `Host` header the browser sent, unchanged. One that rewrites
+it (nginx does by default; there it takes `proxy_set_header Host
+$http_host;`) loads the page and gets `403` for every WebSocket, so the
+page then says that its connection is lost. A proxy that does not
+authenticate puts a shell in every container on the network it listens
+on.
 
 `--web-addr ""` (or an empty `GREAT_MACHINE_WEB_ADDR`) turns the page off:
 nothing listens.
@@ -568,6 +573,11 @@ Vite in another:
 go run ./web/demo           # the real API on 127.0.0.1:8080, no draal and no cluster
 cd ui && npm run dev        # the page on http://localhost:5173/, reloaded as it is edited
 ```
+
+**The shell of the demo is a real one**: a shell on the machine that runs
+the demo, as the user who runs it. The demo has no authentication and
+answers under any host name, like draal's page, so its `--addr` should
+stay on loopback, which is its default.
 
 Vite passes `/api`, WebSockets included, on to `127.0.0.1:8080`, which
 can be a real draal as well.
