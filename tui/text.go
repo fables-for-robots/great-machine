@@ -72,20 +72,22 @@ type span struct {
 }
 
 // runeWidth returns how many cells a printable character takes: 2 for
-// the wide ones, 0 for a mark that sits on the character before it. It
-// is the width the renderer counts for the characters of the scripts
-// the terminal UI is tested with; where a script joins its characters
-// in ways this does not know, a column may stand a cell off, and that
-// is all: the renderer puts every character into a cell of its own
-// making.
+// the wide ones; 0 for a mark that takes no cell of its own (a
+// nonspacing or an enclosing one); for every other character the larger
+// of the two counts the renderer has, by graphemes and by characters, as
+// the terminal has it, so that a column is never counted narrower than a
+// terminal draws it. Where the two differ (a spacing mark of Devanagari
+// or Myanmar, which a terminal that joins it to its base draws in the
+// base's cell) a column is padded a cell short on such a terminal, and
+// that is all.
 func runeWidth(r rune) int {
 	switch {
 	case r < 0x7f:
 		return 1
-	case unicode.Is(unicode.M, r):
+	case unicode.Is(unicode.Mn, r), unicode.Is(unicode.Me, r):
 		return 0
 	}
-	return min(ansi.StringWidth(string(r)), 2)
+	return min(max(ansi.StringWidth(string(r)), ansi.StringWidthWc(string(r))), 2)
 }
 
 // dropped says whether r is a character that draws nothing and is left

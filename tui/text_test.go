@@ -441,3 +441,98 @@ func FuzzClean(f *testing.F) {
 		}
 	})
 }
+
+// The width this package counts is never below what either of the
+// renderer's two ways of counting gives, for a mark after a base
+// character, alone or three in a row: a zathras whose name is made of
+// such marks must not draw wider than the column it was cut to.
+func TestWidthIsNeverBelowWhatTheRendererCounts(t *testing.T) {
+	var failed []string
+	count := 0
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if !unicode.Is(unicode.M, r) {
+			continue
+		}
+		for _, base := range []string{"a", "世"} {
+			m := string(r)
+			for _, x := range []string{clean(base + m), clean(base + m + m + m)} {
+				w, g, c := width(x), ansi.StringWidth(x), ansi.StringWidthWc(x)
+				if w < g || w < c {
+					count++
+					if len(failed) < 10 {
+						failed = append(failed, fmt.Sprintf("U+%04X %+q: width %d, graphemes %d, characters %d", r, x, w, g, c))
+					}
+				}
+			}
+		}
+	}
+	if count > 0 {
+		t.Errorf("%d strings are counted narrower than the renderer counts them; the first %d:\n%s", count, len(failed), strings.Join(failed, "\n"))
+	}
+}
+
+// A line of spacing marks is cut and padded to the width asked for by
+// both of the renderer's counts, so that its row keeps the columns that
+// follow it on the screen.
+func TestALineOfSpacingMarksIsCutToItsWidth(t *testing.T) {
+	long := strings.Repeat("काा", 40)
+	for _, w := range []int{1, 2, 7, 20} {
+		x := cut(long, w)
+		p := pad(x, w)
+		for name, s := range map[string]string{"cut": x, "pad": p} {
+			if g, c := ansi.StringWidth(s), ansi.StringWidthWc(s); g > w || c > w {
+				t.Errorf("%s(%d) = %+q is %d cells by graphemes and %d by characters", name, w, s, g, c)
+			}
+		}
+	}
+}
+
+// capped keeps a field to fieldCap bytes and says how much it left out.
+func TestCappedKeepsAFieldToItsLimit(t *testing.T) {
+	note := func(n int) string { return fmt.Sprintf(" … (%d bytes more)", n) }
+	exact := strings.Repeat("x", fieldCap)
+	if got := capped(exact); got != exact {
+		t.Errorf("a field of exactly fieldCap bytes came back changed: %d bytes", len(got))
+	}
+	for _, tt := range []struct {
+		name, in string
+		keep     int
+	}{
+		{"one byte over", exact + "y", fieldCap},
+		{"a megabyte", strings.Repeat("x", 1<<20), fieldCap},
+		{"é across the limit", strings.Repeat("x", fieldCap-1) + "é" + "tail", fieldCap - 1},
+		{"世 across the limit", strings.Repeat("x", fieldCap-1) + "世" + "tail", fieldCap - 1},
+		{"世 across the limit, 2 in", strings.Repeat("x", fieldCap-2) + "世" + "tail", fieldCap - 2},
+	} {
+		got := capped(tt.in)
+		want := tt.in[:tt.keep] + note(len(tt.in)-tt.keep)
+		if got != want {
+			t.Errorf("%s: capped = %.20q… (%d bytes), want %.20q… (%d bytes)", tt.name, got, len(got), want, len(want))
+		}
+		if len(got) > fieldCap+48 {
+			t.Errorf("%s: %d bytes, more than fieldCap and the room of the note", tt.name, len(got))
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("%s: not valid UTF-8", tt.name)
+		}
+		if again := capped(got); again != got {
+			t.Errorf("%s: capped twice is %.20q… (%d bytes), once %d bytes", tt.name, again, len(again), len(got))
+		}
+	}
+}
+
+// named is a name, and never a hole in a line.
+func TestNamedSaysWhenThereIsNoName(t *testing.T) {
+	none := named("")
+	if none == "" || unsafe(none) != "" {
+		t.Fatalf("named(\"\") = %q", none)
+	}
+	for _, in := range []string{"\x1b]0;x\x07", "   ", "\x00\u200b"} {
+		if got := named(in); got != none {
+			t.Errorf("named(%q) = %q, want %q", in, got, none)
+		}
+	}
+	if got := named("web\x1b]0;pwned\x07-1\x1b[10;10H"); got != "web-1" || unsafe(got) != "" {
+		t.Errorf("named of a hostile name = %q", got)
+	}
+}
