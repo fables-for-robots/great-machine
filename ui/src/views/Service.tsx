@@ -214,17 +214,34 @@ function History(props: { service: string; last: RolloutInfo | undefined }) {
   const id = createMemo(() => props.last?.id);
   const state = createMemo(() => props.last?.state);
 
+  // Another service (the router keeps this component when only the name
+  // in the path changes): nothing of the one before stays, neither its
+  // rollouts nor why they could not be asked for. This effect is before
+  // the one that asks, so it has run when that one does; and what was
+  // asked for the other service is given up by then, and not heard.
+  createEffect(
+    on(service, () => {
+      setList(undefined);
+      setFailure(undefined);
+    }),
+  );
+
   createEffect(
     on([service, id, state, lives], ([service]) => {
       const abort = new AbortController();
       onCleanup(() => abort.abort());
       askRollouts(service, abort.signal).then(
         (answer) => {
+          if (abort.signal.aborted) {
+            return;
+          }
           setList(answer.rollouts);
           setFailure(undefined);
         },
         (err: unknown) => {
-          if (err instanceof ApiError && err.code === "aborted") {
+          // What was given up says nothing, however it ended: it may be
+          // the request of another service.
+          if (abort.signal.aborted || (err instanceof ApiError && err.code === "aborted")) {
             return;
           }
           setFailure(err instanceof Error ? err.message : String(err));
