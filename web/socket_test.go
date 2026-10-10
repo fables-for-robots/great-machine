@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -635,8 +636,9 @@ func TestLogsFloodArrivesInOrder(t *testing.T) {
 // socket within WriteWait of the message it does not take, and holds up
 // nobody else meanwhile. The page that reads has to be read all the while,
 // the wait for the other included: on a fast machine its 500 lines are
-// through in less than WriteWait, and a page that is left unread for
-// WriteWait is cut too, and rightly.
+// through before the other is cut, and a page that is left unread for
+// WriteWait is cut too, and rightly. WriteWait is two seconds, so that a
+// machine that is busy has room to schedule the test between two reads.
 func TestSocketOfAPageThatDoesNotReadIsClosedAndHoldsUpNoOther(t *testing.T) {
 	calls := make(chan context.Context, 2)
 	line := wire.LogLine{Stream: "stdout", Text: strings.Repeat("x", 16<<10)}
@@ -659,7 +661,7 @@ func TestSocketOfAPageThatDoesNotReadIsClosedAndHoldsUpNoOther(t *testing.T) {
 	// No ping falls into this test: only the deadline of a write may end the
 	// page that does not read; a ping would end it too, later, and hide a
 	// write that has no deadline.
-	srv := serveSockets(t, Config{Controller: &fake{logs: endless}, WriteWait: 200 * time.Millisecond, PingEvery: time.Hour})
+	srv := serveSockets(t, Config{Controller: &fake{logs: endless}, WriteWait: 2 * time.Second, PingEvery: time.Hour})
 
 	// The first page never reads. The lines fill what the connection
 	// holds, and then one of them is not taken.
@@ -713,7 +715,9 @@ func TestSocketOfAPageThatDoesNotReadIsClosedAndHoldsUpNoOther(t *testing.T) {
 		if err == nil {
 			continue
 		}
-		if status := websocket.CloseStatus(err); status != -1 {
+		if errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("the page that did not read still had lines to give after %s, or was never cut: %v", deadline, err)
+		} else if status := websocket.CloseStatus(err); status != -1 {
 			t.Errorf("the socket of the page that did not read was closed with %v, want it cut", status)
 		}
 		break
@@ -732,7 +736,13 @@ func TestSocketOfAPageThatDoesNotReadIsClosedAndHoldsUpNoOther(t *testing.T) {
 		}
 	}
 	stop()
-	<-readErr
+	// The only end that is right is the one that was caused: the library
+	// closes the connection of a read whose context is cancelled, and
+	// the read says either that or that the connection is closed. A cut
+	// by the server would be an EOF or a close from the other side.
+	if err := <-readErr; !errors.Is(err, context.Canceled) && !errors.Is(err, net.ErrClosed) {
+		t.Errorf("the page that reads ended with %v after it was told to stop, want the cancellation", err)
+	}
 }
 
 func TestIdleSocketIsPingedAndOneThatDoesNotAnswerIsClosed(t *testing.T) {
