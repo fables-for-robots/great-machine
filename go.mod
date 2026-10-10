@@ -3,8 +3,10 @@ module github.com/fables-for-robots/great-machine
 go 1.26.3
 
 require (
+	charm.land/lipgloss/v2 v2.0.6
 	github.com/amber-store/core v0.10.0
 	github.com/amber-store/jaccard-store v0.7.0
+	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/coder/websocket v1.8.14
 	github.com/creack/pty v1.1.24
 	github.com/fxamacker/cbor/v2 v2.9.2
@@ -38,6 +40,13 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.43.2 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.2 // indirect
 	github.com/aws/smithy-go v1.28.1 // indirect
+	github.com/charmbracelet/colorprofile v0.4.3 // indirect
+	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
+	github.com/charmbracelet/x/term v0.2.2 // indirect
+	github.com/charmbracelet/x/termios v0.1.1 // indirect
+	github.com/charmbracelet/x/windows v0.2.2 // indirect
+	github.com/clipperhouse/displaywidth v0.11.0 // indirect
+	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
@@ -48,14 +57,19 @@ require (
 	github.com/johannesboyne/gofakes3 v1.2.0 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.6 // indirect
+	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
+	github.com/mattn/go-runewidth v0.0.24 // indirect
+	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.33 // indirect
 	github.com/quic-go/quic-go v0.62.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/ryszard/goskiplist v0.0.0-20150312221310-2dfbae5fcf46 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
 	go.shabbyrobe.org/gocovmerge v0.0.0-20230507111327-fa4f82cfbf4d // indirect
