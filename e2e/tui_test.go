@@ -362,3 +362,56 @@ func TestTUIDraalLostAndBack(t *testing.T) {
 		t.Errorf("Run = %v, want the error of its context", err)
 	}
 }
+
+// The connection to draal is lost while a shell opened from the terminal UI
+// has the terminal. Nothing in the terminal UI can end the shell then: it
+// takes no key and no message while the shell has the terminal, so only the
+// session's own read failing ends it, and no test before this one made that
+// read fail against a real draal (the one test of a stopped draal had no
+// shell open). No key is typed to get out. The shell ends by itself, with a
+// sentence, the header says the connection is lost, the shell's process and
+// its session are gone; when draal is back the same view is alive again and
+// a shell can be opened over the new connection.
+func TestTUIDraalLostWhileAShellIsOpen(t *testing.T) {
+	h := start(t, options{zathrases: 1})
+	h.await(h.rollout("--stdout", hello), wire.RolloutCompleted)
+	u := h.startUI()
+	u.openZathras("web-0")
+	u.Wait("● running for", inLog)
+
+	mark := len(u.Written())
+	u.Type("s")
+	mark = u.WaitWritten(mark, "great-machine: a shell on web-0. Ctrl-] leaves it.")
+	pid := u.shellPID(mark)
+
+	h.stopDraal()
+	// Nothing is typed: the shell ends because its session's read fails.
+	screen := u.WaitFor("say how the shell ended, and that the connection is lost", func(screen string) bool {
+		return strings.Contains(screen, "The shell ended: ") && strings.Contains(screen, "✖ lost for")
+	})
+	t.Logf("the shell that draal's loss ended:\n%s", lineWith(screen, "The shell ended: "))
+	eventually(t, "the shell of the lost connection to be gone", func() bool { return !alive(pid) })
+
+	h.startDraal()
+	t.Cleanup(func() { h.stopDraal() })
+	u.WaitFor("show the same zathras over the new connection", func(screen string) bool {
+		return strings.Contains(screen, "● live") && !strings.Contains(screen, "The connection to draal is lost") &&
+			strings.Contains(screen, "great-machine › web › web-0") && strings.Contains(screen, "● running for") &&
+			strings.Contains(screen, "Log · followed live") && strings.Count(screen, inLog) == 1
+	})
+	noSessionLeft(t)
+
+	// A shell over the new connection.
+	mark = len(u.Written())
+	u.Type("s")
+	mark = u.WaitWritten(mark, "great-machine: a shell on web-0. Ctrl-] leaves it.")
+	u.shellPID(mark)
+	u.Type("exit\r")
+	u.Wait("The shell ended.")
+
+	u.stop()
+	if err := u.end(); !errors.Is(err, context.Canceled) {
+		t.Errorf("Run = %v, want the error of its context", err)
+	}
+	noSessionLeft(t)
+}
