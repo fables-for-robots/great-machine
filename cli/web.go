@@ -76,10 +76,14 @@ func (w *webServer) counted(handler http.Handler) http.Handler {
 			// added to those it waits for. No request begins this late,
 			// for the listener is closed and the server begins none on
 			// a connection it keeps, but for one: on a connection that
-			// was accepted just before, whose request comes when
-			// Shutdown has given up and Close has not been called yet.
-			// It is not answered, and Close ends its connection.
+			// was accepted just before the listener closed, whose
+			// request comes when Shutdown has returned and Close has
+			// not ended the connection yet. It is not handed to the
+			// handler and not counted. It is told why in one line, and
+			// that its connection ends; Close ends it.
 			w.mu.Unlock()
+			rw.Header().Set("Connection", "close")
+			http.Error(rw, "great-machine: draal is stopping", http.StatusServiceUnavailable)
 			return
 		}
 		w.handlers.Add(1)

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -160,5 +161,61 @@ func TestWebServerStopGivesUp(t *testing.T) {
 	}
 	if !strings.Contains(logged.String(), "still being answered") {
 		t.Errorf("Stop logged %q, want it to say that requests were still being answered", logged.String())
+	}
+}
+
+// TestWebServerAnswersARequestThatBeginsAfterStopWithItsReason: the one
+// request that can begin after the server was told to stop, on a
+// connection that was accepted just before the listener closed, is
+// answered 503 with a line that says why, is not handed to the handler,
+// and is not counted among those Stop waits for.
+//
+// When such a request comes through the server is a matter of an
+// instant between Shutdown and Close. So the test does not wait for one:
+// it asks the server's own handler, the one the guard is in, after Stop.
+func TestWebServerAnswersARequestThatBeginsAfterStopWithItsReason(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var answered atomic.Int32
+	handler := http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		answered.Add(1)
+		io.WriteString(rw, "the page")
+	})
+	var logged buffer
+	w := startWeb(listener, handler, 5*time.Second, quietLog(&logged))
+
+	// Before Stop a request is the handler's.
+	before := httptest.NewRecorder()
+	w.server.Handler.ServeHTTP(before, httptest.NewRequest(http.MethodGet, "/", nil))
+	if before.Code != http.StatusOK || before.Body.String() != "the page" || answered.Load() != 1 {
+		t.Fatalf("before Stop: %d %q, and the handler was asked %d times; want 200, the page, once", before.Code, before.Body.String(), answered.Load())
+	}
+
+	w.Stop()
+	for _, path := range []string{"/", "/api/watch", "/assets/index-1a2b.js"} {
+		after := httptest.NewRecorder()
+		w.server.Handler.ServeHTTP(after, httptest.NewRequest(http.MethodGet, path, nil))
+		if after.Code != http.StatusServiceUnavailable || after.Body.String() != "great-machine: draal is stopping\n" {
+			t.Errorf("%s after Stop: %d %q, want 503 and the line that says that draal is stopping", path, after.Code, after.Body.String())
+		}
+		if ct := after.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+			t.Errorf("%s after Stop: the content type is %q, want plain text", path, ct)
+		}
+	}
+	if answered.Load() != 1 {
+		t.Errorf("the handler was asked %d times, want once: nothing after Stop", answered.Load())
+	}
+	// Nothing of them is waited for: the count is where Stop left it.
+	ended := make(chan struct{})
+	go func() {
+		w.handlers.Wait()
+		close(ended)
+	}()
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Error("a request that was refused after Stop is counted among those being answered")
 	}
 }
