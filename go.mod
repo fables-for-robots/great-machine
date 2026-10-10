@@ -3,6 +3,7 @@ module github.com/fables-for-robots/great-machine
 go 1.26.3
 
 require (
+	charm.land/bubbletea/v2 v2.0.10
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/amber-store/core v0.10.0
 	github.com/amber-store/jaccard-store v0.7.0
