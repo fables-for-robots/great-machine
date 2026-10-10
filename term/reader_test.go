@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -71,7 +72,7 @@ func TestAttachWithAnotherReaderOfTheTerminal(t *testing.T) {
 	// Nothing more is typed. Attach returns all the same.
 	cancel()
 	if got := await(t, done); !errors.Is(got.err, context.Canceled) {
-		t.Errorf("Attach = %+v; want the error of the context", got)
+		t.Errorf("Attach = %+v (err: %v); want the error of the context", got, got.err)
 	}
 	if !reflect.DeepEqual(mode(t, tty), cooked) {
 		t.Error("the terminal is not in the mode it was in")
@@ -123,7 +124,7 @@ func TestAttachGoesOnAfterAnotherReaderTookAKey(t *testing.T) {
 	waitFor(t, "the keys that follow", func() bool { return s.got() == "bc" })
 	s.hangUp()
 	if got := await(t, done); got.err != nil || got.detached {
-		t.Errorf("Attach = %+v", got)
+		t.Errorf("Attach = %+v (err: %v)", got, got.err)
 	}
 	settled(t, before)
 }
@@ -155,7 +156,7 @@ func TestAttachRestoresHowLongAReadWaits(t *testing.T) {
 	}
 	s.hangUp()
 	if got := await(t, done); got.err != nil {
-		t.Errorf("Attach = %+v", got)
+		t.Errorf("Attach = %+v (err: %v)", got, got.err)
 	}
 	if got := vminVtime(t, fd); got != [2]uint8{5, 3} {
 		t.Errorf("after Attach VMIN and VTIME are %v, want 5 and 3", got)
@@ -234,16 +235,90 @@ func TestAttachTellsATerminalThatIsGone(t *testing.T) {
 	waitFor(t, "what was typed", func() bool { return s.got() == "abc" })
 	select {
 	case got := <-done:
-		t.Fatalf("Attach returned %+v while the terminal is there", got)
+		t.Fatalf("Attach returned %+v (err: %v) while the terminal is there", got, got.err)
 	default:
 	}
 	master.Close()
 	got := await(t, done)
 	if got.err == nil || !strings.Contains(got.err.Error(), "the terminal has gone") {
-		t.Errorf("Attach = %+v; want the error of a terminal that has gone", got)
+		t.Errorf("Attach = %+v (err: %v); want the error of a terminal that has gone", got, got.err)
 	}
 	s.hangUp()
 	settled(t, before)
+}
+
+// rawReader returns a reader of tty in the mode of Attach: raw, and a
+// read does not wait.
+func rawReader(t *testing.T, tty *os.File) *reader {
+	t.Helper()
+	if _, err := xterm.MakeRaw(int(tty.Fd())); err != nil {
+		t.Fatal(err)
+	}
+	in, err := newReader(tty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(in.stop)
+	if err := in.noWait(); err != nil {
+		t.Fatal(err)
+	}
+	return in
+}
+
+// failNextRead makes the next read of the terminal by in fail with EIO,
+// and those after it read the terminal.
+func failNextRead(in *reader) {
+	failed := false // the reader reads in one goroutine
+	in.read = func(fd int, p []byte) (int, error) {
+		if !failed {
+			failed = true
+			return 0, unix.EIO
+		}
+		return unix.Read(fd, p)
+	}
+}
+
+// On Linux a read of a pseudo-terminal whose other end has just been
+// closed fails with EIO until the hangup has gone through, and returns
+// nothing from then on. That instant cannot be held open from a test, so
+// the read is made to fail as it does then: the terminal has gone, for
+// Read and for the reading of Attach alike.
+func TestAReadThatFailsAsTheTerminalGoesSaysThatItHasGone(t *testing.T) {
+	master, tty := terminal(t)
+	in := rawReader(t, tty)
+	master.Close()
+
+	failNextRead(in)
+	buf := make([]byte, 8)
+	if n, err := in.Read(buf); n != 0 || !errors.Is(err, errGone) {
+		t.Errorf("Read = %d, %v; want errGone", n, err)
+	}
+
+	a := newAttachment(tty, io.Discard, newFakeSession(0))
+	a.tty = true
+	failNextRead(in)
+	got, ends := a.input(in)
+	if !ends || got.err == nil || !strings.Contains(got.err.Error(), "the terminal has gone") {
+		t.Errorf("the reading of Attach = %+v (err: %v), %v; want the error of a terminal that has gone", got, got.err, ends)
+	}
+}
+
+// A terminal that is there fails a read with EIO, too: for one, a read by
+// a process that may not read it. That is an error of the read, and the
+// terminal has not gone.
+func TestAReadThatFailsOfATerminalThatIsThereIsAnError(t *testing.T) {
+	master, tty := terminal(t)
+	in := rawReader(t, tty)
+	if _, err := master.Write([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+
+	failNextRead(in)
+	buf := make([]byte, 8)
+	n, err := in.Read(buf)
+	if n != 0 || !errors.Is(err, unix.EIO) || errors.Is(err, errGone) {
+		t.Errorf("Read = %d, %v; want the error of the read", n, err)
+	}
 }
 
 // A Read into no room returns at once, as a Read of a file does, and

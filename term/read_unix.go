@@ -55,6 +55,11 @@ type reader struct {
 	// input and before it is read.
 	found func()
 
+	// read, when a test has set it, is called in place of unix.Read to
+	// read the file: through it a read fails as it does only at an instant
+	// that a test cannot bring about.
+	read func(fd int, p []byte) (int, error)
+
 	stopped atomic.Bool
 	mu      sync.Mutex // held while Read waits for the file or reads it
 	once    sync.Once
@@ -140,10 +145,19 @@ func (r *reader) Read(p []byte) (int, error) {
 		if r.found != nil {
 			r.found()
 		}
-		n, err := unix.Read(r.fd, p)
+		read := unix.Read
+		if r.read != nil {
+			read = r.read
+		}
+		n, err := read(r.fd, p)
 		switch {
 		case err == unix.EINTR || err == unix.EAGAIN:
 			continue
+		case err == unix.EIO && r.tty && r.gone():
+			// The other end of the terminal has just been closed: on
+			// Linux a read fails with EIO until the kernel has hung the
+			// terminal up. See gone.
+			return 0, errGone
 		case err != nil:
 			return 0, fmt.Errorf("read: %w", err)
 		case n > 0:
@@ -153,9 +167,10 @@ func (r *reader) Read(p []byte) (int, error) {
 		}
 		// A terminal whose reads do not wait had nothing. Either it has
 		// gone: then select says for ever that it can be read, and a read
-		// returns nothing, on Linux and on macOS alike. Or another reader
-		// took what select had found: then there is nothing to do but to
-		// wait again.
+		// returns nothing, on macOS and, once the hangup has gone
+		// through, on Linux (before it a read fails with EIO, above). Or
+		// another reader took what select had found: then there is
+		// nothing to do but to wait again.
 		if r.gone() {
 			return 0, errGone
 		}
@@ -169,8 +184,15 @@ func (r *reader) Read(p []byte) (int, error) {
 // gone says whether the other end of the terminal is closed. poll tells:
 // it reports a hangup for a pseudo-terminal whose other end is closed, on
 // Linux and on macOS, where nothing else does (on macOS even the requests
-// for the mode and the size still succeed). It is asked without waiting,
-// and only once select and a read have disagreed. A device that poll does
+// for the mode and the size still succeed). A read does not tell it
+// alone: on Linux a read of a pseudo-terminal whose other end has just
+// been closed fails with EIO until the kernel has hung the terminal up,
+// and returns nothing from then on, and poll reports the hangup in both;
+// on macOS a read returns nothing. But a read fails with EIO for other
+// reasons too, as one by a process that may not read the terminal, and
+// returns nothing when another reader took what select had found. It is
+// asked without waiting, and only once select and a read have disagreed
+// or a read of the terminal has failed with EIO. A device that poll does
 // not know is taken for alive, hence the pause in Read: poll reports such
 // a device with nothing or, as macOS does for /dev/tty, with POLLNVAL,
 // which is therefore no hangup. A descriptor that is not open at all has
@@ -187,9 +209,10 @@ func (r *reader) gone() bool {
 }
 
 // hungUp says whether the events poll reported are those of a terminal
-// whose other end is closed: a hangup or an error, which is what Linux
-// reports for it, both together. POLLNVAL is none: it says that poll does
-// not know the device.
+// whose other end is closed: a hangup or an error. Linux reports both
+// together for a terminal it has hung up, and a hangup alone in the
+// instant before, when its other end has been closed. POLLNVAL is none:
+// it says that poll does not know the device.
 func hungUp(revents int16) bool {
 	return revents&(unix.POLLHUP|unix.POLLERR) != 0
 }

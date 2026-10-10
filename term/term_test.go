@@ -202,7 +202,7 @@ func TestAttachInputIsNoTerminal(t *testing.T) {
 	waitFor(t, "the end of the input", func() bool { return s.got() == "up\x1dtime\n\x04" })
 	select {
 	case r := <-done:
-		t.Fatalf("Attach returned %+v at the end of the input, before the shell had ended", r)
+		t.Fatalf("Attach returned %+v (err: %v) at the end of the input, before the shell had ended", r, r.err)
 	default:
 	}
 
@@ -333,7 +333,7 @@ func TestAttachInputIsAFile(t *testing.T) {
 			waitFor(t, "the end of the input", func() bool { return s.got() == c.want })
 			s.hangUp()
 			if got := await(t, done); got.err != nil || got.exit != 0 {
-				t.Errorf("Attach = %+v", got)
+				t.Errorf("Attach = %+v (err: %v)", got, got.err)
 			}
 			settled(t, before)
 		})
@@ -552,14 +552,14 @@ var waysOut = []struct {
 		func(t *testing.T, master *os.File, s *fakeSession, cancel func()) { s.hangUp() },
 		func(t *testing.T, got attached) {
 			if got.err != nil || got.detached || got.exit != 42 || got.panicked != "" {
-				t.Errorf("Attach = %+v; want 42, false, nil", got)
+				t.Errorf("Attach = %+v (err: %v); want 42, false, nil", got, got.err)
 			}
 		}},
 	{"the context is done",
 		func(t *testing.T, master *os.File, s *fakeSession, cancel func()) { cancel() },
 		func(t *testing.T, got attached) {
 			if !errors.Is(got.err, context.Canceled) || got.detached {
-				t.Errorf("Attach = %+v; want the error of the context", got)
+				t.Errorf("Attach = %+v (err: %v); want the error of the context", got, got.err)
 			}
 		}},
 	{"the session fails",
@@ -568,7 +568,7 @@ var waysOut = []struct {
 		},
 		func(t *testing.T, got attached) {
 			if got.err == nil || !strings.Contains(got.err.Error(), "the connection was lost") || got.detached {
-				t.Errorf("Attach = %+v; want the error of the session", got)
+				t.Errorf("Attach = %+v (err: %v); want the error of the session", got, got.err)
 			}
 		}},
 	{"a detach",
@@ -579,14 +579,14 @@ var waysOut = []struct {
 		},
 		func(t *testing.T, got attached) {
 			if got.err != nil || !got.detached {
-				t.Errorf("Attach = %+v; want detached", got)
+				t.Errorf("Attach = %+v (err: %v); want detached", got, got.err)
 			}
 		}},
 	{"a panic",
 		func(t *testing.T, master *os.File, s *fakeSession, cancel func()) { s.panicNext() },
 		func(t *testing.T, got attached) {
 			if !strings.Contains(got.panicked, "the session went wrong") {
-				t.Errorf("Attach = %+v; want the panic of the session passed on", got)
+				t.Errorf("Attach = %+v (err: %v); want the panic of the session passed on", got, got.err)
 			}
 		}},
 }
@@ -696,7 +696,7 @@ func TestAttachLeavesWhatItHasNotRead(t *testing.T) {
 	}
 	cancel()
 	if got := await(t, done); !errors.Is(got.err, context.Canceled) {
-		t.Errorf("Attach = %+v; want the error of the context", got)
+		t.Errorf("Attach = %+v (err: %v); want the error of the context", got, got.err)
 	}
 	if !reflect.DeepEqual(mode(t, tty), was) {
 		t.Error("the terminal is not in the mode it was in")
@@ -748,7 +748,7 @@ func TestAttachPanicWhileAWriteWaits(t *testing.T) {
 
 	s.panicNext()
 	if got := await(t, done); !strings.Contains(got.panicked, "the session went wrong") {
-		t.Errorf("Attach = %+v; want the panic of the session passed on", got)
+		t.Errorf("Attach = %+v (err: %v); want the panic of the session passed on", got, got.err)
 	}
 	if !reflect.DeepEqual(mode(t, tty), cooked) {
 		t.Error("the terminal was not restored")
@@ -768,7 +768,7 @@ func TestAttachTerminalFails(t *testing.T) {
 	master.Close()
 	got := await(t, done)
 	if got.err == nil || !strings.Contains(got.err.Error(), "reading the terminal") || got.detached {
-		t.Errorf("Attach = %+v; want an error of reading the terminal", got)
+		t.Errorf("Attach = %+v (err: %v); want an error of reading the terminal", got, got.err)
 	}
 	s.hangUp()
 	settled(t, before)
@@ -807,7 +807,7 @@ func TestAttachSizeChangesWhileTyping(t *testing.T) {
 
 	s.hangUp()
 	if got := await(t, done); got.err != nil || got.detached {
-		t.Errorf("Attach = %+v", got)
+		t.Errorf("Attach = %+v (err: %v)", got, got.err)
 	}
 	settled(t, before)
 }
