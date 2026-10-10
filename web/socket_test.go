@@ -633,7 +633,10 @@ func TestLogsFloodArrivesInOrder(t *testing.T) {
 
 // Review Focus 5, the slow browser: a page that does not read loses its
 // socket within WriteWait of the message it does not take, and holds up
-// nobody else meanwhile.
+// nobody else meanwhile. The page that reads has to be read all the while,
+// the wait for the other included: on a fast machine its 500 lines are
+// through in less than WriteWait, and a page that is left unread for
+// WriteWait is cut too, and rightly.
 func TestSocketOfAPageThatDoesNotReadIsClosedAndHoldsUpNoOther(t *testing.T) {
 	calls := make(chan context.Context, 2)
 	line := wire.LogLine{Stream: "stdout", Text: strings.Repeat("x", 16<<10)}
@@ -671,10 +674,33 @@ func TestSocketOfAPageThatDoesNotReadIsClosedAndHoldsUpNoOther(t *testing.T) {
 		}
 	}
 
+	// Keep reading until the other is cut: the log does not end, and a
+	// page that reads nothing for WriteWait is cut like the one that
+	// does not read.
+	for end := time.Now().Add(deadline); stuckCtx.Err() == nil && time.Now().Before(end); {
+		var got wire.LogLine
+		nextText(t, reader, &got)
+	}
 	isDone(t, "the socket of the page that does not read to be closed", stuckCtx)
 	if readerCtx.Err() != nil {
 		t.Error("the socket of the page that reads was closed with the other")
 	}
+	// From here on the reader is read by a goroutine, for the loop over
+	// the stuck page below takes time in which the test reads nothing of
+	// it. The goroutine does not call t.Fatal: it hands its error back.
+	var read atomic.Int64
+	rctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	readErr := make(chan error, 1)
+	go func() {
+		for {
+			if _, _, err := reader.Read(rctx); err != nil {
+				readErr <- err
+				return
+			}
+			read.Add(1)
+		}
+	}()
 	// What the stuck page finds when it reads at last: what was on the
 	// way, and then a connection that was cut, not a close.
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
@@ -689,9 +715,21 @@ func TestSocketOfAPageThatDoesNotReadIsClosedAndHoldsUpNoOther(t *testing.T) {
 		}
 		break
 	}
-	// And the other is served still.
-	var got wire.LogLine
-	nextText(t, reader, &got)
+	// And the other is served still: a line comes after the stuck page
+	// was read to its end.
+	before := read.Load()
+	for end := time.Now().Add(deadline); read.Load() == before; time.Sleep(time.Millisecond) {
+		select {
+		case err := <-readErr:
+			t.Fatalf("reading the page that reads: %v", err)
+		default:
+		}
+		if time.Now().After(end) {
+			t.Fatal("the page that reads was served no more lines")
+		}
+	}
+	stop()
+	<-readErr
 }
 
 func TestIdleSocketIsPingedAndOneThatDoesNotAnswerIsClosed(t *testing.T) {
