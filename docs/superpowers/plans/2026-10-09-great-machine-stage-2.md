@@ -433,6 +433,7 @@ where the code now differs from them, this table says so.
 | `cli/web.go` | a request that begins after the stop is answered 503 with a line | Deferred by Task 5's review; it had been an empty 200. |
 | `e2e/http_test.go` | the test of a shell that takes no input floods with lines and asserts that its typing was held up | Deferred by Task 6's review: the test had not reached its case. |
 | `README.md`, `deploy/draal.yaml` | who may forward a port to the pod has the page; nginx's headers for a WebSocket; `npm test` | Deferred by Task 11's review. |
+| `web/socket_test.go`, the test of a page that reads slowly | the page that reads is read for as long as the test needs it open; no ping falls into the test; `WriteWait` is 2 seconds | The first run on GitHub failed there: the reading page was left unread while the test waited, and on a fast Linux machine it was cut too. The handler was right. |
 | Commits | each ends with the attribution of the agent that made it | The agents' sessions say so; Task 0's five name the controller's model. |
 
 What stays open, each with its reason in the ledger: four small things
@@ -501,10 +502,12 @@ were done step by step from their files, and each file the tasks left was
 compared with the tree the plan was verified in (identical, until the
 reviews' mends); the page was opened against a real draal (it said that
 draal knows no service yet); the image was built by Nix with the whole
-page and its draal served it. Still not run: Firefox and Safari, the
-image for amd64, the GitHub workflows with their new steps,
-`kubectl port-forward`, a proxy in front of draal, `web` and `cli` on
-Linux, and the page against a real draal with zathrases and a rollout.
+page and its draal served it. The test workflow then ran on GitHub with
+its new steps, on x86_64 Linux: after one test was mended (see the
+table above) every step passes, the Nix build and the amd64 image, each
+asked for the page, among them. Still not run: Firefox and Safari, the
+release workflow, `kubectl port-forward`, a proxy in front of draal, and
+the page against a real draal with zathrases and a rollout.
 
 One test of stage 1, `TestRolloutOfABinaryThatExitsHaltsAndIsRolledBack`,
 failed once while two whole suites ran at the same time on one machine
