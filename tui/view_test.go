@@ -181,7 +181,9 @@ func TestOddStatesAreSentences(t *testing.T) {
 		{"zathras-asking", []string{"Figures", "Log · no line has come yet"}},
 		{"zathras-gone", []string{"✖ This zathras is not connected to draal any more, since 12:00:10 (15s ago).", "Below is what it reported last.", "pid 31000", "Log · ended", "— The log has ended."}},
 		{"zathras-backoff", []string{"✖ backoff, starts again in 6s · generation 21, not the stable one of web (20)", "exit 1 at 11:59:57 (3s ago), after 2.3s, of generation 21"}},
-		{"zathras-notice", []string{"The shell is not part of this terminal UI yet"}},
+		{"zathras-notice", []string{"The shell ended with status 3."}},
+		{"zathras-no-shell", []string{"No shell was opened: zathras 22ab12cd is not connected"}},
+		{"zathras-opening-shell", []string{"Opening a shell on web-7d9f8b6c4-8hjwz … esc gives it up"}},
 		{"zathras-scrolled", []string{"G goes to the end"}},
 		{"zathras-help", []string{"on a zathras: open a shell", "q Ctrl-C quit", "● running ◐ stopping ✖ backoff ○ idle"}},
 	} {

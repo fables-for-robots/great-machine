@@ -225,7 +225,8 @@ type model struct {
 
 	screen screen
 	help   bool
-	notice string // one line that is said once: gone with the next key
+	notice string     // one line that is said once: gone with the next key
+	sh     shellState // the shell that was asked for, if one was
 
 	// screenServices: what is chosen, by name, and where it was.
 	svcName string
@@ -418,6 +419,8 @@ func (m *model) take(msg tea.Msg) []effect {
 		}
 	case logEndedMsg:
 		m.logEnded(msg)
+	case shellOpenedMsg:
+		return m.shellOpened(msg)
 	case shellEndedMsg:
 		return m.shellEnded(msg)
 	}
@@ -470,7 +473,9 @@ func (m *model) lost(msg lostMsg) []effect {
 	}
 	m.epoch++ // nothing of the old connection is read from here on
 	m.pause = m.cfg.RetryFirst
-	return []effect{effHangUp{}, m.wait()}
+	// A shell that draal was asked for over it is not waited for.
+	effs := m.giveUpShell("No shell was opened: the connection to draal was lost.")
+	return append(effs, effHangUp{}, m.wait())
 }
 
 // newFleet takes a fleet. The first one of a connection makes the
@@ -657,6 +662,11 @@ func (m *model) logEnded(msg logEndedMsg) {
 
 // key takes a key by its name.
 func (m *model) key(name string) []effect {
+	// From the key that asks for a shell until the shell has ended, no
+	// key is the model's but the one that gives the shell up.
+	if effs, taken := m.shellTakesKey(name); taken {
+		return effs
+	}
 	if name == "q" || name == "ctrl+c" {
 		return []effect{effQuit{}}
 	}

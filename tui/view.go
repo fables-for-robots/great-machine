@@ -174,12 +174,17 @@ func (m *model) banner() []string {
 	return out
 }
 
-// noticeLines is the one line that is said once, when there is one.
+// noticeLines is what is said once, when there is something: a line,
+// or as many as three when it is long, as the error of a shell may be.
 func (m *model) noticeLines() []string {
 	if m.notice == "" || m.tooSmall() {
 		return nil
 	}
-	return []string{line(m.width, seg{" " + m.notice, stWarn})}
+	var out []string
+	for _, l := range wrap(m.notice, m.width-2, 3) {
+		out = append(out, line(m.width, seg{" " + l, stWarn}))
+	}
+	return out
 }
 
 // keys draws the last line: the keys that work here. In a terminal
@@ -192,6 +197,11 @@ func (m *model) keys() string {
 	}
 	var keys []key
 	switch {
+	case m.sh.stage == shellOpening:
+		// No other key does anything while a shell is being opened.
+		keys = []key{{"esc", "give the shell up", 0}}
+	case m.sh.stage == shellOpen:
+		keys = nil
 	case m.help:
 		keys = []key{{"any key", "back", 1}, {"q", "quit", 0}}
 	case m.screen == screenServices:

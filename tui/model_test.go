@@ -184,20 +184,23 @@ func TestKeys(t *testing.T) {
 	press(m, "?")
 	wantEffects(t, "q while the keys are shown", press(m, "q"), effQuit{})
 
-	// s on a zathras: the place of the shell.
+	// s on a zathras that is connected asks draal for a shell, and says
+	// so. On one that is gone it says so, and asks for nothing; the
+	// next key takes the line away.
 	m = zathras()
-	wantEffects(t, "s on a zathras", press(m, "s"))
-	if m.notice == "" {
-		t.Error("s on a zathras says nothing")
+	wantEffects(t, "s on a zathras", press(m, "s"), effShell{epoch: 1, zathras: m.zathras, n: 1})
+	if !strings.Contains(m.notice, "Opening a shell on "+m.seen.Name) {
+		t.Errorf("s on a zathras says %q", m.notice)
+	}
+	m = zathras()
+	m.present = false
+	wantEffects(t, "s on a zathras that is gone", press(m, "s"))
+	if !strings.Contains(m.notice, "not connected") {
+		t.Errorf("s on a zathras that is gone says %q", m.notice)
 	}
 	press(m, "j")
 	if m.notice != "" {
 		t.Errorf("after the next key the notice is still %q", m.notice)
-	}
-	m.present = false
-	press(m, "s")
-	if !strings.Contains(m.notice, "not connected") {
-		t.Errorf("s on a zathras that is gone says %q", m.notice)
 	}
 }
 
@@ -755,7 +758,7 @@ func TestAgainAsksForWhatTheViewHolds(t *testing.T) {
 	press(m, "enter")
 	m.update(logMsg{epoch: 1, id: m.logID, lines: fixtureLines(10)})
 	id := m.logID
-	wantEffects(t, "on a zathras", m.update(shellEndedMsg{}), effHistory{epoch: 1, zathras: idOf(0x20)}, effFollow{epoch: 1, zathras: idOf(0x20), id: id + 1})
+	wantEffects(t, "on a zathras", m.update(shellEndedMsg{opened: true}), effHistory{epoch: 1, zathras: idOf(0x20)}, effFollow{epoch: 1, zathras: idOf(0x20), id: id + 1})
 	// What was on its way is not read, and the ring that comes anew
 	// brings no line twice.
 	m.update(logMsg{epoch: 1, id: id, lines: fixtureLines(10)})
@@ -940,7 +943,7 @@ func TestEverySizeOfTerminal(t *testing.T) {
 			if len(lines) != 1 || (w >= 20 && !strings.Contains(lines[0], "Too small")) {
 				t.Fatalf("%s at %d×%d: a terminal that is too small has %q", what, w, h, lines)
 			}
-		} else if len(lines) != h || !strings.Contains(lines[0], "great-machine") || !strings.Contains(lines[h-1], "quit") {
+		} else if len(lines) != h || !strings.Contains(lines[0], "great-machine") || !strings.Contains(lines[h-1], "quit") && !strings.Contains(lines[h-1], "give the shell up") {
 			t.Fatalf("%s at %d×%d: %d lines, from %q to %q; want the header first and the keys last", what, w, h, len(lines), lines[0], lines[len(lines)-1])
 		}
 	}

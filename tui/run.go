@@ -80,7 +80,7 @@ func run(ctx context.Context, cfg Config, drawn func(view string), opts ...tea.P
 	}
 	cfg = cfg.withDefaults()
 	all, end := context.WithCancel(context.WithoutCancel(ctx))
-	prog := &program{m: newModel(cfg), r: &runner{cfg: cfg, ctx: all}, drawn: drawn}
+	prog := &program{m: newModel(cfg), r: &runner{cfg: cfg, ctx: all, user: ctx}, drawn: drawn}
 	prog.r.crash = func(v any) { prog.recovered(v) }
 	// The context is not given to Bubble Tea: it would end by closing
 	// its reader of the terminal under the read. It is asked to quit.
@@ -302,6 +302,15 @@ func (p *program) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 	if p.crashed() {
 		return p, tea.Quit
 	}
+	if crash, ok := msg.(shellCrashedMsg); ok {
+		// Something failed while a shell had the terminal. Bubble Tea has
+		// taken the terminal back, and the program ends as after a panic
+		// of its own.
+		p.mu.Lock()
+		p.panicked, p.stack = crash.what, crash.stack
+		p.mu.Unlock()
+		return p, tea.Quit
+	}
 	defer func() {
 		if p.recovered(recover()) {
 			next, cmd = p, tea.Quit
@@ -347,10 +356,8 @@ func (p *program) do(effs []effect) tea.Cmd {
 			p.failed = e.err
 			p.mu.Unlock()
 			cmds = append(cmds, tea.Quit)
-		case effShell:
-			if cmd := p.r.shell(e); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+		case effAttach:
+			cmds = append(cmds, p.r.shell(e))
 		default:
 			p.r.do(e)
 		}
@@ -372,14 +379,16 @@ func (p *program) do(effs []effect) tea.Cmd {
 type runner struct {
 	cfg   Config
 	ctx   context.Context // done when the program has ended
+	user  context.Context // the context of Run: done when the program is to end
 	send  func(tea.Msg)
 	kill  *time.Timer
 	crash func(v any) // takes a panic of a goroutine of the runner
 
-	wg   sync.WaitGroup
-	mu   sync.Mutex
-	conn *conn // the connection that is dialed or there
-	tick bool  // the ticker runs
+	wg      sync.WaitGroup
+	mu      sync.Mutex
+	conn    *conn         // the connection that is dialed or there
+	tick    bool          // the ticker runs
+	pending *pendingShell // the shell that was asked for and has not the terminal
 }
 
 // conn is one connection to draal: what Dial returned, and the context
@@ -426,7 +435,10 @@ func (r *runner) close(wait time.Duration) bool {
 	}
 	c := r.conn
 	r.conn = nil
+	waiting := r.pending
+	r.pending = nil
 	r.mu.Unlock()
+	r.drop(waiting)
 	if c != nil {
 		r.spawn(c.hangUp)
 	}
@@ -522,6 +534,10 @@ func (r *runner) do(e effect) {
 			}
 			r.spawn(func() { r.follow(ctx, c, op, e) })
 		}
+	case effShell:
+		r.openShell(e)
+	case effGiveUp:
+		r.giveUp(e.n)
 	case effUnfollow:
 		r.mu.Lock()
 		c := r.conn

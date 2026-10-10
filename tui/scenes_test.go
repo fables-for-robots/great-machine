@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -103,7 +104,20 @@ func scenes() []scene {
 			return m
 		}},
 		{"zathras-scrolled", func(w, h int) *model { m, _ := onZathras(w, h, "web", 2); press(m, "pgup", "pgup"); return m }},
-		{"zathras-notice", func(w, h int) *model { m, _ := onZathras(w, h, "web", 2); press(m, "s"); return m }},
+		{"zathras-notice", func(w, h int) *model {
+			m, _ := onZathras(w, h, "web", 2)
+			press(m, "s")
+			m.update(shellOpenedMsg{n: 1})
+			m.update(shellEndedMsg{opened: true, exit: 3})
+			return m
+		}},
+		{"zathras-opening-shell", func(w, h int) *model { m, _ := onZathras(w, h, "web", 2); press(m, "s"); return m }},
+		{"zathras-no-shell", func(w, h int) *model {
+			m, _ := onZathras(w, h, "web", 2)
+			press(m, "s")
+			m.update(shellOpenedMsg{n: 1, err: fmt.Errorf("operator: shell: %w", wire.Errorf(wire.CodeUnavailable, "zathras 22ab12cd is not connected"))})
+			return m
+		}},
 		{"zathras-help", func(w, h int) *model { m, _ := onZathras(w, h, "web", 2); press(m, "?"); return m }},
 	}
 }

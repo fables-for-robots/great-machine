@@ -20,6 +20,7 @@ import (
 	"github.com/creack/pty"
 	xterm "golang.org/x/term"
 
+	"github.com/fables-for-robots/great-machine/tui/tuitest"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
@@ -29,14 +30,15 @@ const deadline = 30 * time.Second
 // fakeOperator is an Operator whose channels the test feeds.
 type fakeOperator struct {
 	mu      sync.Mutex
-	asked   []string                      // what was asked of it, in order
-	fleets  chan wire.Fleet               // what Watch returns
-	lines   map[wire.ID]chan wire.LogLine // what Logs returns; made when asked for
-	history func() ([]wire.Sample, error) // what History answers; nil for no samples
-	logs    func(id wire.ID) error        // what Logs answers; nil for a log
-	watch   func() error                  // what Watch answers; nil for the fleets
-	done    map[string]context.Context    // the contexts of what was asked
-	closed  chan struct{}                 // closed by Close
+	asked   []string                                                                         // what was asked of it, in order
+	fleets  chan wire.Fleet                                                                  // what Watch returns
+	lines   map[wire.ID]chan wire.LogLine                                                    // what Logs returns; made when asked for
+	history func() ([]wire.Sample, error)                                                    // what History answers; nil for no samples
+	logs    func(id wire.ID) error                                                           // what Logs answers; nil for a log
+	watch   func() error                                                                     // what Watch answers; nil for the fleets
+	shell   func(ctx context.Context, zathras wire.ID, req wire.ShellRequest) (Shell, error) // what Shell answers; nil for a refusal
+	done    map[string]context.Context                                                       // the contexts of what was asked
+	closed  chan struct{}                                                                    // closed by Close
 	once    sync.Once
 }
 
@@ -157,6 +159,10 @@ func (f *fakeOperator) Logs(ctx context.Context, zathras wire.ID, follow bool) (
 }
 
 func (f *fakeOperator) Shell(ctx context.Context, zathras wire.ID, req wire.ShellRequest) (Shell, error) {
+	f.note(ctx, "shell "+string(zathras[:2]))
+	if f.shell != nil {
+		return f.shell(ctx, zathras, req)
+	}
 	return nil, wire.Errorf(wire.CodeUnavailable, "the fake has no shell")
 }
 
@@ -271,7 +277,9 @@ func startRun(t *testing.T, dial func(ctx context.Context) (Operator, error), ch
 				break
 			}
 		}
-		slave.Close()
+		// The terminal's own file is given up without a Close: see
+		// tuitest.Release.
+		tuitest.Release(t, slave)
 		master.Close()
 		select {
 		case <-read:
