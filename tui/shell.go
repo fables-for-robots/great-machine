@@ -480,9 +480,7 @@ func (r *runner) attach(ctx context.Context, p *pendingShell, name string, out i
 		p.sess.Close()
 	}()
 
-	// This line is on the terminal's own screen, above what the shell
-	// writes: it says where the prompt below is from, and the way out.
-	fmt.Fprintf(out, "great-machine: a shell on %s. Ctrl-] leaves it.\r\n", name)
+	fmt.Fprint(out, aboveShell(name))
 	exit, detached, err := term.Attach(ctx, r.cfg.In, out, p.sess)
 	if detached {
 		// The prompt of the shell is left as it is, on a line of its own.
@@ -490,6 +488,19 @@ func (r *runner) attach(ctx context.Context, p *pendingShell, name string, out i
 	}
 	return shellEndedMsg{opened: true, exit: exit, detached: detached, err: err}
 }
+
+// aboveShell is the line on the terminal's own screen above what the
+// shell writes: it says where the prompt below is from, and the way out.
+// Of the name it keeps nameAboveShell cells at most, cut in the middle as
+// the views cut a name that is too long: the line stays on the screen
+// when the terminal UI is back, and a name of kilobytes would fill it.
+func aboveShell(name string) string {
+	return fmt.Sprintf("great-machine: a shell on %s. Ctrl-] leaves it.\r\n", middle(name, nameAboveShell))
+}
+
+// nameAboveShell is how many cells of a name the line above a shell
+// keeps.
+const nameAboveShell = 60
 
 // shutOut is the terminal as the goroutine of a shell writes to it: it
 // passes every write on as it comes, one at a time, until it is shut.

@@ -19,6 +19,24 @@ import (
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
+// The line above a shell names its zathras in one line of the
+// terminal's own screen, however long the name: one of 4 KiB is cut in
+// its middle, as the views cut names, and an ordinary one is whole.
+func TestTheLineAboveAShellIsOneLine(t *testing.T) {
+	long := named(strings.Repeat("web-7d9f8b6c4-", 292) + "2xkqp")
+	if len(long) < fieldCap-5 || len(long) > fieldCap {
+		t.Fatalf("the name is %d bytes, want one of the limit", len(long))
+	}
+	line := aboveShell(long)
+	// width counts the line's end as one cell.
+	if w := width(line); w > 60+len("great-machine: a shell on . Ctrl-] leaves it. ") || !strings.Contains(line, "…") || !strings.Contains(line, "2xkqp. Ctrl-] leaves it.") {
+		t.Errorf("a name of %d bytes gives a line of %d cells: %q", len(long), w, line)
+	}
+	if got, want := aboveShell("web-7d9f8b6c4-2xkqp"), shellLine+"\r\n"; got != want {
+		t.Errorf("an ordinary name gives %q, want %q", got, want)
+	}
+}
+
 // The line that says how a shell ended, for every way it can end.
 func TestShellSentence(t *testing.T) {
 	refused := wire.Errorf(wire.CodeUnavailable, "zathras 20ab12cd is not connected")
