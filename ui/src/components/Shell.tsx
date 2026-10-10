@@ -97,6 +97,23 @@ export default function Shell(props: {
     let over = false;
     let got = false;
 
+    // The size draal has of the terminal: the one the URL carried, until
+    // a change of size has really gone out. tell sends the size the
+    // terminal has now, if it is another one and the socket can take it;
+    // while the socket is still connecting it cannot, and the size is
+    // told when it opens.
+    let has = `${within(term.cols)}x${within(term.rows)}`;
+    const tell = () => {
+      const cols = within(term.cols);
+      const rows = within(term.rows);
+      const size = `${cols}x${rows}`;
+      if (size === has || over || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      socket.send(JSON.stringify({ resize: { cols, rows } }));
+      has = size;
+    };
+
     // The end of the session: the terminal stays as it is and takes no
     // more keys.
     const end = (why: string) => {
@@ -110,7 +127,11 @@ export default function Shell(props: {
       setState("ended");
     };
 
-    socket.onopen = () => setState((s) => (s === "opening" ? "open" : s));
+    socket.onopen = () => {
+      setState((s) => (s === "opening" ? "open" : s));
+      // The box may have changed while the socket was connecting.
+      tell();
+    };
     socket.onmessage = (event) => {
       got = true;
       if (event.data instanceof ArrayBuffer) {
@@ -167,17 +188,12 @@ export default function Shell(props: {
 
     // A change of size: the terminal is fitted to its box, and the size
     // it then has is sent, once the box has been still for a moment.
-    let sent = `${term.cols}x${term.rows}`;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const resized = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
         fit.fit();
-        const size = `${term.cols}x${term.rows}`;
-        if (size !== sent) {
-          sent = size;
-          send(JSON.stringify({ resize: { cols: within(term.cols), rows: within(term.rows) } }));
-        }
+        tell();
       }, 150);
     };
     const observer = new ResizeObserver(resized);
@@ -200,6 +216,10 @@ export default function Shell(props: {
       binary.dispose();
       socket.onmessage = socket.onclose = socket.onopen = null;
       socket.close();
+      // The terminal may say only after it was disposed that it has
+      // taken a piece: the feeder then has nothing more for it. (This is
+      // not `over`: what arrives after the shell's end is still shown.)
+      feed.stop();
       term.dispose();
     };
   };

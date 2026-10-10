@@ -26,6 +26,11 @@ export interface Feeder {
   dropped(): number;
   /** How many bytes are held now. */
   held(): number;
+  /** Stops it, for a terminal that is disposed: what is held is let go,
+   *  what is pushed afterwards is dropped unsaid, and the sink is given
+   *  nothing more, also when it says only then that it has taken its
+   *  last piece. */
+  stop(): void;
 }
 
 const encoder = new TextEncoder();
@@ -44,9 +49,10 @@ export function feeder(sink: Sink, limit = HELD): Feeder {
   let writing = false;
   let dropped = 0;
   let unsaid = 0;
+  let stopped = false;
 
   const next = () => {
-    if (queue.length === 0) {
+    if (stopped || queue.length === 0) {
       writing = false;
       return;
     }
@@ -73,7 +79,7 @@ export function feeder(sink: Sink, limit = HELD): Feeder {
 
   return {
     push(data) {
-      if (data.length === 0) {
+      if (stopped || data.length === 0) {
         return;
       }
       queue.push(data);
@@ -91,6 +97,12 @@ export function feeder(sink: Sink, limit = HELD): Feeder {
     },
     dropped: () => dropped,
     held: () => held,
+    stop() {
+      stopped = true;
+      queue = [];
+      held = 0;
+      unsaid = 0;
+    },
   };
 }
 

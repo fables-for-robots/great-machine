@@ -206,8 +206,16 @@ export default function Figures(props: {
         <Match when={!asked() && props.present}>
           <p class="muted">Asking draal…</p>
         </Match>
+        {/* Final review B2: the zathras went before draal had answered
+            (the request was given up with it): whether it reports
+            figures was not found out, and is not claimed. */}
+        <Match when={!asked()}>
+          <p class="muted">The figures of this zathras were not received before it went.</p>
+        </Match>
         {/* Review Focus 4: a zathras without samples gets a sentence that
-            says why, and no empty charts. */}
+            says why, and no empty charts. It is said when it is known:
+            draal has answered, and neither its answer nor a fleet had a
+            sample. */}
         <Match when={!failure()}>
           <Notice title="This zathras reports no figures" small>
             <p>

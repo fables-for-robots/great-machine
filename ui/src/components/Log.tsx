@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js";
+import { batch, createEffect, createMemo, createSignal, For, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { pause, socketURL } from "../api/reconnect";
 import { clockMs, count } from "../format";
 import { parse, type Span } from "../state/ansi";
@@ -147,11 +147,17 @@ export default function Log(props: {
   let socket: WebSocket | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let attempt = 0;
+  // Whether a pause runs after which the log is asked for again: what
+  // the line above the box says of a log that has ended depends on it.
+  const [armed, setArmed] = createSignal(false);
 
   const open = () => {
     let refused = false;
     timer = undefined;
-    setState("connecting");
+    batch(() => {
+      setArmed(false);
+      setState("connecting");
+    });
     // The ring comes first on every socket: what the page has of it is
     // left out.
     buffer.resume();
@@ -186,7 +192,11 @@ export default function Log(props: {
         buffer.say("error", present() ? "The connection of the log ended." : "The zathras is not connected any more.");
         schedule();
       }
-      setState("ended");
+      const again = event.code !== 1001 && present() && connection() !== "lost";
+      batch(() => {
+        setArmed(again);
+        setState("ended");
+      });
       // While the fleet has the zathras the log is asked for again, with
       // the pauses of every connection of the page. When it has not,
       // nothing is asked until it is back; and while draal itself does
@@ -195,7 +205,7 @@ export default function Log(props: {
       // when the connection to draal is back (the effect on lives does
       // that), and a retry before would only add a second row that says
       // less than draal's own.
-      if (event.code !== 1001 && present() && connection() !== "lost") {
+      if (again) {
         timer = setTimeout(open, pause(attempt++, Math.random()));
       }
     };
@@ -204,6 +214,7 @@ export default function Log(props: {
   const shut = () => {
     clearTimeout(timer);
     timer = undefined;
+    setArmed(false);
     const s = socket;
     socket = undefined;
     s?.close();
@@ -231,6 +242,7 @@ export default function Log(props: {
     on([id, present, connected, lives], ([, present]) => {
       clearTimeout(timer);
       timer = undefined;
+      setArmed(false);
       if (!present) {
         if (!socket) {
           setState((s) => (s === "idle" ? "idle" : "ended"));
@@ -252,8 +264,15 @@ export default function Log(props: {
           <Switch>
             <Match when={state() === "following"}>followed live</Match>
             <Match when={state() === "connecting"}>asking draal…</Match>
-            <Match when={state() === "ended" && props.present}>ended; asking again</Match>
-            <Match when={state() === "ended"}>ended: the zathras is not connected</Match>
+            {/* Final review B5: a log that has ended says what it waits
+                for. A pause runs and the log is asked for again; or the
+                zathras is not connected, and it is asked for when the
+                fleet has it; or neither, after draal said that it is
+                ending or while the page's connection to it is lost: it
+                is asked for when that connection is back. */}
+            <Match when={state() === "ended" && armed()}>ended; asking again</Match>
+            <Match when={state() === "ended" && !props.present}>ended: the zathras is not connected</Match>
+            <Match when={state() === "ended"}>ended; waiting for the connection to draal</Match>
             <Match when={true}>not asked for: the zathras is not connected</Match>
           </Switch>
           , the last {KEEP} lines are kept

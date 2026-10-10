@@ -13,7 +13,36 @@ import "./zathras.css";
 
 // The shell brings xterm.js, which is most of the page's script: it is
 // a file of its own that only this view asks for.
-const Shell = lazy(() => import("../components/Shell"));
+//
+// Final review B1: a file of its own can fail to arrive. A tab that was
+// loaded before draal was upgraded asks for the file under the name the
+// old build gave it, and gets 404; and draal may not answer at all. The
+// failure is caught here, in the loader, and nowhere wider: what stands
+// in the shell's place then says so, and the rest of the view, and every
+// error of it, is as it was. The file is not asked for again by this
+// page: loading the page again is what gets the page of the draal that
+// is there, and that is what the button does.
+const Shell = lazy(() => import("../components/Shell").catch(() => ({ default: ShellMissing })));
+
+// What stands in the place of the shell when its part of the page could
+// not be loaded. (It has the style of the rest of the page alone: the
+// shell's own came with the part that is missing.)
+function ShellMissing(_props: { id: string; present: boolean }) {
+  return (
+    <section class="section">
+      <h2>Shell</h2>
+      <Notice kind="bad" small>
+        <p>
+          The shell's part of this page could not be loaded. Probably the page is of an older build of draal than the one
+          that runs now, or draal does not answer.{" "}
+          <button type="button" class="text-button" onClick={() => location.reload()}>
+            Load the page again
+          </button>
+        </p>
+      </Notice>
+    </section>
+  );
+}
 
 // Everything a zathras reports, each thing under its name.
 function StatePanel(props: { zathras: ZathrasInfo; stable: number | undefined }) {

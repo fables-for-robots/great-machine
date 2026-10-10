@@ -109,6 +109,51 @@ describe("a terminal that is behind", () => {
   });
 });
 
+// Final review B4: the terminal is disposed when the session is closed,
+// and may still say afterwards that it has taken a piece.
+describe("a feeder that was stopped", () => {
+  test("gives the sink nothing more: not what it held, and not what is pushed after", () => {
+    const t = terminal();
+    const f = feeder(t.sink);
+    f.push(bytes("a"));
+    f.push(bytes("b"));
+    expect(t.written).toEqual(["a"]);
+    expect(f.held()).toBe(1);
+    f.stop();
+    expect(f.held()).toBe(0);
+    // The terminal says, after it was disposed, that it has taken "a".
+    t.taken();
+    expect(t.written).toEqual(["a"]);
+    expect(t.busy()).toBe(0);
+    f.push(bytes("c"));
+    expect(t.written).toEqual(["a"]);
+    expect(f.held()).toBe(0);
+    expect(f.dropped()).toBe(0);
+  });
+
+  test("a notice of what was dropped is not written either, and stopping twice is stopping", () => {
+    const t = terminal();
+    const f = feeder(t.sink, 2);
+    f.push(bytes("first"));
+    f.push(bytes("aa"));
+    f.push(bytes("bb"));
+    expect(f.dropped()).toBe(2);
+    f.stop();
+    f.stop();
+    t.taken();
+    expect(t.written).toEqual(["first"]);
+  });
+
+  test("before it is stopped, what arrives after anything else is still written", () => {
+    const t = terminal();
+    const f = feeder(t.sink);
+    f.push(bytes("a"));
+    t.taken();
+    f.push(bytes("late"));
+    expect(t.written).toEqual(["a", "late"]);
+  });
+});
+
 describe("what is typed", () => {
   test("a paste of 100 KiB with letters of several bytes goes out in pieces of at most 16 KiB", () => {
     const unit = "žluťoučký kůň 日本語 🙂 plain ";
