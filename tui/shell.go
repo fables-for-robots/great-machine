@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"runtime/debug"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -424,6 +426,9 @@ func (c *shellExec) Run() error {
 	fd := int(r.cfg.In.Fd())
 	usual, _ := xterm.GetState(fd)
 
+	// Everything the goroutine of the shell writes to the terminal goes
+	// through out, which is shut when the shell is left behind.
+	out := &shutOut{w: r.cfg.Out}
 	done := make(chan shellDone, 1)
 	r.spawn(func() {
 		defer func() {
@@ -431,7 +436,7 @@ func (c *shellExec) Run() error {
 				done <- shellDone{panicked: v, stack: debug.Stack()}
 			}
 		}()
-		done <- shellDone{ended: r.attach(ctx, p, c.e.name)}
+		done <- shellDone{ended: r.attach(ctx, p, c.e.name, out)}
 	})
 	select {
 	case c.done = <-done:
@@ -443,9 +448,13 @@ func (c *shellExec) Run() error {
 	select {
 	case c.done = <-done:
 	case <-grace.C:
-		// The shell is left behind. If it has the terminal in the mode of
-		// a shell, the terminal is put back: Bubble Tea takes the mode it
-		// finds now for the one to restore at the end.
+		// The shell is left behind. Nothing of it reaches the terminal
+		// from here on, but for a write that is under way, which is not
+		// waited for: a terminal that is held holds it. If the shell has
+		// the terminal in the mode of a shell, the terminal is put back:
+		// Bubble Tea takes the mode it finds now for the one to restore at
+		// the end.
+		out.shut()
 		if usual != nil {
 			xterm.Restore(fd, usual)
 		}
@@ -455,8 +464,9 @@ func (c *shellExec) Run() error {
 }
 
 // attach joins the terminal to a session that is open until the shell
-// has ended or was left, or ctx is done, and closes the session.
-func (r *runner) attach(ctx context.Context, p *pendingShell, name string) shellEndedMsg {
+// has ended or was left, or ctx is done, and closes the session. It
+// writes to the terminal through out alone.
+func (r *runner) attach(ctx context.Context, p *pendingShell, name string, out io.Writer) shellEndedMsg {
 	// However this is left, the session is closed: a shell that nobody
 	// is joined to is hung up. It is closed here, in the goroutine of the
 	// shell, before the terminal is taken back.
@@ -467,11 +477,42 @@ func (r *runner) attach(ctx context.Context, p *pendingShell, name string) shell
 
 	// This line is on the terminal's own screen, above what the shell
 	// writes: it says where the prompt below is from, and the way out.
-	fmt.Fprintf(r.cfg.Out, "great-machine: a shell on %s. Ctrl-] leaves it.\r\n", name)
-	exit, detached, err := term.Attach(ctx, r.cfg.In, r.cfg.Out, p.sess)
+	fmt.Fprintf(out, "great-machine: a shell on %s. Ctrl-] leaves it.\r\n", name)
+	exit, detached, err := term.Attach(ctx, r.cfg.In, out, p.sess)
 	if detached {
 		// The prompt of the shell is left as it is, on a line of its own.
-		fmt.Fprint(r.cfg.Out, "\r\n")
+		fmt.Fprint(out, "\r\n")
 	}
 	return shellEndedMsg{opened: true, exit: exit, detached: detached, err: err}
 }
+
+// errLeftBehind is what a write of a shell that was left behind returns.
+// term.Attach ends its copy of the shell's output on an error at once,
+// and the error goes nowhere: the shell's end is no longer told.
+var errLeftBehind = errors.New("the shell was left behind, and the terminal is no longer its")
+
+// shutOut is the terminal as the goroutine of a shell writes to it: it
+// passes every write on as it comes, one at a time, until it is shut.
+// From then on a write reaches nothing and returns errLeftBehind. Shut
+// does not wait for the write that is under way, if one is: a terminal
+// that is held (Ctrl-S) holds that write, and must not hold Run. That
+// one piece may still arrive after Run has returned, and nothing follows
+// it, as term.Attach has it for the end of its context.
+type shutOut struct {
+	w      io.Writer
+	mu     sync.Mutex // held by the write that is under way
+	closed atomic.Bool
+}
+
+// Write writes p to the terminal, unless out is shut.
+func (o *shutOut) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed.Load() {
+		return 0, errLeftBehind
+	}
+	return o.w.Write(p)
+}
+
+// shut lets no write begin from here on, and returns at once.
+func (o *shutOut) shut() { o.closed.Store(true) }

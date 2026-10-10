@@ -700,8 +700,9 @@ func TestShellEndsWithTheContext(t *testing.T) {
 // its context, and the terminal is as it was.
 //
 // When the session comes loose, after Run has returned, nothing more is
-// written to the terminal. That is what this test holds of that moment:
-// the bytes. The mode of the terminal is set once more then, to the
+// written to the terminal, though the shell has written something that
+// waits to be copied to it then. That is what this test holds of that
+// moment: the bytes. The mode of the terminal is set once more then, to the
 // usual one, by term.Attach as it returns: see shellGrace.
 func TestShellThatDoesNotEndWithTheContext(t *testing.T) {
 	grace, closing := shellGrace, closeAfter
@@ -735,6 +736,7 @@ func TestShellThatDoesNotEndWithTheContext(t *testing.T) {
 	if _, err := term.slave.WriteString(returnedMark); err != nil {
 		t.Fatalf("writing to the pseudo-terminal: %v", err)
 	}
+	sh.out <- []byte("WRITTEN-AFTER-RUN\r\n")
 	release()
 	sh.isClosed(t)
 	term.quietBehindTheMark()
