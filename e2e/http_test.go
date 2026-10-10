@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,12 +35,21 @@ type page struct {
 // connections of its client are closed when the test ends.
 func (h *harness) web() *page {
 	h.t.Helper()
+	return h.webWith(web.Config{})
+}
+
+// webWith is web with the times of cfg, for a test that needs another
+// than the handler's own; its controller and its logger are the
+// harness's.
+func (h *harness) webWith(cfg web.Config) *page {
+	h.t.Helper()
 	h.mu.Lock()
-	d := h.draal
+	cfg.Controller = h.draal
 	h.mu.Unlock()
+	cfg.Log = quiet
 	p := &page{
 		t:      h.t,
-		srv:    httptest.NewServer(web.New(web.Config{Controller: d, Log: quiet})),
+		srv:    httptest.NewServer(web.New(cfg)),
 		client: &http.Client{Transport: &http.Transport{}, Timeout: deadline},
 	}
 	h.t.Cleanup(func() {
@@ -481,40 +492,108 @@ func TestHTTPShellThatThePageClosesEndsItsProcess(t *testing.T) {
 }
 
 // The same for a shell whose program takes no input while the page
-// sends more than the terminal and the stream to the zathras hold: the
-// session ends, at the latest when the page goes, and the process with
-// it. This is the case in which the relay's Write to the zathras waits.
-// The handler does not wait for that Write; that the process ends all
-// the same is the zathras's doing, which ends the shell when draal's
+// sends more than the terminal and the streams to the zathras hold. This
+// is the case in which the relay's Write to the zathras waits, the
+// handler holds what it may hold of the input and reads no more, and
+// what the page sends backs up in the page: its writes are held up.
+//
+// It ends in one of two ways. The page goes while its input waits; or
+// the handler gives the input up after WriteWait and closes the socket
+// with 1009 and its reason. In both the process must be gone. This test
+// holds the first: it sees the typing come to a halt with most of it
+// not taken, sees that the socket is open still, and goes then. The
+// handler is given a WriteWait of 15 seconds for that, between the
+// second or so the test needs to see the halt and the deadline within
+// which the session has to have ended after the page went: a handler
+// whose reader waits for room reads nothing, the going of the page
+// neither, and ends the session when that wait is over.
+//
+// The handler does not wait for the relay's Write; that the process ends
+// all the same is the zathras's doing, which ends the shell when draal's
 // side of the stream is closed.
 func TestHTTPShellThatTakesNoInputEndsItsProcessWhenThePageGoes(t *testing.T) {
 	t.Parallel()
 	h := start(t, options{zathrases: 1})
-	p := h.web()
+	p := h.webWith(web.Config{WriteWait: 15 * time.Second})
 	// exec: the process that takes no input has the ID the shell printed.
 	c, pid := shellPID(t, p, h.pods[0].id, "exec sleep 300")
-	// What the terminal echoes is read, as a page reads it.
+	// What the terminal echoes is read, as a page reads it, to the end of
+	// the socket; how it ended is kept.
+	ended := make(chan error, 1)
 	go func() {
 		for {
 			if _, _, err := c.Read(context.Background()); err != nil {
+				ended <- err
 				return
 			}
 		}
 	}()
-	// Up to 16 MiB are typed, in messages of 32 KiB. If the socket is
-	// closed for it (1009: the shell does not take its input), the
-	// session has ended already.
-	chunk := []byte(strings.Repeat("x", 32<<10-1) + "\n")
-	typed := 0
-	for ; typed < 16<<20; typed += len(chunk) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := c.Write(ctx, websocket.MessageBinary, chunk)
-		cancel()
-		if err != nil {
-			break
+
+	// 16 MiB are typed, in lines, in messages of 16 KiB. A terminal in
+	// its usual mode drops input that has no line end and so never backs
+	// up; of whole lines that nobody reads it takes a few kilobytes. The
+	// streams between draal and the zathras hold about a megabyte, the
+	// handler 64 KiB, and the connection of the page what the system
+	// gives it: most of the 16 MiB can never be taken.
+	const size = 16 << 20
+	chunk := bytes.Repeat([]byte("0123456789abcde\n"), 1<<10)
+	typing, stop := context.WithCancel(context.Background())
+	defer stop()
+	var typed atomic.Int64
+	flooded := make(chan error, 1)
+	go func() {
+		for typed.Load() < size {
+			if err := c.Write(typing, websocket.MessageBinary, chunk); err != nil {
+				flooded <- err
+				return
+			}
+			typed.Add(int64(len(chunk)))
+		}
+		flooded <- nil
+	}()
+	// open fails the test if the session has ended in the other way, or
+	// in any, before the page went.
+	open := func(when string) {
+		t.Helper()
+		select {
+		case err := <-ended:
+			t.Fatalf("%s the socket ended with %v after %d bytes were typed; want it open, and the typing held up, until the page goes", when, err, typed.Load())
+		case err := <-flooded:
+			t.Fatalf("%s the typing ended with %v after %d bytes; want it to wait for a program that reads nothing", when, err, typed.Load())
+		default:
 		}
 	}
-	t.Logf("%d bytes were typed into a shell that takes none", typed)
+	// The typing is held up: nothing more was taken for a second, though
+	// not all is typed.
+	last, since := int64(-1), time.Now()
+	eventually(t, "the typing to come to a halt", func() bool {
+		open("while the typing was awaited to halt,")
+		if now := typed.Load(); now != last {
+			last, since = now, time.Now()
+		}
+		return last > 0 && time.Since(since) > time.Second
+	})
+	if last >= size {
+		t.Fatalf("all %d bytes were taken: the typing was never held up", last)
+	}
+	if !alive(pid) {
+		t.Fatalf("the process %d has ended before the page went", pid)
+	}
+	open("when the page was about to go,")
+	t.Logf("the typing came to a halt after %d of %d bytes; the page goes while the rest waits", last, size)
+
+	// The page goes while its input waits.
 	c.CloseNow()
+	select {
+	case err := <-flooded:
+		if err == nil {
+			t.Error("the typing that was held up ended without an error when the page went")
+		}
+	case <-time.After(deadline):
+		t.Fatalf("the typing still waits %v after the page went", deadline)
+	}
+	if now := typed.Load(); now >= size {
+		t.Errorf("%d bytes were taken when the page had gone, want fewer than the %d it meant to type", now, size)
+	}
 	eventually(t, "the process that took no input to end", func() bool { return !alive(pid) })
 }
