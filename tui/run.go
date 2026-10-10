@@ -183,8 +183,8 @@ func run(ctx context.Context, cfg Config, drawn func(view string), opts ...tea.P
 	case err = <-ran:
 		// The program has ended and given the terminal back. A timer
 		// that fires from here on does nothing, and one that is at work
-		// is waited for. One that was at work has cut the program off,
-		// which is then why it ended.
+		// is waited for. If it has cut the program off, which it has
+		// when it has closed killed, that is why the program ended.
 		ending.Lock()
 		decided = true
 		ending.Unlock()
