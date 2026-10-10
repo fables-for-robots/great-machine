@@ -377,7 +377,7 @@ func TestHelpNamesEveryCommand(t *testing.T) {
 	if got := run(context.Background(), newApp(&stdout, &stderr), []string{"great-machine", "--help"}); got != 0 {
 		t.Fatalf("the exit status is %d", got)
 	}
-	for _, name := range []string{"draal", "zathras", "id", "rollout", "rollback", "status", "logs", "shell", "version"} {
+	for _, name := range []string{"draal", "zathras", "id", "rollout", "rollback", "status", "logs", "shell", "tui", "version"} {
 		if !strings.Contains(stdout.String(), "\n   "+name+" ") {
 			t.Errorf("the help does not name %s:\n%s", name, stdout.String())
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
@@ -21,6 +22,9 @@ const dialTimeout = 30 * time.Second
 type operatorSettings struct {
 	draal wire.ID
 	key   string // the file of the operator's key
+	// addrs is for tests: draal is dialed at these addresses, without a
+	// relay and without a lookup. No flag sets it.
+	addrs []netip.AddrPort
 }
 
 // readOperator reads --draal and --key. A command calls it before it does
@@ -57,13 +61,22 @@ func (s operatorSettings) connect(ctx context.Context) (*operator.Client, node.K
 	if err != nil {
 		return nil, node.Key{}, fmt.Errorf("the operator's key: %w", err)
 	}
+	client, err := s.dial(ctx, k)
+	if err != nil {
+		return nil, node.Key{}, err
+	}
+	return client, k, nil
+}
+
+// dial dials draal with the key given. The caller closes the client.
+func (s operatorSettings) dial(ctx context.Context, k node.Key) (*operator.Client, error) {
 	ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 	defer cancel()
-	conn, err := node.Dial(ctx, node.DialConfig{Key: k, Server: s.draal})
+	conn, err := node.Dial(ctx, node.DialConfig{Key: k, Server: s.draal, Addrs: s.addrs})
 	if err != nil {
-		return nil, node.Key{}, fmt.Errorf("connecting to draal %s: %w", s.draal, err)
+		return nil, fmt.Errorf("connecting to draal %s: %w", s.draal, err)
 	}
-	return operator.New(conn), k, nil
+	return operator.New(conn), nil
 }
 
 // connect reads the flags of an operator command and dials draal.
