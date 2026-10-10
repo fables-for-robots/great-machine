@@ -16,14 +16,16 @@
 # its endpoint ID.
 #
 # The web page of draal listens on the loopback address of the pod, port
-# 8080, where nothing outside the pod reaches it. A forward brings it to
-# the laptop:
+# 8080, where no other pod and no Service reaches it. A forward brings it
+# to the laptop:
 #
 #   kubectl port-forward deployment/draal 8080:8080
 #
-# and then http://localhost:8080/. Do not expose the port with a Service
-# or an Ingress: the page has no authentication, and whoever reaches it
-# has a shell in every container.
+# and then http://localhost:8080/. Whoever may forward a port to the pod
+# (pods/portforward in the cluster's RBAC) reaches the page so, and with
+# it a shell in every container: the page has no authentication of its
+# own, and in a cluster that permission is its only one. Do not expose
+# the port with a Service or an Ingress.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

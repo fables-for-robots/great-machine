@@ -278,14 +278,17 @@ styles and fonts are in the program.
 
 **How it is reached.** On the machine draal runs on, by its URL, which
 draal logs at its start. In the cluster the page listens on the loopback
-address of draal's pod, where nothing outside the pod reaches it, and a
-forward brings it to the laptop:
+address of draal's pod, where no other pod and no Service reaches it, and
+a forward brings it to the laptop:
 
 ```sh
 kubectl port-forward deployment/draal 8080:8080
 ```
 
-then `http://localhost:8080/`.
+then `http://localhost:8080/`. Whoever may forward a port to the pod
+(`pods/portforward` in the cluster's RBAC) reaches the page so, and with
+it a shell in every container: in a cluster that permission is the page's
+only authentication.
 
 **The page has no authentication, and whoever can reach its port has a
 shell in every container.** It answers under any host name: `localhost`,
@@ -313,9 +316,12 @@ under which the proxy is reached may be any name, but the proxy has to
 pass on the `Host` header the browser sent, unchanged. One that rewrites
 it (nginx does by default; there it takes `proxy_set_header Host
 $http_host;`) loads the page and gets `403` for every WebSocket, so the
-page then says that its connection is lost. A proxy that does not
-authenticate puts a shell in every container on the network it listens
-on.
+page then says that its connection is lost. A WebSocket through nginx
+also needs the `Upgrade` and `Connection` headers passed on
+(`proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";`), without which draal answers
+`400`. A proxy that does not authenticate puts a shell in every
+container on the network it listens on.
 
 `--web-addr ""` (or an empty `GREAT_MACHINE_WEB_ADDR`) turns the page off:
 nothing listens.
@@ -555,6 +561,7 @@ Go tools out of the directory. The package `web` serves the page from
 cd ui
 npm ci           # the dependencies, as package-lock.json names them
 npm run check    # the type check
+npm test         # the unit tests, in Node
 npm run build    # into ../web/dist; `go build` after it has the page
 ```
 
