@@ -397,9 +397,12 @@ terminal UI when the shell has ended.
 gone), the first line says so and for how long, what was shown stays and
 is marked as what draal sent last, and draal is dialed again: after one
 second, then after pauses that double up to 30 seconds. Any key asks at
-once. When draal answers, the view that was open is alive again. What
-draal refuses at the very start, an operator that is not on its
-allowlist, ends the command with that refusal and the status 1.
+once. When draal answers, the view that was open is alive again. A draal
+that takes the connection and does not answer within a minute is given
+up and dialed again, like a dial that failed; until then a key changes
+nothing, since there is no pause to end. What draal refuses at the very
+start, an operator that is not on its allowlist, ends the command with
+that refusal and the status 1.
 
 **The terminal.** The terminal UI needs a terminal as its standard input
 and its standard output, and ends with the status 2 and one line
