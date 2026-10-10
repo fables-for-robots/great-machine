@@ -196,7 +196,8 @@ func (r *relayShell) Wait(ctx context.Context) (int, error) {
 	}
 }
 
-// Close closes the stream, which ends the shell if it runs.
+// Close closes the stream, which ends the shell if it runs, and a Read
+// and a Write that wait: the Write even when the zathras reads nothing.
 func (r *relayShell) Close() error {
 	r.close.Do(func() { r.s.Close() })
 	return nil

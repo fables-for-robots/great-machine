@@ -1,0 +1,64 @@
+/* View 1: a row for each service: its name, its zathrases, its rollout. */
+
+.svcs {
+  display: grid;
+  gap: var(--ffr-space-3);
+}
+
+.svc {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr) minmax(0, 8fr);
+  gap: var(--ffr-space-3) var(--ffr-space-5);
+  align-items: start;
+  padding: var(--ffr-space-4) var(--ffr-space-5);
+}
+
+/* A service whose rollout is halted is the one to look at. */
+.svc[data-state="halted"] {
+  border-color: var(--bad);
+}
+
+.svc-name {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.svc-name a {
+  font-family: var(--ffr-font-display);
+  font-weight: 800;
+  font-size: 20px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.svc-name a:hover {
+  color: var(--link);
+}
+
+.svc-fleet {
+  padding-top: 3px;
+  min-width: 0;
+}
+
+.svc-roll {
+  display: grid;
+  gap: var(--ffr-space-1);
+  min-width: 0;
+}
+
+.svc-roll-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ffr-space-1) var(--ffr-space-3);
+}
+
+@media (max-width: 860px) {
+  .svc {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--ffr-space-4);
+  }
+}

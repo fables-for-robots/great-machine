@@ -1,0 +1,186 @@
+/* The charts of a zathras: four, side by side in pairs, one time axis. */
+
+.charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ffr-space-3);
+}
+
+.chart {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--ffr-radius-md);
+  padding: var(--ffr-space-3) var(--ffr-space-3) var(--ffr-space-2);
+  min-width: 0;
+}
+
+.chart figcaption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 2px var(--ffr-space-4);
+  margin-bottom: var(--ffr-space-2);
+  padding-left: var(--ffr-space-1);
+}
+
+.chart-title b {
+  font-family: var(--ffr-font-display);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.chart-title .muted {
+  font-size: 12.5px;
+}
+
+.chart-read {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px var(--ffr-space-3);
+  font-size: 12.5px;
+}
+
+.chart-key {
+  white-space: nowrap;
+}
+
+.chart-key b {
+  font-weight: 600;
+  display: inline-block;
+  min-width: 7.5ch;
+}
+
+/* The mark of a series in the legend: a piece of its line. */
+.chart-key i {
+  display: inline-block;
+  width: 12px;
+  height: 0;
+  margin-right: 5px;
+  vertical-align: middle;
+  border-top: 3px solid var(--series-1);
+  border-radius: 2px;
+}
+
+.chart-key i[data-slot="2"] {
+  border-top-color: var(--series-2);
+}
+
+.chart-key i[data-slot="bound"] {
+  border-top: 2px dashed var(--fg-subtle);
+  border-radius: 0;
+}
+
+.chart-at {
+  min-width: 8ch;
+  text-align: right;
+}
+
+.chart-box {
+  width: 100%;
+  overflow: hidden;
+}
+
+.chart svg {
+  display: block;
+  cursor: crosshair;
+  touch-action: pan-y;
+  border-radius: var(--ffr-radius-sm);
+}
+
+.chart-grid {
+  stroke: var(--grid);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart-tick {
+  fill: var(--fg-muted);
+  font-family: var(--ffr-font-mono);
+  font-size: 11px;
+}
+
+.chart-line path {
+  fill: none;
+  stroke: var(--series-1);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-line circle {
+  fill: var(--series-1);
+}
+
+.chart-line[data-slot="2"] path {
+  stroke: var(--series-2);
+}
+
+.chart-line[data-slot="2"] circle {
+  fill: var(--series-2);
+}
+
+.chart-line[data-slot="bound"] path {
+  stroke: var(--fg-subtle);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  stroke-linecap: butt;
+}
+
+.chart-line[data-slot="bound"] circle {
+  fill: var(--fg-subtle);
+}
+
+.chart-cross line {
+  stroke: var(--fg);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+/* The mark on a line under the pointer, with a ring of the ground so
+   that it stands off the line. */
+.chart-cross circle {
+  fill: var(--series-1);
+  stroke: var(--bg);
+  stroke-width: 2;
+}
+
+.chart-cross circle[data-slot="2"] {
+  fill: var(--series-2);
+}
+
+.chart-note {
+  margin-top: var(--ffr-space-2);
+  font-size: 13px;
+}
+
+.text-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--link);
+  cursor: pointer;
+}
+
+.text-button:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.samples {
+  margin-top: var(--ffr-space-3);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.samples thead th {
+  position: sticky;
+  top: 0;
+}
+
+@media (max-width: 980px) {
+  .charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

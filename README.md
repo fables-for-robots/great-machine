@@ -35,8 +35,9 @@ operator and every zathras are known by their **endpoint ID**, the public
 half of a key, and the endpoint ID of draal is all that the others need to
 reach it: no address, no port, no Service.
 
-A web page and a terminal UI that show the same are planned, and are not
-there yet.
+draal also serves [a web page](#the-web-page) that shows the fleet, the
+figures and the log of every zathras, and gives a shell in its container.
+A terminal UI that shows the same is planned, and is not there yet.
 
 The design is in
 [`docs/superpowers/specs/2026-10-09-great-machine-design.md`](docs/superpowers/specs/2026-10-09-great-machine-design.md).
@@ -94,6 +95,14 @@ draal logs its endpoint ID when it starts. By hand it is:
 ```sh
 great-machine draal --data /var/lib/draal --operator OPERATOR_ID \
   --jaccard-server SERVER_ID --jaccard-prefix /great-machine/nix/store/
+```
+
+Its [web page](#the-web-page) is at `http://127.0.0.1:8080/` on the
+machine draal runs on. In the cluster that is the pod, and a forward
+brings it to the laptop:
+
+```sh
+kubectl port-forward deployment/draal 8080:8080    # then http://localhost:8080/
 ```
 
 **3. A pod.** [`deploy/pod.yaml`](deploy/pod.yaml) is a whole pod of the
@@ -155,7 +164,7 @@ there are.
 ### draal
 
 ```sh
-great-machine draal --data DIR --jaccard-server ID --jaccard-prefix P [--operator ID]...
+great-machine draal --data DIR --jaccard-server ID --jaccard-prefix P [--operator ID]... [--web-addr ADDR]
 ```
 
 | flag | environment | default | meaning |
@@ -164,10 +173,12 @@ great-machine draal --data DIR --jaccard-server ID --jaccard-prefix P [--operato
 | `--operator ID` | `GREAT_MACHINE_OPERATORS` | none | an endpoint ID that may act as an operator; may be repeated, and the variable takes several with commas between them |
 | `--jaccard-server ID` | `JACCARD_SERVER` | required | the jaccard-store server that closures are pushed to |
 | `--jaccard-prefix P` | `JACCARD_PREFIX` | required | what is put before the name of a store path to make its reference; the same value the sidecars are given |
+| `--web-addr ADDR` | `GREAT_MACHINE_WEB_ADDR` | `127.0.0.1:8080` | where [the web page](#the-web-page) listens, as `HOST:PORT`; empty for no web page |
 | `--bind IP:PORT` | `GREAT_MACHINE_BIND` | every address, a port the system picks | the UDP address of the iroh endpoint |
 
-At start draal logs its endpoint ID. Without `--operator` it warns that
-nobody can act as an operator.
+At start draal logs its endpoint ID, and the URL of its web page. Without
+`--operator` it warns that nobody can act as an operator. An address for
+the web page that is taken ends the command with 1.
 
 draal keeps the services, their generations and their rollouts in
 `draal.sqlite`. Which zathrases are connected, and what they report, it
@@ -245,6 +256,81 @@ is passed on, and the exit status of the shell is that of the command:
 ```sh
 echo uptime | great-machine shell web
 ```
+
+## The web page
+
+draal serves a web page, on `http://127.0.0.1:8080/` unless `--web-addr`
+says otherwise:
+
+| view | address | shows |
+| --- | --- | --- |
+| services | `/` | every service: its stable generation, its zathrases by phase, the last rollout and how far it is |
+| a service | `/s/SERVICE` | its zathrases (name, phase, generation, time running, restarts, CPU and memory), the rollout under way with every zathras' part in it, and the last 20 rollouts |
+| a zathras | `/s/SERVICE/z/ID` | its state in full; CPU, memory, disk and network over the last 15 minutes; the last 400 lines of its log, followed as they come; a shell in its container |
+
+The page is what `status`, `logs` and `shell` are on the command line.
+**It can roll nothing out and nothing back**: a rollout needs the Nix
+store of the laptop, and the page has no authentication.
+
+It draws from one connection to draal, says so when that connection is
+lost, and connects again. It asks nothing of any other host: its scripts,
+styles and fonts are in the program.
+
+**How it is reached.** On the machine draal runs on, by its URL, which
+draal logs at its start. In the cluster the page listens on the loopback
+address of draal's pod, where no other pod and no Service reaches it, and
+a forward brings it to the laptop:
+
+```sh
+kubectl port-forward deployment/draal 8080:8080
+```
+
+then `http://localhost:8080/`. Whoever may forward a port to the pod
+(`pods/portforward` in the cluster's RBAC) reaches the page so, and with
+it a shell in every container: in a cluster that permission is the page's
+only authentication.
+
+**The page has no authentication, and whoever can reach its port has a
+shell in every container.** It answers under any host name: `localhost`,
+an IP address, or whatever name a tunnel, a forward or a proxy gives it.
+
+- **It listens on loopback by default**, `127.0.0.1:8080`, where only the
+  machine itself, or the pod, reaches it. An address that is not
+  loopback, such as `:8080`, is allowed, and draal warns about it at its
+  start. Do not put a Service or an Ingress in front of the port.
+- **The origin.** A WebSocket, which is how the page gets the fleet, the
+  logs and the shell, is refused with `403` when the page that opens it
+  was not loaded from the host it is opened on. That keeps another web
+  site that is open in the same browser from opening one directly.
+- **A limit that is known and was accepted.** The rule of the origin
+  does not hold against a web site that points a name of its own at
+  draal's address (DNS rebinding): its page is then of the same origin as
+  draal's, and gets a socket as draal's own page does. So the port should
+  be reachable only by people and machines that are trusted, and the
+  browser that is used for the page is best not used for browsing
+  elsewhere while the port is reachable from it.
+
+**Behind a proxy.** A proxy in front of draal has to authenticate whoever
+it lets through: it is then all the authentication there is. The name
+under which the proxy is reached may be any name, but the proxy has to
+pass on the `Host` header the browser sent, unchanged. One that rewrites
+it (nginx does by default; there it takes `proxy_set_header Host
+$http_host;`) loads the page and gets `403` for every WebSocket, so the
+page then says that its connection is lost. A WebSocket through nginx
+also needs the `Upgrade` and `Connection` headers passed on
+(`proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection "upgrade";`), without which draal answers
+`400`. A proxy that does not authenticate puts a shell in every
+container on the network it listens on.
+
+`--web-addr ""` (or an empty `GREAT_MACHINE_WEB_ADDR`) turns the page off:
+nothing listens.
+
+A program that was built with `go build` alone has no page in it, since
+the page is built by Node (see [Development](#development)). Its draal
+warns about that at its start, and answers `501` with a line that says
+how the page is built. The program that Nix builds, and the image, have
+it.
 
 ## Rollout
 
@@ -388,6 +474,13 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
   asks only for the endpoint IDs it was given with `--operator`. The
   operator's key file is the credential: whoever has it can roll out, and
   has a shell in every container.
+- **The web page has no authentication.** Whoever can reach its port can
+  read every log and has a shell in every container, though no rollout.
+  It listens on loopback unless told otherwise, answers under any host
+  name, and is reached through `kubectl port-forward`: see
+  [The web page](#the-web-page). The port must not be exposed by a
+  Service, a proxy in front of it has to authenticate, and it should be
+  reachable only by people and machines that are trusted.
 - **Registration is open.** Any peer that knows the endpoint ID of draal
   can register as a zathras of any service. It is then listed with the
   others, is sent the path and the arguments of what the service runs,
@@ -436,10 +529,11 @@ nix build --option allow-unsafe-native-code-during-evaluation true
 nix develop --option allow-unsafe-native-code-during-evaluation true
 ```
 
-In the dev shell are `go`, `sqlc`, and `great-machine` as built from the
-tree. With direnv, `.envrc` passes the option and reloads the shell,
-rebuilding the program, when the sources change. Nix sees only the files
-git tracks, so `git add` new ones.
+In the dev shell are `go`, `sqlc`, `node` with `npm`, and `great-machine`
+as built from the tree, with the web page in it. With direnv, `.envrc`
+passes the option and reloads the shell, rebuilding the program, when the
+sources of the program or of the page change. Nix sees only the files git
+tracks, so `git add` new ones.
 
 ```sh
 go test ./...
@@ -448,13 +542,62 @@ sqlc generate    # after changing the queries or the migrations in db/
 
 The default shell cannot be entered while the Go module does not resolve,
 because building the program is part of it: after a `go get` that left
-`go.sum` behind, for example. `nix develop .#bare` has `go` and `sqlc`
-without the program and needs no option; run `go mod tidy` there.
+`go.sum` behind, for example. `nix develop .#bare` has `go`, `sqlc` and
+`node` without the program and needs no option; run `go mod tidy` there.
 
 The tests need no cluster and no network beyond the loopback interface.
 Those in `e2e` run draal and several zathrases in one process, with real
 child processes for the services. `scripts/test-pid1.sh` runs zathras as
 the first process of a container, and takes Docker.
+
+### The page
+
+The sources of the web page are in `ui/`: SolidJS and TypeScript, built
+by Vite. `ui/` has a `go.mod` of its own, which holds no Go and keeps the
+Go tools out of the directory. The package `web` serves the page from
+`web/dist`, which it embeds, and has the HTTP API the page talks to.
+
+```sh
+cd ui
+npm ci           # the dependencies, as package-lock.json names them
+npm run check    # the type check
+npm test         # the unit tests, in Node
+npm run build    # into ../web/dist; `go build` after it has the page
+```
+
+`web/dist` is not committed, but for a placeholder that keeps the
+directory there. **The Go module builds and its tests pass without the
+build**; a program built so answers `501` in place of the page. Nix needs
+no `npm` by hand: `nix build` builds the page in a derivation of its own
+(`.#ui`) and the program from the tree with that build at `web/dist`.
+Evaluating the flake therefore builds the page, the first time and after
+every change in `ui/`.
+
+To work on the page, run the API over a made-up fleet in one terminal and
+Vite in another:
+
+```sh
+go run ./web/demo           # the real API on 127.0.0.1:8080, no draal and no cluster
+cd ui && npm run dev        # the page on http://localhost:5173/, reloaded as it is edited
+```
+
+**The shell of the demo is a real one**: a shell on the machine that runs
+the demo, as the user who runs it. The demo has no authentication and
+answers under any host name, like draal's page, so its `--addr` should
+stay on loopback, which is its default.
+
+Vite passes `/api`, WebSockets included, on to `127.0.0.1:8080`, which
+can be a real draal as well.
+
+After a change of the dependencies (`npm install …`, which rewrites
+`ui/package-lock.json`), the flake has to be told their new hash:
+
+```sh
+nix run nixpkgs#prefetch-npm-deps ui/package-lock.json    # prints npmDepsHash for flake.nix
+```
+
+With a stale hash `nix build .#ui` fails and names the right one in its
+`got:` line. The shells and the derivation have the same Node, 24.
 
 ### The image
 
@@ -476,8 +619,10 @@ release is built with the tag in `GREAT_MACHINE_VERSION` and `--impure`.
 
 `.github/workflows/test.yml` runs on every push and pull request: `gofmt`,
 `go vet`, the tests, `sqlc diff` (the generated queries are what the SQL
-says), zathras as the first process of a container, the Nix build and the
-image.
+says), the type check and the build of the page and the tests of what
+serves it once more with it, zathras as the first process of a container,
+the Nix build and the image. `scripts/test-page.sh` asks the program that
+Nix built, and the draal of the image, for the page.
 
 A tag `v*` is a release: `.github/workflows/release.yml` builds the image
 with Nix on a runner of each platform, pushes it as `:<tag>-amd64` and

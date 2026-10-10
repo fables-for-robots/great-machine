@@ -1,0 +1,106 @@
+/* View 3: a zathras. */
+
+.z-head h1 {
+  font-size: 24px;
+}
+
+/* What is said while the zathras is gone. */
+.gone {
+  border: 1px solid var(--bad);
+  background: var(--bad-wash);
+  color: var(--bad-text);
+  border-radius: var(--ffr-radius-md);
+  padding: var(--ffr-space-3) var(--ffr-space-4);
+  margin-bottom: var(--ffr-space-4);
+  max-width: 96ch;
+}
+
+.z-body[data-stale] {
+  opacity: 0.62;
+}
+
+/* The state: a name above each value, as many beside each other as fit. */
+.state {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--ffr-space-4) var(--ffr-space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--ffr-radius-md);
+  padding: var(--ffr-space-4) var(--ffr-space-5);
+}
+
+.state > div {
+  display: grid;
+  gap: 3px;
+  align-content: start;
+  min-width: 0;
+}
+
+.state > .wide {
+  grid-column: span 2;
+}
+
+.state dd {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.state .path {
+  display: block;
+  font-size: 12px;
+}
+
+.state .reason {
+  display: block;
+  margin-top: 2px;
+}
+
+/* The arguments, each in a box of its own: one with a space in it, or
+   an empty one, is seen for what it is. */
+.args {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ffr-space-1);
+}
+
+.args code {
+  font-family: var(--ffr-font-mono);
+  font-size: 12.5px;
+  background: var(--surface-strong);
+  border-radius: 3px;
+  padding: 1px 6px;
+  min-width: 1.5ch;
+  min-height: 1.5em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.whole-id {
+  font-size: 12.5px;
+  user-select: all;
+}
+
+.wrap {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 980px) {
+  .state {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .state {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--ffr-space-4);
+  }
+
+  .state > .wide {
+    grid-column: auto;
+  }
+
+  .z-head h1 {
+    font-size: 20px;
+  }
+}

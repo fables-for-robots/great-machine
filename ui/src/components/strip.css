@@ -1,0 +1,67 @@
+/* The zathrases of a service, a block each. Running is a full block of
+   the brand's teal; stopping is hollow; backoff is full, in the colour
+   of what is wrong; idle is a low block. */
+
+.strip {
+  display: flex;
+  align-items: center;
+  gap: var(--ffr-space-2) var(--ffr-space-3);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.strip-blocks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: flex-end;
+}
+
+.strip-blocks i {
+  display: block;
+  width: 9px;
+  height: 20px;
+  border-radius: 2px;
+  background: var(--ok);
+}
+
+.strip-blocks i[data-phase="stopping"] {
+  background: transparent;
+  border: 2px solid var(--warn);
+}
+
+.strip-blocks i[data-phase="backoff"] {
+  background: var(--bad);
+}
+
+.strip-blocks i[data-phase="idle"] {
+  height: 7px;
+  background: var(--idle);
+}
+
+.strip-words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--ffr-space-3);
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
+.strip-word {
+  white-space: nowrap;
+}
+
+.strip-word b {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.strip-word[data-phase="backoff"],
+.strip-word[data-phase="backoff"] b {
+  color: var(--bad-text);
+}
+
+.strip-word[data-phase="stopping"],
+.strip-word[data-phase="stopping"] b {
+  color: var(--warn-text);
+}

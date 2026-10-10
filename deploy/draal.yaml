@@ -12,8 +12,20 @@
 #
 # It is that of the key in the volume, and stays as long as the volume.
 #
-# draal listens on no TCP port, and needs no Service: zathrases and
-# operators reach it over iroh by its endpoint ID.
+# draal needs no Service: zathrases and operators reach it over iroh by
+# its endpoint ID.
+#
+# The web page of draal listens on the loopback address of the pod, port
+# 8080, where no other pod and no Service reaches it. A forward brings it
+# to the laptop:
+#
+#   kubectl port-forward deployment/draal 8080:8080
+#
+# and then http://localhost:8080/. Whoever may forward a port to the pod
+# (pods/portforward in the cluster's RBAC) reaches the page so, and with
+# it a shell in every container: the page has no authentication of its
+# own, and in a cluster that permission is its only one. Do not expose
+# the port with a Service or an Ingress.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -69,6 +81,13 @@ spec:
             # reference. The same value the sidecars have.
             - name: JACCARD_PREFIX
               value: /great-machine/nix/store/
+            # Where the web page listens. This is the default, written
+            # out: loopback, reached with `kubectl port-forward` (see the
+            # top of this file). An empty value is no web page. Any
+            # address that is not loopback opens the page, and with it a
+            # shell in every container, to whatever can reach the pod.
+            - name: GREAT_MACHINE_WEB_ADDR
+              value: "127.0.0.1:8080"
           volumeMounts:
             - name: data
               mountPath: /data

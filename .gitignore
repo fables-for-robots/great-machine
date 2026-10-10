@@ -16,3 +16,9 @@
 *.sqlite-shm
 
 .DS_Store
+
+# the page: its dependencies, and its build but for the placeholder that
+# keeps web/dist there for go:embed
+/ui/node_modules/
+/web/dist/*
+!/web/dist/.gitkeep

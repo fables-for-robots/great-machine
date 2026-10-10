@@ -1,0 +1,174 @@
+/* The log of a zathras: a box of rows in the colours of a terminal. */
+
+.log-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px var(--ffr-space-4);
+  margin-bottom: var(--ffr-space-3);
+}
+
+.log-head .muted {
+  font-size: 13px;
+}
+
+.log-frame {
+  position: relative;
+}
+
+.log {
+  height: 440px;
+  overflow: auto;
+  overflow-anchor: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--ffr-radius-md);
+  background: var(--term-bg);
+  color: var(--term-fg);
+  font-family: var(--ffr-font-mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  padding: var(--ffr-space-2) 0;
+}
+
+.log-row {
+  display: grid;
+  grid-template-columns: 12.5ch 7.5ch minmax(0, 1fr);
+  gap: 0 var(--ffr-space-2);
+  padding: 0 var(--ffr-space-3);
+}
+
+.log-row:hover {
+  background: var(--surface-strong);
+}
+
+.log-at {
+  color: var(--term-bright-black);
+}
+
+.log-stream {
+  color: var(--term-bright-black);
+}
+
+/* What the service wrote to its standard error, and what zathras says
+   itself, are told apart by the name of the stream and by a line at
+   the side, not by a colour of the text: that is the service's own. */
+.log-row[data-stream="stderr"] {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+
+.log-row[data-stream="stderr"] .log-stream {
+  color: var(--warn-text);
+}
+
+.log-row[data-stream="zathras"] {
+  box-shadow: inset 3px 0 0 var(--busy);
+  background: var(--busy-wash);
+}
+
+.log-row[data-stream="zathras"] .log-stream {
+  color: var(--busy-text);
+}
+
+/* A line may be 16 KiB without a space: it breaks anywhere, and keeps
+   the spaces it has. */
+.log-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  tab-size: 8;
+}
+
+.log-lost,
+.log-note,
+.log-error {
+  display: block;
+  text-align: center;
+  font-family: var(--ffr-font-body);
+  font-size: 12.5px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.log-lost {
+  color: var(--warn-text);
+  background: var(--warn-wash);
+}
+
+.log-note {
+  color: var(--fg-muted);
+}
+
+.log-error {
+  color: var(--bad-text);
+  background: var(--bad-wash);
+  overflow-wrap: anywhere;
+}
+
+.log-end {
+  position: absolute;
+  right: var(--ffr-space-4);
+  bottom: var(--ffr-space-3);
+  font-family: var(--ffr-font-display);
+  font-weight: 700;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: var(--ffr-radius-sm);
+  border: 1.5px solid var(--fg);
+  background: var(--fg);
+  color: var(--bg);
+  cursor: pointer;
+}
+
+/* The sixteen colours of the palette, for the pieces of a line. */
+.log .fg0 { color: var(--term-black); }
+.log .fg1 { color: var(--term-red); }
+.log .fg2 { color: var(--term-green); }
+.log .fg3 { color: var(--term-yellow); }
+.log .fg4 { color: var(--term-blue); }
+.log .fg5 { color: var(--term-magenta); }
+.log .fg6 { color: var(--term-cyan); }
+.log .fg7 { color: var(--term-white); }
+.log .fg8 { color: var(--term-bright-black); }
+.log .fg9 { color: var(--term-bright-red); }
+.log .fg10 { color: var(--term-bright-green); }
+.log .fg11 { color: var(--term-bright-yellow); }
+.log .fg12 { color: var(--term-bright-blue); }
+.log .fg13 { color: var(--term-bright-magenta); }
+.log .fg14 { color: var(--term-bright-cyan); }
+.log .fg15 { color: var(--term-bright-white); }
+.log .bg0 { background-color: var(--term-black); }
+.log .bg1 { background-color: var(--term-red); }
+.log .bg2 { background-color: var(--term-green); }
+.log .bg3 { background-color: var(--term-yellow); }
+.log .bg4 { background-color: var(--term-blue); }
+.log .bg5 { background-color: var(--term-magenta); }
+.log .bg6 { background-color: var(--term-cyan); }
+.log .bg7 { background-color: var(--term-white); }
+.log .bg8 { background-color: var(--term-bright-black); }
+.log .bg9 { background-color: var(--term-bright-red); }
+.log .bg10 { background-color: var(--term-bright-green); }
+.log .bg11 { background-color: var(--term-bright-yellow); }
+.log .bg12 { background-color: var(--term-bright-blue); }
+.log .bg13 { background-color: var(--term-bright-magenta); }
+.log .bg14 { background-color: var(--term-bright-cyan); }
+.log .bg15 { background-color: var(--term-bright-white); }
+.log .b { font-weight: 700; }
+.log .d { opacity: 0.65; }
+.log .i { font-style: italic; }
+.log .u { text-decoration: underline; }
+
+@media (max-width: 640px) {
+  .log {
+    height: 360px;
+    font-size: 12px;
+  }
+
+  /* The time and the stream above the text, which gets the width. */
+  .log-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .log-text {
+    grid-column: 1 / -1;
+  }
+}

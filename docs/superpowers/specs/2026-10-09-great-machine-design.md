@@ -194,10 +194,17 @@ allowlist later, with one verb and one path for every operation
 
 **The web page has no authentication**, as a browser has no iroh key. It
 listens on loopback unless told otherwise, and is reached through
-`kubectl port-forward` or an SSH tunnel. On loopback it answers only to a
-loopback address or `localhost` as the host name, and its WebSockets refuse
-an `Origin` that is not the host they were asked on. **Whoever can reach
-that port has a shell in every container.**
+`kubectl port-forward` or an SSH tunnel. **Whoever can reach that port
+has a shell in every container.**
+
+It answers under any host name, so that a tunnel or a proxy may reach it
+under whatever name it has. Its WebSockets refuse an `Origin` that is not
+the host they were asked on, which keeps a page of another site from
+opening one. That does not keep out a site that points a name of its own
+at draal's address while its page is open in the browser of someone who
+can reach the port (DNS rebinding): its page is then of the same origin
+as draal's. This was weighed and left open: whoever can reach the port is
+trusted, and so is what they browse meanwhile.
 
 ## 5. Protocol
 
@@ -510,7 +517,10 @@ minutes of every connected zathras in memory. Where a file is missing
 the environment of zathras and the `TERM` of the request. On its stream the
 asking side sends input and changes of size, and zathras sends output and,
 when the shell has ended, its exit status. A stream that ends ends the
-shell: SIGHUP to its process group, then SIGKILL.
+shell: SIGHUP to its process group, then SIGKILL. That holds whatever
+either side waits in at that moment: a session whose program takes no
+input, with more typed than the stream holds, ends like any other when
+the asking side closes, on draal and in the container.
 
 A shell is in the container of zathras: it sees the store, the files and
 the processes the service sees.
@@ -572,11 +582,17 @@ so the TUI and the web page cannot differ in what they are able to show.
 | `/api/services/{service}/rollouts` | the last 20 rollouts |
 | `/api/zathras/{id}/history` | the samples |
 | `/api/zathras/{id}/logs` | WebSocket: the ring, then what follows |
-| `/api/zathras/{id}/shell?cols=&rows=` | WebSocket: binary messages are input and output, text messages are JSON (a change of size one way, the exit status the other) |
-| everything else | the web page; a path that is no file is answered with `index.html` |
+| `/api/zathras/{id}/shell?cols=&rows=&term=` | WebSocket: binary messages are input and output, text messages are JSON (a change of size one way, the exit status the other) |
+| everything else | the web page; a path that is no file is answered with `index.html`, but for one under `/assets/`, which is not found |
 
 The HTTP API can roll nothing out and nothing back. A rollout needs the Nix
 store of the laptop, and the page has no authentication.
+
+A refusal is JSON with the code and the message that the protocol over
+iroh has, and an HTTP status that fits the code. What draal refuses of a
+WebSocket is told as its last message, since a page cannot read the
+answer to an upgrade that failed. Every answer carries a content security
+policy that allows the page's own origin alone.
 
 ## 9. Web page
 
@@ -587,7 +603,7 @@ It follows the Fables for Robots design system.
 | View | Shows |
 |---|---|
 | services | every service: stable generation, its zathrases by phase, the last rollout and its progress |
-| a service | its zathrases as a table (name, phase, generation, time running, restarts, CPU and memory), the rollout under way with every zathras' part in it, and the last 20 rollouts |
+| a service | its zathrases as a table (name, phase, generation, time running, restarts, CPU and memory), the rollout under way with where every zathras stands in it by its own report, and the last 20 rollouts |
 | a zathras | its state in full; CPU, memory, disk and network over the last 15 minutes as charts; the last 400 lines, followed live; a shell in [xterm.js](https://xtermjs.org) |
 
 The page holds one WebSocket to `/api/watch` and draws from what it
@@ -668,7 +684,8 @@ zathrases report, and answers what is to be done.
 - **The page** is built by a derivation of its own. The source that gonixgo
   builds is the repository with that build put at `web/dist`. Nothing that
   is generated is committed but what sqlc makes, which `sqlc diff` holds to
-  its queries.
+  its queries, the lock file of the page's dependencies, and the hash of
+  those dependencies in the flake.
 - **The image**, `ghcr.io/fables-for-robots/great-machine`, for amd64 and
   arm64, is made by Nix of the same derivation: the program, a static
   busybox for `/bin/sh` and the shell's tools, and CA certificates. Its
@@ -683,9 +700,10 @@ zathrases report, and answers what is to be done.
   `/nix/store` mounted with `HostToContainer` propagation, and a readiness
   probe on the health check of zathras.
   **`deploy/draal.yaml`** runs draal with a volume for its data.
-- **CI.** `test.yml` runs vet, the tests, `sqlc diff` and the type check
-  and build of the page. `release.yml`, on a tag `v*`, builds and pushes
-  the image as `:<tag>` and `:latest` and makes a GitHub release.
+- **CI.** `test.yml` runs vet, the tests, `sqlc diff` and the type check,
+  the unit tests and the build of the page. `release.yml`, on a tag `v*`,
+  builds and pushes the image as `:<tag>` and `:latest` and makes a
+  GitHub release.
 
 ## 13. Errors
 
@@ -736,7 +754,11 @@ Tests use the package `testing` of the standard library.
   SIGTERM reaches the child and that the container ends with the child's
   exit status. That a zathras which is told to end stops its service is
   tested with the supervisor and in the tests of the whole.
-- **The page**: type check and build. Its logic is in what it is sent.
+- **The page**: type check and build, and unit tests of what it works
+  out itself: what it shows of numbers and times, the pauses between its
+  attempts to connect, the lines it keeps of a log, the lines of the
+  charts, and where a zathras stands in a rollout. What is drawn is
+  looked at against a made-up fleet behind the real API (`web/demo`).
 
 ## 15. To be settled first
 
@@ -752,12 +774,19 @@ The plan begins with these, as each can change something above:
    is great-machine's own code after that model, since jaccard-store's
    keeps the connection to itself. Over a relay, and on Linux, none of
    this was measured.
-2. **gonixgo.** Half settled while the plan of stage 1 was written: it
-   builds the program without cgo on macOS and on arm64 Linux, and the
-   image made of it runs. The amd64 image was evaluated and not built.
-   Still open, for stage 2: that it builds a package that embeds a
-   directory, from a source tree into which another derivation's output
-   was put.
+2. **gonixgo.** Settled in two halves. While the plan of stage 1 was
+   written: it builds the program without cgo on macOS and on arm64
+   Linux, and the image made of it runs. While the plan of stage 2 was
+   written, with gonixgo v0.2.0 on macOS and on arm64 Linux: the page is
+   built by a derivation of its own, a second derivation is the
+   repository with that build at `web/dist`, and gonixgo builds the
+   program from it with the directory embedded; the program and the image
+   built so serve the page. gonixgo asks `go list` which files a package
+   embeds while Nix evaluates, so both derivations are built during
+   evaluation, on the machine that evaluates (import from derivation, as
+   gonixgo's own tool is): an evaluation after a change of the page takes
+   as long as the page's build, and the derivations of the program are
+   the same whichever machine evaluated them.
 3. **Store paths that are no directories.** Settled while the plan was
    written, against jaccard-store v0.7.0: a single file is imported and
    pushed by the same calls as a directory, and comes back identical. A
@@ -778,6 +807,7 @@ Three stages, each of which ends with something that works by itself:
 ## 17. Not in this design
 
 - Tokens of clamp, and any authentication of the web page.
+- A check of the host name the web page is asked under (section 4).
 - Checks of what a service does. draal and the health check of zathras go
   by whether its process runs, and for how long.
 - Environment and secrets of a service: they are those of the pod.

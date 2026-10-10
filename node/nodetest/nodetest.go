@@ -13,7 +13,12 @@
 //   - CloseWrite ends one direction: the peer reads io.EOF after what was
 //     written, and can still write.
 //   - Close of a stream delivers what was written and then io.EOF, fails
-//     the peer's Write, and fails this side's Read.
+//     the peer's Write, and fails this side's Read. When a Write of this
+//     side has not returned, Close breaks the stream off instead: that
+//     Write fails, what the peer has not read is dropped, and the peer
+//     reads an error.
+//   - Done of a stream is closed when the peer has closed the stream,
+//     when this side has ended what it sends, and with the connection.
 //   - Close of a connection closes Done on both sides and fails every
 //     call that waits on it or on one of its streams.
 package nodetest
@@ -41,6 +46,7 @@ var (
 	errConnEnded     = errors.New("nodetest: the connection has ended")
 	errStreamClosed  = errors.New("nodetest: the stream was closed on this side")
 	errPeerClosed    = errors.New("nodetest: the peer closed the stream")
+	errPeerReset     = errors.New("nodetest: the peer broke the stream off")
 	errListenerEnded = errors.New("nodetest: the listener is closed")
 )
 
@@ -341,10 +347,12 @@ func (s *stream) CloseWrite() error {
 
 func (s *stream) Close() error {
 	s.show()
-	s.out.closeWrite()
+	s.out.closeOrReset()
 	s.in.closeRead()
 	return nil
 }
+
+func (s *stream) Done() <-chan struct{} { return s.out.ended }
 
 // pipe is one direction of a stream: bytes that were written and wait to
 // be read.
@@ -352,26 +360,42 @@ type pipe struct {
 	mu      sync.Mutex
 	changed *sync.Cond
 	buf     []byte
+	writing int  // the writes that have not returned
 	eof     bool // the writer ended the direction
+	reset   bool // the writer broke the direction off
 	gone    bool // the reader closed the stream
 	failed  bool // the connection has ended
+	// ended is closed when nothing more can be written: with the first of
+	// eof, reset, gone and failed.
+	ended chan struct{}
 }
 
 func newPipe() *pipe {
-	p := &pipe{}
+	p := &pipe{ended: make(chan struct{})}
 	p.changed = sync.NewCond(&p.mu)
 	return p
+}
+
+// end closes ended, the first time it is called. The caller holds mu.
+func (p *pipe) end() {
+	select {
+	case <-p.ended:
+	default:
+		close(p.ended)
+	}
 }
 
 func (p *pipe) write(b []byte) (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.writing++
+	defer func() { p.writing-- }()
 	written := 0
 	for {
 		switch {
 		case p.failed:
 			return written, errConnEnded
-		case p.eof:
+		case p.eof, p.reset:
 			return written, errStreamClosed
 		case p.gone:
 			return written, errPeerClosed
@@ -400,6 +424,8 @@ func (p *pipe) read(b []byte) (int, error) {
 			return 0, errConnEnded
 		case p.gone:
 			return 0, errStreamClosed
+		case p.reset:
+			return 0, errPeerReset
 		case len(p.buf) > 0:
 			n := copy(b, p.buf)
 			p.buf = p.buf[n:]
@@ -420,6 +446,27 @@ func (p *pipe) read(b []byte) (int, error) {
 func (p *pipe) closeWrite() {
 	p.mu.Lock()
 	p.eof = true
+	p.end()
+	p.mu.Unlock()
+	p.changed.Broadcast()
+}
+
+// closeOrReset ends the direction from the side that writes, for Close of
+// a stream: as closeWrite does when no write is under way, and otherwise
+// by breaking it off, which fails the write that waits, drops what was
+// not read and fails the reader. A direction that has ended stays as it
+// ended.
+func (p *pipe) closeOrReset() {
+	p.mu.Lock()
+	switch {
+	case p.eof || p.reset:
+	case p.writing > 0:
+		p.reset = true
+		p.buf = nil
+	default:
+		p.eof = true
+	}
+	p.end()
 	p.mu.Unlock()
 	p.changed.Broadcast()
 }
@@ -429,6 +476,7 @@ func (p *pipe) closeWrite() {
 func (p *pipe) closeRead() {
 	p.mu.Lock()
 	p.gone = true
+	p.end()
 	p.buf = nil
 	p.mu.Unlock()
 	p.changed.Broadcast()
@@ -438,6 +486,7 @@ func (p *pipe) closeRead() {
 func (p *pipe) fail() {
 	p.mu.Lock()
 	p.failed = true
+	p.end()
 	p.buf = nil
 	p.mu.Unlock()
 	p.changed.Broadcast()
