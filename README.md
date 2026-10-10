@@ -37,7 +37,7 @@ reach it: no address, no port, no Service.
 
 draal also serves [a web page](#the-web-page) that shows the fleet, the
 figures and the log of every zathras, and gives a shell in its container.
-A terminal UI that shows the same is planned, and is not there yet.
+[`great-machine tui`](#the-terminal-ui) shows the same in a terminal.
 
 The design is in
 [`docs/superpowers/specs/2026-10-09-great-machine-design.md`](docs/superpowers/specs/2026-10-09-great-machine-design.md).
@@ -150,6 +150,7 @@ great-machine shell web
 | `great-machine status [SERVICE]` | lists services, or the zathrases of one |
 | `great-machine logs [-f] SERVICE [ZATHRAS]` | prints the last 400 lines, and follows with `-f` |
 | `great-machine shell SERVICE [ZATHRAS]` | a shell in the container of a zathras |
+| `great-machine tui` | the fleet in the terminal: services, zathrases, figures, logs, and a shell |
 | `great-machine version` | prints the version of the program |
 
 Every flag has an environment variable, and a flag wins over its variable.
@@ -224,8 +225,8 @@ with its own environment and working directory, and:
 
 ### Operator commands
 
-`id` takes `--key` alone. `rollout`, `rollback`, `status`, `logs` and
-`shell` take both of these:
+`id` takes `--key` alone. `rollout`, `rollback`, `status`, `logs`, `shell`
+and `tui` take both of these:
 
 | flag | environment | default | meaning |
 | --- | --- | --- | --- |
@@ -256,6 +257,9 @@ is passed on, and the exit status of the shell is that of the command:
 ```sh
 echo uptime | great-machine shell web
 ```
+
+`tui` takes no argument and no flag of its own: see
+[The terminal UI](#the-terminal-ui).
 
 ## The web page
 
@@ -331,6 +335,87 @@ the page is built by Node (see [Development](#development)). Its draal
 warns about that at its start, and answers `501` with a line that says
 how the page is built. The program that Nix builds, and the image, have
 it.
+
+## The terminal UI
+
+```sh
+great-machine tui --draal ID
+```
+
+shows in a terminal what the web page shows, and follows it. It talks to
+draal as an operator, as `status`, `logs` and `shell` do: it takes
+`--draal` and `--key`, draal lets it in by its allowlist, and it needs
+neither the web page nor a forwarded port.
+
+| view | shows |
+| --- | --- |
+| services | every service: its stable generation, its zathrases by phase, its last rollout and how far it is |
+| a service | its zathrases as a table (name, phase and since when, generation and whether it is the stable one, restarts, last exit, CPU and memory), the rollout under way with where every zathras stands in it, and its last rollouts |
+| a zathras | its state in full; CPU, memory, disk and network over the last 15 minutes as sparklines, with the value now; the last 400 lines of its log, followed as they come |
+
+One view at a time fills the terminal, under a line that says where one
+is, the beginning of draal's endpoint ID and the state of the connection,
+and above a line of the keys that work there.
+
+| key | does |
+| --- | --- |
+| `↑` `↓`, `k` `j` | move in a list; scroll a log |
+| `Enter`, `→`, `l` | open what is chosen |
+| `Esc`, `←`, `h`, `Backspace` | back |
+| `PgUp` `PgDn` | a page up, a page down |
+| `g` `G` | the start, the end; in a log `G` also follows it again |
+| `s` | on a zathras: open a shell |
+| `?` | the keys, and what the signs mean |
+| `q`, `Ctrl-C` | quit |
+
+**It can roll nothing out and nothing back.** `rollout` and `rollback`
+are commands of their own.
+
+**The shell.** `s` on the view of a zathras that is connected opens a
+shell in its container, the one `great-machine shell` opens. First draal
+is asked for it, and a line says so; the terminal UI keeps the terminal
+meanwhile, `Esc` gives the shell up, and nothing else that is typed then
+is acted on or passed on to the shell. When draal has opened the shell
+the terminal UI steps aside for it: the shell is on the terminal's own
+screen, under a line that says whose shell it is, and what it wrote is
+still there, in the terminal's scrollback, when the terminal UI has
+ended. Everything that is typed goes to the shell, `Ctrl-C` and `q` too,
+until the shell ends (`exit`) or `Ctrl-]` is typed. `Ctrl-]` hangs the
+shell up, as closing its terminal would: what runs in it ends with it.
+Back in the terminal UI, a line says how the shell ended: its exit
+status, that it was left, or why it failed; a shell that draal refuses
+is said the same way, without the terminal UI leaving its screen. While
+a shell is open the terminal UI draws nothing; it shows the fleet as it
+is then when it is back. What is typed in the shell never reaches the
+terminal UI, and what is typed before `s` never reaches the shell. Within
+a few milliseconds of the terminal changing hands, in either direction,
+a key may be dropped; and a key typed in the instant before the shell
+takes the terminal may be the shell's or, rarely, be acted on by the
+terminal UI when the shell has ended.
+
+**When the connection to draal is lost** (draal restarted, the network
+gone), the first line says so and for how long, what was shown stays and
+is marked as what draal sent last, and draal is dialed again: after one
+second, then after pauses that double up to 30 seconds. Any key asks at
+once. When draal answers, the view that was open is alive again. What
+draal refuses at the very start, an operator that is not on its
+allowlist, ends the command with that refusal and the status 1.
+
+**The terminal.** The terminal UI needs a terminal as its standard input
+and its standard output, and ends with the status 2 and one line
+otherwise: `status` and `logs` print the same without one. It draws on
+the terminal's alternate screen and leaves the terminal as it found it,
+however it ends. It wants 80 columns and 24 rows, uses more, draws down
+to 50 by 12, and says so in one line below that. The keyboard alone
+drives it: it does not ask for the mouse, so the terminal's own selection
+works. Its colours are the terminal's own sixteen, so it is light or dark
+as the terminal is, and it has no theme. With `NO_COLOR` set it draws
+without colour; every state is also said by a sign and a word. It needs
+UTF-8 and a font with the box-drawing block elements (`▁▂▃▄▅▆▇█`) for
+the sparklines. Nothing that draal or a zathras sent, a name, a reason or
+a line of a log, reaches the terminal as it came, but through a shell:
+control characters and escape sequences are taken out, and a log line
+keeps its colours by being read and drawn again.
 
 ## Rollout
 
@@ -547,7 +632,8 @@ because building the program is part of it: after a `go get` that left
 
 The tests need no cluster and no network beyond the loopback interface.
 Those in `e2e` run draal and several zathrases in one process, with real
-child processes for the services. `scripts/test-pid1.sh` runs zathras as
+child processes for the services, and the terminal UI against them in a
+pseudo-terminal. `scripts/test-pid1.sh` runs zathras as
 the first process of a container, and takes Docker.
 
 ### The page
@@ -588,6 +674,15 @@ stay on loopback, which is its default.
 
 Vite passes `/api`, WebSockets included, on to `127.0.0.1:8080`, which
 can be a real draal as well.
+
+The terminal UI has the same made-up fleet behind it with
+
+```sh
+go run ./tui/demo           # the terminal UI, no draal and no cluster; --empty for a fleet without a service
+```
+
+**Its shell is a real one too**: `s` on a zathras opens a shell on the
+machine that runs the demo, as the user who runs it.
 
 After a change of the dependencies (`npm install …`, which rewrites
 `ui/package-lock.json`), the flake has to be told their new hash:
