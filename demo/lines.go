@@ -1,4 +1,4 @@
-package main
+package demo
 
 import (
 	"fmt"
@@ -25,7 +25,7 @@ var paths = []string{"/", "/api/orders", "/api/orders/8841", "/api/cart", "/api/
 // and the text. Most are what a service says of its requests; among them
 // are lines with tabs, with colours, with characters that are wider than
 // one column, lines on standard error, and one as long as a line may be.
-func (d *demo) line(z *zathras, at time.Time) (stream, text string) {
+func (d *Demo) line(z *zathras, at time.Time) (stream, text string) {
 	z.lines++
 	n := z.lines
 	clock := dim + at.UTC().Format("15:04:05.000") + reset

@@ -1,7 +1,8 @@
 // Command demo serves the web page of great-machine over a made-up fleet,
 // for developing the page: the real handler of the package web, and
-// behind it a controller that invents four services, their zathrases,
-// their figures and their logs, and moves them along.
+// behind it the controller of the package demo, which invents four
+// services, their zathrases, their figures and their logs, and moves
+// them along.
 //
 //	go run ./web/demo [--addr 127.0.0.1:8080] [--dist DIR] [--empty]
 //
@@ -29,6 +30,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fables-for-robots/great-machine/demo"
 	"github.com/fables-for-robots/great-machine/web"
 )
 
@@ -66,10 +68,10 @@ func run(ctx context.Context, addr, dist string, empty bool, out io.Writer, read
 	}
 	defer l.Close()
 
-	fleet := newDemo(time.Now(), empty)
+	fleet := demo.New(empty)
 	moving, stopMoving := context.WithCancel(context.Background())
 	defer stopMoving()
-	go fleet.run(moving)
+	go fleet.Run(moving)
 	cfg.Controller = fleet
 
 	// The context of every request. A socket lives on when a server is

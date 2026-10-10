@@ -1,4 +1,13 @@
-package main
+// Package demo is a made-up fleet behind the interface of draal: a
+// draal.Controller that invents four services, their zathrases, their
+// figures and their logs, and moves them along. The web page and the
+// terminal UI are developed against it (web/demo and tui/demo).
+//
+// Everything of it is made up but the shell: Shell starts A REAL SHELL ON
+// THE MACHINE THAT RUNS IT, as the user who runs it.
+//
+// It is not part of the program, and nothing of great-machine uses it.
+package demo
 
 import (
 	"cmp"
@@ -32,12 +41,12 @@ const (
 	longestName = 253
 )
 
-// demo is the made-up fleet. It is a draal.Controller.
+// Demo is the made-up fleet. It is a draal.Controller.
 //
 // All of it moves by tasks that are to be done at a time: advance does
 // those whose time has come. So the fleet of any time can be had without
 // waiting for it, which is how its test looks at three minutes of it.
-type demo struct {
+type Demo struct {
 	start time.Time
 
 	mu       sync.Mutex
@@ -53,8 +62,8 @@ type demo struct {
 	subs     map[chan struct{}]struct{} // who is told that the fleet changed
 }
 
-// A demo is a Controller.
-var _ draal.Controller = (*demo)(nil)
+// A Demo is a Controller.
+var _ draal.Controller = (*Demo)(nil)
 
 // task is something that is to happen at a time. It is given that time,
 // which is the present for it, however late it is done.
@@ -119,8 +128,8 @@ func binaryOf(service string, generation uint64) string {
 // newDemo returns the fleet as it is at start, with what is to happen to
 // it from then on. With empty it has no service and nothing happens to
 // it: a draal that was started for the first time.
-func newDemo(start time.Time, empty bool) *demo {
-	d := &demo{
+func newDemo(start time.Time, empty bool) *Demo {
+	d := &Demo{
 		start:    start,
 		at:       start,
 		last:     start,
@@ -135,19 +144,26 @@ func newDemo(start time.Time, empty bool) *demo {
 	return d
 }
 
+// New returns the made-up controller of web/demo: four services
+// (empty, fresh, web, worker), or none when empty is set, with a fleet
+// that moves by itself once Run is called.
+func New(empty bool) *Demo {
+	return newDemo(time.Now(), empty)
+}
+
 // after has do done when delay has passed since at.
-func (d *demo) after(at time.Time, delay time.Duration, do func(at time.Time)) {
+func (d *Demo) after(at time.Time, delay time.Duration, do func(at time.Time)) {
 	d.todo = append(d.todo, task{at: at.Add(delay), do: do})
 }
 
 // every has do done now and then again whenever pause has passed.
-func (d *demo) every(at time.Time, pause time.Duration, do func(at time.Time)) {
+func (d *Demo) every(at time.Time, pause time.Duration, do func(at time.Time)) {
 	do(at)
 	d.after(at, pause, func(at time.Time) { d.every(at, pause, do) })
 }
 
-// run moves the fleet along with the clock until ctx is done.
-func (d *demo) run(ctx context.Context) {
+// Run moves the fleet until ctx is done.
+func (d *Demo) Run(ctx context.Context) {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -162,7 +178,7 @@ func (d *demo) run(ctx context.Context) {
 
 // advance does every task whose time has come by now, oldest first, and
 // tells the watchers if the fleet has changed.
-func (d *demo) advance(now time.Time) {
+func (d *Demo) advance(now time.Time) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	// A machine that slept does not make up for the time: what was to
@@ -202,7 +218,7 @@ func (d *demo) advance(now time.Time) {
 
 // seed makes the fleet of the start: four services, their rollouts so
 // far and their zathrases, and what is to happen to them.
-func (d *demo) seed() {
+func (d *Demo) seed() {
 	// fresh: what a new user sees first. Two zathrases have registered,
 	// and nothing was rolled out: no rollout, no generation, and logs
 	// without a line, as the supervisor of a zathras says nothing before
@@ -307,12 +323,12 @@ func (d *demo) seed() {
 }
 
 // around returns a time about as long as pause: half of it to half more.
-func (d *demo) around(pause time.Duration) time.Duration {
+func (d *Demo) around(pause time.Duration) time.Duration {
 	return pause/2 + time.Duration(d.rng.Int64N(int64(pause)))
 }
 
 // addService adds a service without a rollout.
-func (d *demo) addService(name string, args ...string) *service {
+func (d *Demo) addService(name string, args ...string) *service {
 	svc := &service{name: name, args: args}
 	d.services[name] = svc
 	return svc
@@ -320,7 +336,7 @@ func (d *demo) addService(name string, args ...string) *service {
 
 // addZathras adds a zathras that is connected and idle. salt tells two of
 // one name apart.
-func (d *demo) addZathras(svc *service, name string, salt int, connectedFor time.Duration) *zathras {
+func (d *Demo) addZathras(svc *service, name string, salt int, connectedFor time.Duration) *zathras {
 	z := &zathras{
 		id:        idOf(fmt.Sprintf("%s/%s/%d", svc.name, name, salt)),
 		name:      name,
@@ -340,7 +356,7 @@ func (d *demo) addZathras(svc *service, name string, salt int, connectedFor time
 
 // runs puts a zathras on a generation that it has run since the time
 // given, without a word in its log.
-func (d *demo) runs(z *zathras, generation uint64, since time.Time) {
+func (d *Demo) runs(z *zathras, generation uint64, since time.Time) {
 	z.state.Generation = generation
 	z.state.Binary, z.state.Args = binaryOf(z.service.name, generation), z.service.args
 	z.state.Phase = wire.PhaseRunning
@@ -353,7 +369,7 @@ func (d *demo) runs(z *zathras, generation uint64, since time.Time) {
 
 // started is runs for a service that is started now: the supervisor of
 // the zathras says so in the log.
-func (d *demo) started(z *zathras, generation uint64, at time.Time) {
+func (d *Demo) started(z *zathras, generation uint64, at time.Time) {
 	prepared := z.state.Prepared
 	d.runs(z, generation, at)
 	if !slices.Contains(prepared, generation) {
@@ -365,7 +381,7 @@ func (d *demo) started(z *zathras, generation uint64, at time.Time) {
 
 // exited records how the service of a zathras ended, as the supervisor
 // does, and returns the words for it.
-func (d *demo) exited(z *zathras, status int, signal string, at time.Time) string {
+func (d *Demo) exited(z *zathras, status int, signal string, at time.Time) string {
 	ran := at.Sub(z.since)
 	z.state.LastExit = &wire.Exit{Generation: z.state.Generation, Status: status, Signal: signal, At: at, Ran: ran}
 	z.pid = 0
@@ -381,7 +397,7 @@ func (d *demo) exited(z *zathras, status int, signal string, at time.Time) strin
 
 // backoff has the service of a zathras end by itself and be started
 // again after the pause.
-func (d *demo) backoff(z *zathras, status int, signal string, pause time.Duration, at time.Time, then func(at time.Time)) {
+func (d *Demo) backoff(z *zathras, status int, signal string, pause time.Duration, at time.Time, then func(at time.Time)) {
 	how := d.exited(z, status, signal, at)
 	z.state.Phase = wire.PhaseBackoff
 	z.state.RestartAt = at.Add(pause)
@@ -397,7 +413,7 @@ func (d *demo) backoff(z *zathras, status int, signal string, pause time.Duratio
 
 // crash is the life of a zathras whose service exits a moment after
 // every start: it is in backoff nearly all the time.
-func (d *demo) crash(z *zathras, at time.Time) {
+func (d *Demo) crash(z *zathras, at time.Time) {
 	z.since = at.Add(-1300 * time.Millisecond)
 	for _, line := range []string{
 		"panic: runtime error: invalid memory address or nil pointer dereference",
@@ -419,7 +435,7 @@ func (d *demo) crash(z *zathras, at time.Time) {
 
 // restart has a zathras stop its service, which takes its time over it,
 // and start it again.
-func (d *demo) restart(z *zathras, at time.Time) {
+func (d *Demo) restart(z *zathras, at time.Time) {
 	z.state.Phase = wire.PhaseStopping
 	d.dirty = true
 	d.after(at, 6*time.Second, func(at time.Time) {
@@ -429,7 +445,7 @@ func (d *demo) restart(z *zathras, at time.Time) {
 }
 
 // record adds a rollout of a new generation that ended as it is given.
-func (d *demo) record(svc *service, state wire.RolloutState, reason string, created time.Time, took time.Duration) {
+func (d *Demo) record(svc *service, state wire.RolloutState, reason string, created time.Time, took time.Duration) {
 	r := d.rollOut(svc, created)
 	r.State, r.Reason, r.Finished = state, reason, created.Add(took)
 	if state == wire.RolloutCompleted {
@@ -440,7 +456,7 @@ func (d *demo) record(svc *service, state wire.RolloutState, reason string, crea
 // rollOut records a new generation of a service and the rollout to it,
 // and returns the rollout, which is the last one of the service until
 // the next.
-func (d *demo) rollOut(svc *service, at time.Time) *wire.RolloutInfo {
+func (d *Demo) rollOut(svc *service, at time.Time) *wire.RolloutInfo {
 	svc.generation++
 	d.rollouts++
 	svc.rollouts = slices.Insert(svc.rollouts, 0, wire.RolloutInfo{
@@ -466,7 +482,7 @@ func (d *demo) rollOut(svc *service, at time.Time) *wire.RolloutInfo {
 // activated two zathrases at a time, and completed, and after it a
 // zathras whose service exits and one that goes. Every other time the
 // first rollout does not get there: it is superseded, or it halts.
-func (d *demo) cycle(at time.Time, n int) {
+func (d *Demo) cycle(at time.Time, n int) {
 	web := d.services["web"]
 	zs := web.zathrases
 	last := func() *wire.RolloutInfo { return &web.rollouts[0] }
@@ -557,7 +573,7 @@ func (d *demo) cycle(at time.Time, n int) {
 
 // prepared has a zathras have the closure of the newest generation of
 // its service.
-func (d *demo) prepared(z *zathras) {
+func (d *Demo) prepared(z *zathras) {
 	r := &z.service.rollouts[0]
 	if z.state.Preparing != r.Generation {
 		return
@@ -572,14 +588,14 @@ func (d *demo) prepared(z *zathras) {
 }
 
 // finish ends a rollout.
-func (d *demo) finish(r *wire.RolloutInfo, state wire.RolloutState, reason string, at time.Time) {
+func (d *Demo) finish(r *wire.RolloutInfo, state wire.RolloutState, reason string, at time.Time) {
 	r.State, r.Reason, r.Finished = state, reason, at
 	d.dirty = true
 }
 
 // leave has a zathras go: it is in no fleet, and who followed its log or
 // had a shell in it is told.
-func (d *demo) leave(z *zathras) {
+func (d *Demo) leave(z *zathras) {
 	z.present = false
 	close(z.left)
 	z.samples = nil // draal forgets one that has gone
@@ -587,7 +603,7 @@ func (d *demo) leave(z *zathras) {
 }
 
 // join has a zathras that went come back.
-func (d *demo) join(z *zathras, at time.Time) {
+func (d *Demo) join(z *zathras, at time.Time) {
 	z.present = true
 	z.left = make(chan struct{})
 	z.connected = at
@@ -595,7 +611,7 @@ func (d *demo) join(z *zathras, at time.Time) {
 }
 
 // sample gives every zathras that has figures the sample of the time.
-func (d *demo) sample(at time.Time) {
+func (d *Demo) sample(at time.Time) {
 	for _, z := range d.all {
 		if z.figures == nil {
 			continue
@@ -614,7 +630,7 @@ func (d *demo) sample(at time.Time) {
 
 // past makes up what a zathras has from before the start: the samples
 // of the last fifteen minutes and a ring that is full.
-func (d *demo) past(z *zathras) {
+func (d *Demo) past(z *zathras) {
 	if z.figures != nil {
 		for at := d.start.Add(-history); at.Before(d.start); at = at.Add(sampleEvery) {
 			z.samples = append(z.samples, z.figures.next(at, z.state.Phase == wire.PhaseRunning))
@@ -636,7 +652,7 @@ func (d *demo) past(z *zathras) {
 }
 
 // talk has the service of a zathras write a line, and another one later.
-func (d *demo) talk(z *zathras, at time.Time) {
+func (d *Demo) talk(z *zathras, at time.Time) {
 	if z.state.Phase == wire.PhaseRunning {
 		z.ring.Add(d.line(z, at))
 	}
@@ -646,7 +662,7 @@ func (d *demo) talk(z *zathras, at time.Time) {
 // flood has the service of a zathras write a thousand lines a second for
 // ten seconds, and then three thousand at once: more than waits for one
 // who follows, who is told how many were lost.
-func (d *demo) flood(z *zathras, at time.Time, written int) {
+func (d *Demo) flood(z *zathras, at time.Time, written int) {
 	const each, all, burst = 10, 10000, 3000
 	if z.state.Phase != wire.PhaseRunning {
 		return
@@ -665,7 +681,7 @@ func (d *demo) flood(z *zathras, at time.Time, written int) {
 }
 
 // fleet returns the fleet as it is at now. The caller holds d.mu.
-func (d *demo) fleet(now time.Time) wire.Fleet {
+func (d *Demo) fleet(now time.Time) wire.Fleet {
 	f := wire.Fleet{Services: make([]wire.Service, 0, len(d.services))}
 	for _, svc := range d.services {
 		out := wire.Service{Name: svc.name, Stable: svc.stable, Zathrases: []wire.Zathras{}}
@@ -703,7 +719,7 @@ func (d *demo) fleet(now time.Time) wire.Fleet {
 
 // connected returns a zathras that is connected, or unavailable, as draal
 // answers for one that is not.
-func (d *demo) connected(id wire.ID) (*zathras, error) {
+func (d *Demo) connected(id wire.ID) (*zathras, error) {
 	if z := d.byID[id]; z != nil && z.present {
 		return z, nil
 	}
@@ -711,24 +727,24 @@ func (d *demo) connected(id wire.ID) (*zathras, error) {
 }
 
 // Store is not of the demo: the page asks for no store.
-func (d *demo) Store(ctx context.Context) (wire.StoreInfo, error) {
+func (d *Demo) Store(ctx context.Context) (wire.StoreInfo, error) {
 	return wire.StoreInfo{}, wire.Errorf(wire.CodeUnavailable, "the demo has no store")
 }
 
 // Rollout is not of the demo: the page rolls nothing out.
-func (d *demo) Rollout(ctx context.Context, by wire.ID, req wire.RolloutRequest) (wire.RolloutInfo, error) {
+func (d *Demo) Rollout(ctx context.Context, by wire.ID, req wire.RolloutRequest) (wire.RolloutInfo, error) {
 	return wire.RolloutInfo{}, wire.Errorf(wire.CodeUnavailable, "the demo rolls out by itself")
 }
 
 // Rollback is not of the demo: the page rolls nothing back.
-func (d *demo) Rollback(ctx context.Context, by wire.ID, req wire.RollbackRequest) (wire.RolloutInfo, error) {
+func (d *Demo) Rollback(ctx context.Context, by wire.ID, req wire.RollbackRequest) (wire.RolloutInfo, error) {
 	return wire.RolloutInfo{}, wire.Errorf(wire.CodeUnavailable, "the demo rolls back nothing")
 }
 
 // Watch sends the fleet at once and after every change, at most once in
 // watchEvery, until ctx is done, as draal does: who does not read misses
 // the fleets between and reads the newest next.
-func (d *demo) Watch(ctx context.Context) (<-chan wire.Fleet, error) {
+func (d *Demo) Watch(ctx context.Context) (<-chan wire.Fleet, error) {
 	changed := make(chan struct{}, 1)
 	d.mu.Lock()
 	d.subs[changed] = struct{}{}
@@ -777,7 +793,7 @@ func (d *demo) Watch(ctx context.Context) (<-chan wire.Fleet, error) {
 
 // Rollouts returns the last 20 rollouts of a service, newest first, as
 // the database of draal has them: without the counts of a fleet.
-func (d *demo) Rollouts(ctx context.Context, name string) ([]wire.RolloutInfo, error) {
+func (d *Demo) Rollouts(ctx context.Context, name string) ([]wire.RolloutInfo, error) {
 	if err := wire.ValidService(name); err != nil {
 		return nil, err
 	}
@@ -795,7 +811,7 @@ func (d *demo) Rollouts(ctx context.Context, name string) ([]wire.RolloutInfo, e
 }
 
 // History returns the samples of a connected zathras, oldest first.
-func (d *demo) History(ctx context.Context, id wire.ID) ([]wire.Sample, error) {
+func (d *Demo) History(ctx context.Context, id wire.ID) ([]wire.Sample, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	z, err := d.connected(id)
@@ -807,7 +823,7 @@ func (d *demo) History(ctx context.Context, id wire.ID) ([]wire.Sample, error) {
 
 // Logs sends the ring of a connected zathras, and with follow what
 // follows, until ctx is done or the zathras goes.
-func (d *demo) Logs(ctx context.Context, id wire.ID, follow bool) (<-chan wire.LogLine, error) {
+func (d *Demo) Logs(ctx context.Context, id wire.ID, follow bool) (<-chan wire.LogLine, error) {
 	d.mu.Lock()
 	z, err := d.connected(id)
 	if err != nil {
@@ -857,7 +873,7 @@ func (d *demo) Logs(ctx context.Context, id wire.ID, follow bool) (<-chan wire.L
 }
 
 // Shell starts a shell on this machine: there is no container.
-func (d *demo) Shell(ctx context.Context, id wire.ID, req wire.ShellRequest) (draal.Shell, error) {
+func (d *Demo) Shell(ctx context.Context, id wire.ID, req wire.ShellRequest) (draal.Shell, error) {
 	d.mu.Lock()
 	z, err := d.connected(id)
 	if err != nil {
@@ -870,7 +886,7 @@ func (d *demo) Shell(ctx context.Context, id wire.ID, req wire.ShellRequest) (dr
 }
 
 // ServiceOf returns the service of a connected zathras.
-func (d *demo) ServiceOf(id wire.ID) (string, bool) {
+func (d *Demo) ServiceOf(id wire.ID) (string, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	z, err := d.connected(id)

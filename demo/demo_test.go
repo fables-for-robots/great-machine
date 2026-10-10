@@ -1,17 +1,15 @@
-package main
+package demo
 
 import (
 	"context"
 	"encoding/json"
 	"io"
-	"net/http"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/coder/websocket"
-
+	"github.com/fables-for-robots/great-machine/draal"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
@@ -19,7 +17,7 @@ import (
 const deadline = 30 * time.Second
 
 // fleetAt moves the fleet to a time and returns it.
-func fleetAt(d *demo, at time.Time) wire.Fleet {
+func fleetAt(d *Demo, at time.Time) wire.Fleet {
 	d.advance(at)
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -281,66 +279,39 @@ func TestZathrasThatGoesEndsItsLogAndItsShell(t *testing.T) {
 	}
 }
 
-// The smoke test: the program is started on a free port, asked for one
-// fleet and for the history of one zathras, and ended.
-func TestDemoServes(t *testing.T) {
+// New and Run are what the two demos use: the fleet of now, which a
+// watcher is sent again once Run moves it, and Run ends with its context.
+func TestNewFleetMovesWhileRunRuns(t *testing.T) {
+	var c draal.Controller = New(false)
+	fleets, err := c.Watch(t.Context())
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	if f := <-fleets; len(f.Services) != 4 {
+		t.Fatalf("the first fleet has %d services, want four", len(f.Services))
+	}
+	if f, _ := New(true).Watch(t.Context()); len((<-f).Services) != 0 {
+		t.Error("New(true) has a service, want none")
+	}
+
 	ctx, stop := context.WithCancel(t.Context())
-	defer stop()
-	urls := make(chan string, 1)
-	ended := make(chan error, 1)
-	go func() { ended <- run(ctx, "127.0.0.1:0", "", false, io.Discard, func(url string) { urls <- url }) }()
-	var url string
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		c.(*Demo).Run(ctx)
+	}()
 	select {
-	case url = <-urls:
-	case err := <-ended:
-		t.Fatalf("run: %v", err)
-	case <-time.After(deadline):
-		t.Fatal("timed out waiting for the demo to listen")
-	}
-
-	asking, cancel := context.WithTimeout(ctx, deadline)
-	defer cancel()
-	client := &http.Client{Transport: &http.Transport{}}
-	defer client.CloseIdleConnections()
-	c, _, err := websocket.Dial(asking, "ws"+strings.TrimPrefix(url, "http")+"api/watch", &websocket.DialOptions{HTTPClient: client})
-	if err != nil {
-		t.Fatalf("dialing /api/watch: %v", err)
-	}
-	defer c.CloseNow()
-	c.SetReadLimit(-1)
-	_, data, err := c.Read(asking)
-	if err != nil {
-		t.Fatalf("reading the fleet: %v", err)
-	}
-	var f wire.Fleet
-	if err := json.Unmarshal(data, &f); err != nil || len(f.Services) != 4 {
-		t.Fatalf("the fleet is %s (%v), want four services", data, err)
-	}
-
-	z := serviceOf(t, f, "web").Zathrases[0]
-	resp, err := client.Get(url + "api/zathras/" + string(z.ID) + "/history")
-	if err != nil {
-		t.Fatalf("GET history: %v", err)
-	}
-	defer resp.Body.Close()
-	var answer struct {
-		Samples []wire.Sample `json:"samples"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil || resp.StatusCode != http.StatusOK || len(answer.Samples) < 400 {
-		t.Fatalf("the history is %d with %d samples (%v), want 200 with fifteen minutes of them", resp.StatusCode, len(answer.Samples), err)
-	}
-
-	// Ended as an interrupt ends it: the socket is closed as going away.
-	stop()
-	select {
-	case err := <-ended:
-		if err != nil {
-			t.Errorf("run = %v, want nil", err)
+	case f, ok := <-fleets:
+		if !ok || len(f.Services) != 4 {
+			t.Errorf("the second fleet is %+v (open: %v), want four services", f, ok)
 		}
 	case <-time.After(deadline):
-		t.Fatal("timed out waiting for the demo to end")
+		t.Error("timed out waiting for the fleet to move")
 	}
-	if _, _, err := c.Read(context.Background()); websocket.CloseStatus(err) != websocket.StatusGoingAway {
-		t.Errorf("the socket ended with %v, want it closed as going away", err)
+	stop()
+	select {
+	case <-ended:
+	case <-time.After(deadline):
+		t.Fatal("timed out waiting for Run to end")
 	}
 }
