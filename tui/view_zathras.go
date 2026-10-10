@@ -151,11 +151,7 @@ func (m *model) stateLines() []string {
 		connected = "draal does not say since when"
 	}
 	if len(st.Prepared) > 0 {
-		parts := make([]string, len(st.Prepared))
-		for i, g := range st.Prepared {
-			parts[i] = human.Generation(g)
-		}
-		connected += " · prepared " + strings.Join(parts, ", ")
+		connected += " · prepared " + preparedWords(st.Prepared)
 	} else {
 		connected += " · nothing prepared"
 	}
@@ -164,6 +160,27 @@ func (m *model) stateLines() []string {
 	}
 	field("connected", connected, 2)
 	return out
+}
+
+// preparedShown is how many of the generations a zathras has prepared
+// are named, as 64 of its arguments are kept.
+const preparedShown = 64
+
+// preparedWords names the generations a zathras has prepared: the first
+// preparedShown of them, and how many more there are. Nothing bounds the
+// list a zathras sends, and these words are wrapped anew with every
+// message. The list itself is kept whole in the model, where the stage
+// of a zathras in a rollout is read from it.
+func preparedWords(prepared []uint64) string {
+	parts := make([]string, 0, min(len(prepared), preparedShown+1))
+	for i, g := range prepared {
+		if i == preparedShown {
+			parts = append(parts, fmt.Sprintf("… (%d generations more)", len(prepared)-preparedShown))
+			break
+		}
+		parts = append(parts, human.Generation(g))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // hasFigures says whether the figures are sparklines, under a title, as

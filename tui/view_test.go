@@ -464,6 +464,38 @@ func TestWordsAreCapped(t *testing.T) {
 
 // Figures that are no figures of a container still have a scale that
 // can be read, and what a zathras or draal does not say is not quoted.
+// The generations a zathras says it has prepared are a list that
+// neither wire nor draal bounds: the view names 64 of them and says how
+// many more there are, and what it draws is made of those alone.
+func TestPreparedGenerationsAreKeptToTheLimit(t *testing.T) {
+	prepared := make([]uint64, 1<<20)
+	for i := range prepared {
+		prepared[i] = uint64(i + 1)
+	}
+	words := preparedWords(prepared)
+	if n := strings.Count(words, ", ") + 1; n > 65 || !strings.HasSuffix(words, ", … (1048512 generations more)") {
+		t.Errorf("of a million generations the words are %d bytes in %d parts, ending %q; want 64 named and the count of the rest", len(words), n, words[max(len(words)-40, 0):])
+	}
+	if len(words) > 64*21+40 {
+		t.Errorf("of a million generations the words are %d bytes", len(words))
+	}
+	if words := preparedWords(prepared[:64]); !strings.HasSuffix(words, ", 63, 64") {
+		t.Errorf("of 64 generations the words end %q; want all of them", words[max(len(words)-20, 0):])
+	}
+
+	m, _ := onZathras(400, 40, "web", 0)
+	f := fixtureFleet()
+	for i := range f.Services {
+		for j := range f.Services[i].Zathrases {
+			if f.Services[i].Zathrases[j].ID == m.zathras {
+				f.Services[i].Zathrases[j].State.Prepared = prepared
+			}
+		}
+	}
+	m.update(fleetMsg{epoch: m.epoch, fleet: f})
+	wantSaid(t, "a zathras with a million prepared generations", m, "prepared 1, 2, 3,", " 63, 64, … (1048512 generations more)")
+}
+
 func TestAbsurdFiguresAndMissingTimes(t *testing.T) {
 	m, _ := onZathras(120, 40, "web", 2)
 	absurd := wire.Sample{At: t0.Add(2 * time.Second), CPU: 1e300, Memory: 1<<64 - 1, DiskRead: 1e308, DiskWrite: math.MaxFloat64, NetRx: math.Inf(1), NetTx: math.NaN()}
