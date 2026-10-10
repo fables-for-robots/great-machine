@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/fables-for-robots/great-machine/human"
 	"github.com/fables-for-robots/great-machine/operator"
 	"github.com/fables-for-robots/great-machine/wire"
 	"github.com/urfave/cli/v2"
@@ -79,7 +80,7 @@ func formatFleet(f wire.Fleet) string {
 	}
 	rows := []string{"SERVICE\tSTABLE\tZATHRASES\tLAST ROLLOUT"}
 	for _, s := range f.Services {
-		rows = append(rows, strings.Join([]string{s.Name, generation(s.Stable), phases(s.Zathrases), rolloutLine(s)}, "\t"))
+		rows = append(rows, strings.Join([]string{s.Name, human.Generation(s.Stable), phases(s.Zathrases), rolloutLine(s)}, "\t"))
 	}
 	return table(rows)
 }
@@ -105,10 +106,10 @@ func formatService(f wire.Fleet, name string, now time.Time) (string, error) {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s: stable generation %s, last rollout %s\n", s.Name, generation(s.Stable), rolloutLine(*s))
+	fmt.Fprintf(&b, "%s: stable generation %s, last rollout %s\n", s.Name, human.Generation(s.Stable), rolloutLine(*s))
 	if r := s.Rollout; r != nil {
 		fmt.Fprintf(&b, "rollout #%d: to generation %d, %s at a time, begun %s ago\n",
-			r.ID, r.Generation, atATime(r.Parallel), age(now.Sub(r.Created)))
+			r.ID, r.Generation, atATime(r.Parallel), human.Age(now.Sub(r.Created)))
 	}
 	if len(s.Zathrases) == 0 {
 		b.WriteString("no zathras is connected\n")
@@ -120,9 +121,9 @@ func formatService(f wire.Fleet, name string, now time.Time) (string, error) {
 		cpu, memory := "-", "-"
 		if st.Sample != nil {
 			cpu = strconv.FormatFloat(st.Sample.CPU, 'f', 2, 64)
-			memory = byteSize(st.Sample.Memory)
+			memory = human.Bytes(st.Sample.Memory)
 			if st.Sample.MemoryLimit > 0 {
-				memory += " of " + byteSize(st.Sample.MemoryLimit)
+				memory += " of " + human.Bytes(st.Sample.MemoryLimit)
 			}
 		}
 		id := string(z.ID)
@@ -130,20 +131,12 @@ func formatService(f wire.Fleet, name string, now time.Time) (string, error) {
 			id = id[:8]
 		}
 		rows = append(rows, strings.Join([]string{
-			z.Name, id, string(st.Phase), generation(st.Generation), since(st, now),
+			z.Name, id, string(st.Phase), human.Generation(st.Generation), since(st, now),
 			strconv.FormatUint(st.Restarts, 10), cpu, memory,
 		}, "\t"))
 	}
 	b.WriteString(table(rows))
 	return b.String(), nil
-}
-
-// generation writes the number of a generation, or - for none.
-func generation(n uint64) string {
-	if n == 0 {
-		return "-"
-	}
-	return strconv.FormatUint(n, 10)
 }
 
 // atATime writes the parallel of a rollout.
@@ -196,10 +189,10 @@ func rolloutLine(s wire.Service) string {
 func since(st wire.State, now time.Time) string {
 	switch st.Phase {
 	case wire.PhaseRunning:
-		return "up " + age(st.RunningFor)
+		return "up " + human.Age(st.RunningFor)
 	case wire.PhaseBackoff:
 		if wait := st.RestartAt.Sub(now); !st.RestartAt.IsZero() && wait > 0 {
-			return "restart in " + age(wait)
+			return "restart in " + human.Age(wait)
 		}
 		return "restart now"
 	}
