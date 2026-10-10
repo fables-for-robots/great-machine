@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/fables-for-robots/great-machine/wire"
+import (
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/fables-for-robots/great-machine/wire"
+)
 
 // The shell of a zathras comes with a later task. This file is its
 // place: the effect by which the model asks for one, the message by
@@ -34,4 +38,12 @@ func (m *model) openShell() []effect {
 // what the view holds is asked for anew.
 func (m *model) shellEnded(msg shellEndedMsg) []effect {
 	return m.again()
+}
+
+// shell carries out effShell. Until the shell is built it does nothing.
+// It is called from Update, and what it returns is run by Bubble Tea:
+// tea.Exec gives the terminal away for as long as its command runs, and
+// takes it back.
+func (r *runner) shell(e effShell) tea.Cmd {
+	return nil
 }
