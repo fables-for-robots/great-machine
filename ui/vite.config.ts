@@ -1,5 +1,5 @@
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 import solid from "vite-plugin-solid";
@@ -8,6 +8,22 @@ import solid from "vite-plugin-solid";
 // Nix derivation of the page sets GREAT_MACHINE_UI_DIST, as it may not
 // write beside its source.
 const dist = resolve(import.meta.dirname, process.env.GREAT_MACHINE_UI_DIST || "../web/dist");
+
+// A build empties its directory first (cleanDist, below). So the
+// directory may not be the one of this file, nor one that contains it:
+// "." or ".." would have a build delete the sources of the page. The
+// way from the directory of the build to this one says which it is: it
+// is empty for the same directory, and leads only downwards from one
+// that contains this one. (Any other way begins by going up, or, on a
+// system with drives, is no relative one.)
+const fromDist = relative(dist, import.meta.dirname);
+if (!(fromDist === ".." || fromDist.startsWith(".." + sep) || isAbsolute(fromDist))) {
+  throw new Error(
+    `GREAT_MACHINE_UI_DIST is ${JSON.stringify(process.env.GREAT_MACHINE_UI_DIST)}, which is ${dist}: ` +
+      `that is the directory of the page's sources (${import.meta.dirname}) or one that contains it, ` +
+      `and a build empties its directory first. Name a directory of its own, such as dist.`,
+  );
+}
 
 // The placeholder that git tracks in web/dist, without which go:embed
 // would have no directory to embed before the first build.
