@@ -227,10 +227,15 @@ nanoseconds; an ID is a string.
   before the upgrade with 503 `unavailable`.
 - `logs` cannot tell a log that ended from one that broke off: the
   controller's channel closes for both. A log without `follow` that broke
-  off half way ends as a whole one does.
+  off half way ends as a whole one does, and a followed log that ends
+  says only what is always true, as its last message: `unavailable`,
+  "the log of zathras <ID> has ended". Whether the zathras is still
+  connected, the page has from the fleet.
 - The handler of every socket returns when the context of its request is
   done, within a second or two also when the page does not answer: it
-  does not wait for a page to close its side. `http.Server` ends no connection that was taken over for a
+  does not wait for a page to close its side. Nothing is written to a
+  socket once that context is done, so that a server that ends closes
+  with 1001 and its reason also when a log or a shell has output ready. `http.Server` ends no connection that was taken over for a
   WebSocket, neither by `Shutdown` nor by `Close`: the command ends the
   sockets by ending that context.
 
@@ -298,22 +303,36 @@ not part of the program.
 - On shutdown the HTTP server is stopped first: the context of its
   requests is ended, which ends the sockets, and the command waits for
   the handlers, since they call into draal. Then draal ends as before.
+  A request that still begins after the server was told to stop (on a
+  connection that was accepted just before) is answered 503 with a plain
+  line.
 
 ### ui
 
+- The shell's part of the page is a chunk of its own, loaded with the
+  first view of a zathras. When it cannot be loaded (a tab that is older
+  than the draal that answers; draal away), a notice stands in the
+  shell's place and offers to load the page again.
 - `ui/package.json` has the scripts `dev` (Vite's server, which passes
   `/api`, WebSockets included, on to `http://127.0.0.1:8080`), `check`
   (`tsc --noEmit`), `test` (`vitest run`: the unit tests,
   `ui/src/**/*.test.ts`, which run in Node without a document) and
   `build` (into `../web/dist`, or into the directory
   `GREAT_MACHINE_UI_DIST` names; it removes what an older build left and
-  leaves the placeholder that git tracks there).
+  leaves the placeholder that git tracks there; a directory that is
+  `ui/` itself or contains it is refused).
 - Routes: `/` the services; `/s/:service` a service; `/s/:service/z/:id`
   a zathras, by its endpoint ID.
 - `ui/src/api/types.ts` has the types of the API as TypeScript, one for
   each type above, with the names of the JSON.
 - The page holds one WebSocket to `/api/watch` and draws from what it
-  receives. The view of a zathras holds one more for its log and, while
+  receives. It takes as a fleet only a JSON object that is no refusal
+  and has the key `services`; the refusal that may be the last message
+  of that socket empties nothing, does not count as draal being there,
+  and is shown as what draal said last. The connection counts as live
+  with the first fleet that was taken, and whatever asks again when it
+  is live again sees that fleet. The view of a zathras holds one more
+  for its log and, while
   a shell is open, one for the shell; both are closed when the view is
   left. A shell is opened by a button and not by coming to the view: it
   is a process in the container.
@@ -386,6 +405,43 @@ proposed, and accepted the others.
 | **Unit tests for the page, with vitest**, and three packages of fonts. No chart library: the charts are SVG of the page's own. | The spec had "type check and build" alone; the page works out more than was foreseen (pauses, rates across restarts of counters, the buffer of a log, the colours of a line). The fonts are the design system's, as files of the build, since the page may ask no other host. | Four dependencies more, all exact. |
 | **`deploy/draal.yaml` and `deploy/pod.yaml` still name the image `v0.1.0`**, whose draal has no page. | Which tag the manifests name is decided with a release. | Whoever applies the manifests before the next release gets a draal without the page. |
 
+## Departures made while the plan was carried out
+
+The plan was carried out on 2026-10-10, task by task, each by one agent
+from its task file and each reviewed by another, and the whole then
+reviewed once more. Every review finding, every ruling and what was
+deferred is in [the ledger](2026-10-09-great-machine-stage-2/ledger.md).
+The task files are left as they were when the tasks were done from them;
+where the code now differs from them, this table says so.
+
+| Where | What differs from the task file | Why |
+|---|---|---|
+| Task 0, Step 19 | names `./web/...`, a package that Task 1 makes | The step was written on a tree that had `web`. |
+| Task 1, `web/api.go` | `refusalOf` lets a refusal through only with a code that has an HTTP status of its own; every other code, and not `internal` alone, is answered with the fixed sentence | Task 1's review: a code draal does not know can only come from a zathras, and a 500 must say nothing. |
+| Task 2, Step 1 | `go mod tidy` after the code, not `go get`, makes the WebSocket library a direct requirement | `go get` of a version the module has changes nothing. |
+| Task 2, `web/shell.go` | once a message of a shell's input was given up, nothing more is taken | Task 2's review: a later, smaller message could still reach the shell in the second before the socket was cut. |
+| Task 3, Step 5 | the `pgrep` pattern with `\|` matches nothing | `pgrep` takes it literally. |
+| Task 4, Step 6 | `git checkout ui/src/main.tsx` fails while `ui/` is not yet tracked | The files have to be in the index first. |
+| Task 10, `ui/src/components/Log.tsx` | the log arms no retry after a close with 1001 | Task 10's review: a second red row followed draal's own when it stopped. |
+| Task 10, Step 19 | the Nix build was not run by its implementer | The permission system refused that agent the command. Task 11's implementer ran the same build, and it passed. |
+| Task 11, `README.md` | a proxy has to pass on the `Host` the browser sent, unchanged; the demo's shell is a real one | Task 11's review: the task's sentence "it may pass requests on under any name" was untrue of the WebSockets. |
+| The page, the fleet's socket (`ui/src/state/fleet.ts`, `ui/src/api/reconnect.ts`) | a refusal as the last message of `/api/watch` is no fleet, does not count as draal being there, and is shown as what draal said last; `lives` goes up with the fleet in the store | The final review: the page took a failing draal for an empty one and tried again twice a second for good. |
+| The page, a zathras (`Zathras.tsx`, `Shell.tsx`, `Figures.tsx`, `Log.tsx`, `feeder.ts`) | a notice where the shell's chunk cannot be loaded; the size is sent when the shell's socket opens; nothing is written to a disposed terminal; "reports no figures" only after an answer; the log's line names each of its states | The final review, and what the task reviews had deferred. |
+| The page, a service (`Service.tsx`) | the rollouts of one service are cleared before another's are asked for | Deferred by Task 8's review. |
+| `ui/vite.config.ts` | a directory of the build that is `ui/` or contains it is refused | Deferred by Task 4's review. |
+| `web/socket.go` | nothing is written once the socket's context has ended; a followed log that ended says "the log of zathras <ID> has ended" | The final review (draal's end reached a busy socket as a cut connection), and Task 2's review (the old sentence said that the zathras was gone, which is not always so). |
+| `cli/web.go` | a request that begins after the stop is answered 503 with a line | Deferred by Task 5's review; it had been an empty 200. |
+| `e2e/http_test.go` | the test of a shell that takes no input floods with lines and asserts that its typing was held up | Deferred by Task 6's review: the test had not reached its case. |
+| `README.md`, `deploy/draal.yaml` | who may forward a port to the pod has the page; nginx's headers for a WebSocket; `npm test` | Deferred by Task 11's review. |
+| Commits | each ends with the attribution of the agent that made it | The agents' sessions say so; Task 0's five name the controller's model. |
+
+What stays open, each with its reason in the ledger: four small things
+the last re-review found or confirmed (a sentence in the band of a lost
+connection that can be stale; `400` in the README where it is sometimes
+`426`; `Figures.tsx` not looking whether its request was aborted; a ping
+that can cut an idle connection in the instant draal ends), and thirty of
+the task reviews' findings that the final review said may stay.
+
 ## What was run while this plan was written
 
 The code of the tasks is not a sketch. It was written and run in clones
@@ -439,6 +495,16 @@ carried out:
   workflows with their new steps.
 - `kubectl port-forward` to a pod, and a proxy in front of draal.
 - The tests of `web` and `cli` on Linux, and anything over a relay.
+
+What was run when the plan was carried out, of the list above: the tasks
+were done step by step from their files, and each file the tasks left was
+compared with the tree the plan was verified in (identical, until the
+reviews' mends); the page was opened against a real draal (it said that
+draal knows no service yet); the image was built by Nix with the whole
+page and its draal served it. Still not run: Firefox and Safari, the
+image for amd64, the GitHub workflows with their new steps,
+`kubectl port-forward`, a proxy in front of draal, `web` and `cli` on
+Linux, and the page against a real draal with zathrases and a rollout.
 
 One test of stage 1, `TestRolloutOfABinaryThatExitsHaltsAndIsRolledBack`,
 failed once while two whole suites ran at the same time on one machine
