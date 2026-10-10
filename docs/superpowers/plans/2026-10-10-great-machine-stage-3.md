@@ -513,6 +513,7 @@ file by file and by its hash, as the tree this plan was checked in.
 | `tui/view_zathras.go` | of the generations a zathras has prepared 64 are named, with the number of the rest | The final review: a million of them cost 0.2 s for every message. The model keeps the list whole, since where a zathras stands in a rollout reads it. |
 | `tui/shell.go`, the line above a shell | 60 cells of the name at most, cut in the middle | The final review: a name of 4 KiB was some fifty lines on the user's own screen. |
 | `tui/model.go`, `tui/styles.go`, `demo/fleet.go` | `rolloutsFrom`, `fatal` and `stHead`, which nothing read, are gone; the demo's comments name both of its users | The final review. |
+| `term/read_unix.go`, after the pull request | a read of a terminal that fails with `EIO` and whose terminal has hung up is a terminal that has gone; a seam for tests, and two tests | The first run on x86_64 Linux: Linux closes the other end of a pseudo-terminal in steps, and a read in between fails with `EIO`; the plan had seen only the read that returns nothing afterwards. 6 runs of 9,000 on x86_64. |
 | Commits | each ends with the attribution of the agent that made it | The agents' sessions say so. |
 
 What stays open, each with its reason in the ledger:
@@ -522,10 +523,10 @@ What stays open, each with its reason in the ledger:
   in pseudo-terminals. The keys under another keyboard layout or protocol,
   and what a terminal answers to Bubble Tea's own questions after the
   program has ended, can only be seen there.
-- **Nothing was run on x86_64 Linux**, which is what the workflow on
-  GitHub runs. The branch vets for it. The final review expects a failure
-  there, if one comes, to be one of the waits on pseudo-terminals under
-  load, and says to run again before diagnosing.
+- **x86_64 Linux** was first run by the pull request's own workflow and
+  then on a machine of the user's: one defect showed there and was mended
+  (the last row of the table); the rest of the suite passed, also with
+  the race detector.
 - **`Run` waits for a terminal that takes no output** (the exception the
   contract now names).
 - On the path of the cut, a panic or a failure of the program that comes
