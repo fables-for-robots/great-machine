@@ -519,6 +519,12 @@ func (r *runner) do(e effect) {
 		r.conn = nil
 		r.mu.Unlock()
 		if c != nil {
+			// What was asked of the connection is ended here, before the
+			// program takes its next message: a shell whose session came
+			// over it is then seen to be lost before it is given the
+			// terminal. The closing, which may not return, is the
+			// goroutine's; that it cancels again changes nothing.
+			c.cancel()
 			r.spawn(c.hangUp)
 		}
 	case effWait:
