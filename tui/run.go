@@ -30,11 +30,17 @@ var (
 // killStage is called by the timer that ends a program whatever it is
 // doing: with "fired" when the time has come, with "killing" when it has
 // decided to end the program and is about to, and with "done" when it
-// returns. filterForTests, if set, sees every message of the program
-// before it is handled, as a filter of Bubble Tea does. Both are for the
+// returns. connectStage is called on the way to the verdict on a dial
+// (see bound): with "answered" when Dial, and the watch if Dial gave a
+// connection, have returned and the verdict is about to be asked for,
+// and by the timer with "fired" when the time has come, then "late"
+// when draal had answered and "given up" when the attempt is given up.
+// filterForTests, if set, sees every message of the program before it
+// is handled, as a filter of Bubble Tea does. All three are for the
 // tests alone.
 var (
 	killStage      = func(stage string) {}
+	connectStage   = func(stage string) {}
 	filterForTests func(tea.Model, tea.Msg) tea.Msg
 )
 
@@ -47,7 +53,8 @@ const tickEvery = time.Second
 //
 // What draal refuses at the first dial, by Dial or by the watch that
 // follows it (the code unauthorized), ends Run with that error. Any
-// other failure of a dial is tried again.
+// other failure of a dial is tried again, and so is a dial that has not
+// had its first fleet ConnectWait after Dial was called.
 //
 // Run returns within a bounded time of ctx being done, whatever the
 // program and the Operator do. A program that has not ended killAfter
@@ -570,7 +577,10 @@ func (r *runner) answer(c *conn, err error, msg tea.Msg) {
 }
 
 // dial begins the connection of an epoch in place of the one there is:
-// Dial, then the watch, whose fleets it hands on until it ends.
+// Dial, then the watch, whose fleets it hands on until it ends. Dial and
+// the watch together have ConnectWait to answer, which the watch does
+// with the first fleet; an attempt that has not answered by then is
+// hung up and reported as a dial that failed, so that it is tried again.
 func (r *runner) dial(epoch int) {
 	ctx, cancel := context.WithCancel(r.ctx)
 	c := &conn{epoch: epoch, ctx: ctx, cancel: cancel}
@@ -588,31 +598,43 @@ func (r *runner) dial(epoch int) {
 	}
 	r.spawn(func() {
 		defer cancel()
+		v := r.bound(c)
 		op, err := r.cfg.Dial(ctx)
 		if err == nil && op == nil {
 			err = errors.New("Dial returned no connection")
 		}
-		if err != nil {
-			if ctx.Err() == nil {
-				r.send(dialFailedMsg{epoch: epoch, err: err})
+		var fleets <-chan wire.Fleet
+		if err == nil {
+			c.mu.Lock()
+			if c.hungUp {
+				c.mu.Unlock()
+				op.Close()
+				return
+			}
+			c.op = op
+			c.mu.Unlock()
+			if fleets, err = op.Watch(ctx); err != nil {
+				err = fmt.Errorf("asking draal for the fleet: %w", err)
+			}
+		}
+		connectStage("answered")
+		if !v.decide(true) {
+			// The time ran out first, whatever has come since: the
+			// attempt is hung up, and nothing of what came is used.
+			c.hangUp()
+			r.mu.Lock()
+			current := r.conn == c
+			r.mu.Unlock()
+			if current && r.ctx.Err() == nil {
+				r.send(dialFailedMsg{epoch: epoch, err: fmt.Errorf("draal did not answer within %v", r.cfg.ConnectWait)})
 			}
 			return
 		}
-		c.mu.Lock()
-		if c.hungUp {
-			c.mu.Unlock()
-			op.Close()
-			return
-		}
-		c.op = op
-		c.mu.Unlock()
-
-		fleets, err := op.Watch(ctx)
 		if err != nil {
 			gone := ctx.Err() != nil
 			c.hangUp()
 			if !gone {
-				r.send(dialFailedMsg{epoch: epoch, err: fmt.Errorf("asking draal for the fleet: %w", err)})
+				r.send(dialFailedMsg{epoch: epoch, err: err})
 			}
 			return
 		}
@@ -645,6 +667,60 @@ func (r *runner) dial(epoch int) {
 			r.send(lostMsg{epoch: epoch})
 		}
 	})
+}
+
+// verdict is whether draal answered a dial in time, decided once: by the
+// answer, or by the time that ran out, whichever comes first. The other
+// finds it decided and goes by it, so that an attempt is never both
+// given up and taken.
+type verdict struct {
+	mu       sync.Mutex
+	inTime   bool
+	decided  bool
+	answered chan struct{} // closed when the answer came in time
+}
+
+// decide decides, if it is not decided yet, that the answer came in time
+// (or that the time ran out first), and returns whether it came in time.
+func (v *verdict) decide(inTime bool) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if !v.decided {
+		v.decided, v.inTime = true, inTime
+		if inTime {
+			close(v.answered)
+		}
+	}
+	return v.inTime
+}
+
+// bound starts the time that a connection has to answer, ConnectWait,
+// and returns the verdict on it. When the time runs out before the
+// answer has come, the attempt is given up: its context ends, which
+// ends Dial or the watch, and the one who dialed hangs it up and says
+// so. The timer is a goroutine of the runner: it ends with the answer,
+// with the connection, or with its verdict, and stops its time.
+func (r *runner) bound(c *conn) *verdict {
+	v := &verdict{answered: make(chan struct{})}
+	timer := time.NewTimer(r.cfg.ConnectWait)
+	r.spawn(func() {
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-v.answered:
+			return
+		case <-c.ctx.Done():
+			return
+		}
+		connectStage("fired")
+		if v.decide(false) {
+			connectStage("late")
+			return
+		}
+		c.cancel()
+		connectStage("given up")
+	})
+	return v
 }
 
 // ticker tells the program every second that time has passed.

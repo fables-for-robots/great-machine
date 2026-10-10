@@ -54,10 +54,11 @@ type Config struct {
 	// Draal is how the header names draal: the start of its endpoint ID.
 	Draal string
 	// Each of these has a default when it is zero:
-	RetryFirst time.Duration    // the first pause before Dial is tried again; 1 second
-	RetryMax   time.Duration    // the longest pause; 30 seconds
-	Now        func() time.Time // time.Now
-	Log        *slog.Logger     // nowhere: a terminal UI has no place to log to
+	RetryFirst  time.Duration    // the first pause before Dial is tried again; 1 second
+	RetryMax    time.Duration    // the longest pause; 30 seconds
+	ConnectWait time.Duration    // how long Dial and the first fleet may take before draal is tried again; 1 minute
+	Now         func() time.Time // time.Now
+	Log         *slog.Logger     // nowhere: a terminal UI has no place to log to
 }
 
 // withDefaults returns cfg with the defaults in place of what is zero.
@@ -70,6 +71,9 @@ func (cfg Config) withDefaults() Config {
 	}
 	if cfg.RetryMax < cfg.RetryFirst {
 		cfg.RetryMax = cfg.RetryFirst
+	}
+	if cfg.ConnectWait <= 0 {
+		cfg.ConnectWait = time.Minute
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now

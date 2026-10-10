@@ -36,6 +36,7 @@ type fakeOperator struct {
 	history func() ([]wire.Sample, error)                                                    // what History answers; nil for no samples
 	logs    func(id wire.ID) error                                                           // what Logs answers; nil for a log
 	watch   func() error                                                                     // what Watch answers; nil for the fleets
+	answer  chan struct{}                                                                    // closed when Watch may answer; nil for at once
 	shell   func(ctx context.Context, zathras wire.ID, req wire.ShellRequest) (Shell, error) // what Shell answers; nil for a refusal
 	done    map[string]context.Context                                                       // the contexts of what was asked
 	closed  chan struct{}                                                                    // closed by Close
@@ -64,6 +65,15 @@ func (f *fakeOperator) was(what string) (context.Context, bool) {
 
 func (f *fakeOperator) Watch(ctx context.Context) (<-chan wire.Fleet, error) {
 	f.note(ctx, "watch")
+	if f.answer != nil {
+		// As a client does for a draal that takes its time: Watch
+		// returns with the first fleet, or when ctx is done.
+		select {
+		case <-f.answer:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if f.watch != nil {
 		if err := f.watch(); err != nil {
 			return nil, err
@@ -887,6 +897,287 @@ func TestRunFirstDial(t *testing.T) {
 		term.typeKeys("q")
 		if err := term.end(); err != nil {
 			t.Errorf("Run = %v, want nil", err)
+		}
+	})
+}
+
+// connectWait is the ConnectWait of the tests that have draal take its
+// time: an attempt that is to answer in time answers at once, and this
+// leaves room for a machine that is loaded.
+const connectWait = 2 * time.Second
+
+// dialsTold counts, for one test, what the model was told of each dial,
+// by its epoch: that it is connected (dialedMsg), and that it failed
+// (dialFailedMsg).
+type dialsTold struct {
+	mu             sync.Mutex
+	dialed, failed map[int]int
+}
+
+// recordDials has the filter of the program count what the model is told
+// of the dials, for one test.
+func recordDials(t *testing.T) *dialsTold {
+	d := &dialsTold{dialed: map[int]int{}, failed: map[int]int{}}
+	filterForTests = func(_ tea.Model, msg tea.Msg) tea.Msg {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		switch msg := msg.(type) {
+		case dialedMsg:
+			d.dialed[msg.epoch]++
+		case dialFailedMsg:
+			d.failed[msg.epoch]++
+		}
+		return msg
+	}
+	t.Cleanup(func() { filterForTests = nil })
+	return d
+}
+
+// of returns how many times the model was told that the dial of an epoch
+// connected, and that it failed.
+func (d *dialsTold) of(epoch int) (dialed, failed int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.dialed[epoch], d.failed[epoch]
+}
+
+// connectStages has connectStage report the stages of the first attempt
+// that reaches them, and hold it at the ones that are named until they
+// are let go, for one test. Later attempts pass as they come.
+func connectStages(t *testing.T, hold ...string) (reached map[string]chan struct{}, letGo func(stage string)) {
+	reached = map[string]chan struct{}{}
+	held := map[string]chan struct{}{}
+	for _, stage := range []string{"answered", "fired", "late", "given up"} {
+		reached[stage] = make(chan struct{})
+	}
+	for _, stage := range hold {
+		held[stage] = make(chan struct{})
+	}
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	was := connectStage
+	connectStage = func(stage string) {
+		mu.Lock()
+		first := !seen[stage]
+		seen[stage] = true
+		mu.Unlock()
+		if !first {
+			return
+		}
+		close(reached[stage])
+		if wait, ok := held[stage]; ok {
+			<-wait
+		}
+	}
+	var once sync.Map
+	letGo = func(stage string) {
+		if _, done := once.LoadOrStore(stage, true); !done {
+			close(held[stage])
+		}
+	}
+	t.Cleanup(func() {
+		for stage := range held {
+			letGo(stage)
+		}
+		connectStage = was
+	})
+	return reached, letGo
+}
+
+// The contract: a draal that does not answer is tried again from the
+// start. A draal that takes the connection and does not answer, by Dial
+// or by the first watch, is given up ConnectWait after Dial was called:
+// the screen says so, what Dial returned is closed, and Dial is called
+// again. Whether draal answered or was given up is decided once, and
+// the model is told of each attempt once.
+func TestRunConnectWait(t *testing.T) {
+	// dialing returns a Dial that hands out the attempts in their order,
+	// and waits for its context after the last one, and the count of the
+	// calls.
+	dialing := func(attempts ...func(ctx context.Context) (Operator, error)) (func(ctx context.Context) (Operator, error), func() int) {
+		var mu sync.Mutex
+		n := 0
+		return func(ctx context.Context) (Operator, error) {
+				mu.Lock()
+				n++
+				k := n
+				mu.Unlock()
+				if k <= len(attempts) {
+					return attempts[k-1](ctx)
+				}
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}, func() int {
+				mu.Lock()
+				defer mu.Unlock()
+				return n
+			}
+	}
+	at := func(op Operator) func(ctx context.Context) (Operator, error) {
+		return func(ctx context.Context) (Operator, error) { return op, nil }
+	}
+	waits := func(cfg *Config) { cfg.ConnectWait = connectWait }
+	said := fmt.Sprintf("draal did not answer within %v", connectWait)
+	// givenUpAndBack checks what follows an attempt that was given up:
+	// the screen says so, the second attempt answers and is shown, and
+	// the model was told of each attempt once.
+	givenUpAndBack := func(t *testing.T, term *terminal, told *dialsTold, dials func() int, second *fakeOperator) {
+		t.Helper()
+		term.wait("Connecting to draal 3f9a2c1b", "draal does not answer: "+said)
+		await(t, "Dial to be called again", func() bool { return dials() >= 2 })
+		second.fleets <- fixtureFleet()
+		term.wait("4 services", "● live")
+		if n := dials(); n != 2 {
+			t.Errorf("Dial was called %d times, want 2", n)
+		}
+		if dialed, failed := told.of(1); dialed != 0 || failed != 1 {
+			t.Errorf("of the attempt that was given up, the model was told %d times that it connected and %d times that it failed, want 0 and 1", dialed, failed)
+		}
+		if dialed, failed := told.of(2); dialed != 1 || failed != 0 {
+			t.Errorf("of the attempt that answered, the model was told %d times that it connected and %d times that it failed, want 1 and 0", dialed, failed)
+		}
+		term.typeKeys("q")
+		if err := term.end(); err != nil {
+			t.Errorf("Run = %v, want nil", err)
+		}
+	}
+
+	t.Run("a watch that does not answer", func(t *testing.T) {
+		told := recordDials(t)
+		first, second := newFakeOperator(), newFakeOperator()
+		first.answer = make(chan struct{}) // never
+		dial, dials := dialing(at(first), at(second))
+		term := startRun(t, dial, waits)
+		waitFor(t, "the connection that was given up to be closed", first.closed)
+		if ctx, ok := first.was("watch"); !ok || ctx.Err() == nil {
+			t.Error("the watch that was given up was not ended")
+		}
+		givenUpAndBack(t, term, told, dials, second)
+	})
+	t.Run("a dial that does not return", func(t *testing.T) {
+		told := recordDials(t)
+		second := newFakeOperator()
+		dial, dials := dialing(func(ctx context.Context) (Operator, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}, at(second))
+		givenUpAndBack(t, startRun(t, dial, waits), told, dials, second)
+	})
+	t.Run("a dial that returns when it is given up", func(t *testing.T) {
+		told := recordDials(t)
+		first, second := newFakeOperator(), newFakeOperator()
+		dial, dials := dialing(func(ctx context.Context) (Operator, error) {
+			<-ctx.Done()
+			return first, nil
+		}, at(second))
+		term := startRun(t, dial, waits)
+		waitFor(t, "what Dial returned too late to be closed", first.closed)
+		givenUpAndBack(t, term, told, dials, second)
+	})
+	t.Run("an answer in time", func(t *testing.T) {
+		told := recordDials(t)
+		op := newFakeOperator()
+		dial, dials := dialing(at(op))
+		began := time.Now()
+		term := startRun(t, dial, waits)
+		op.fleets <- fixtureFleet()
+		term.wait("4 services", "● live")
+		// The time is waited out, and more: nothing comes of it.
+		await(t, "more than ConnectWait to pass", func() bool { return time.Since(began) > connectWait*3/2 })
+		term.wait("4 services", "● live")
+		if n := dials(); n != 1 {
+			t.Errorf("Dial was called %d times, want 1", n)
+		}
+		if dialed, failed := told.of(1); dialed != 1 || failed != 0 {
+			t.Errorf("of the attempt that answered, the model was told %d times that it connected and %d times that it failed, want 1 and 0", dialed, failed)
+		}
+		if ctx, _ := op.was("watch"); ctx.Err() != nil {
+			t.Error("the watch of a draal that answered in time was ended")
+		}
+		select {
+		case <-op.closed:
+			t.Error("the connection to a draal that answered in time was closed")
+		default:
+		}
+		term.typeKeys("q")
+		if err := term.end(); err != nil {
+			t.Errorf("Run = %v, want nil", err)
+		}
+	})
+	// The answer and the end of the time come at the same instant: the
+	// timer has fired and is held before it decides, and the answer is
+	// let come. It is taken: the connection is whole and stays.
+	t.Run("the answer decides first", func(t *testing.T) {
+		reached, letGo := connectStages(t, "fired")
+		told := recordDials(t)
+		op := newFakeOperator()
+		op.answer = make(chan struct{})
+		dial, dials := dialing(at(op))
+		term := startRun(t, dial, waits)
+		waitFor(t, "the time to run out", reached["fired"])
+		op.fleets <- fixtureFleet()
+		close(op.answer)
+		term.wait("4 services", "● live")
+		letGo("fired")
+		waitFor(t, "the timer to find it decided", reached["late"])
+		term.wait("4 services", "● live")
+		select {
+		case <-reached["given up"]:
+			t.Error("an attempt that was answered was given up")
+		default:
+		}
+		if n := dials(); n != 1 {
+			t.Errorf("Dial was called %d times, want 1", n)
+		}
+		if dialed, failed := told.of(1); dialed != 1 || failed != 0 {
+			t.Errorf("the model was told %d times that the dial connected and %d times that it failed, want 1 and 0", dialed, failed)
+		}
+		if ctx, _ := op.was("watch"); ctx.Err() != nil {
+			t.Error("the watch that was answered was ended")
+		}
+		select {
+		case <-op.closed:
+			t.Error("the connection that was answered was closed")
+		default:
+		}
+		term.typeKeys("q")
+		if err := term.end(); err != nil {
+			t.Errorf("Run = %v, want nil", err)
+		}
+	})
+	// And the other way: the answer has come and is held before it is
+	// taken, and the timer decides first. It is given up: closed, and the
+	// model hears that it failed and never that it connected.
+	t.Run("the time decides first", func(t *testing.T) {
+		reached, letGo := connectStages(t, "answered")
+		told := recordDials(t)
+		first, second := newFakeOperator(), newFakeOperator()
+		first.fleets <- fixtureFleet()
+		dial, dials := dialing(at(first), at(second))
+		term := startRun(t, dial, waits)
+		waitFor(t, "the answer to come", reached["answered"])
+		if ctx, ok := first.was("watch"); !ok || ctx.Err() != nil {
+			t.Fatal("the watch has not answered")
+		}
+		waitFor(t, "the timer to give the attempt up", reached["given up"])
+		letGo("answered")
+		waitFor(t, "the connection that was given up to be closed", first.closed)
+		givenUpAndBack(t, term, told, dials, second)
+	})
+	// The program ends while the time runs: Run returns, and the timer
+	// is not left behind (the cleanup of startRun counts the goroutines).
+	t.Run("the end while the time runs", func(t *testing.T) {
+		told := recordDials(t)
+		dial, dials := dialing()
+		term := startRun(t, dial, func(cfg *Config) { cfg.ConnectWait = time.Hour })
+		await(t, "Dial to be called", func() bool { return dials() == 1 })
+		term.wait("Connecting to draal 3f9a2c1b")
+		term.stop()
+		if err := term.end(); !errors.Is(err, context.Canceled) {
+			t.Errorf("Run = %v, want the error of its context", err)
+		}
+		if dialed, failed := told.of(1); dialed != 0 || failed != 0 {
+			t.Errorf("of an attempt that was abandoned, the model was told %d times that it connected and %d times that it failed, want nothing", dialed, failed)
 		}
 	})
 }
