@@ -185,10 +185,11 @@ func shellSentence(msg shellEndedMsg) string {
 	why := ""
 	if msg.err != nil {
 		// What draal or the zathras refused is said as its sentence; of
-		// anything else, the whole error.
-		why = clean(msg.err.Error())
+		// anything else, the whole error. Either is kept to the limit of a
+		// field, as every other word of theirs is.
+		why = clean(capped(msg.err.Error()))
 		if e, ok := refusal(msg.err); ok {
-			why = clean(e.Message)
+			why = clean(capped(e.Message))
 		}
 	}
 	switch {

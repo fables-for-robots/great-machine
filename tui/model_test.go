@@ -1006,3 +1006,35 @@ func TestThePhaseOfAZathrasIsKeptToTheLimit(t *testing.T) {
 		t.Fatal("the zathras is not in the fleet")
 	}
 }
+
+// How a shell failed is a sentence of draal or of a zathras, or an error
+// that carries one: the notice keeps it to the limit, whichever way it
+// came, as every other word of theirs is kept.
+func TestWhyAShellFailedIsKeptToTheLimit(t *testing.T) {
+	huge := strings.Repeat("word ", 3<<20/5)
+	errs := []struct {
+		name string
+		err  error
+	}{
+		{"a refusal", wire.Errorf(wire.CodeInternal, "%s", huge)},
+		{"a plain error", errors.New(huge)},
+	}
+	// The notice is the error and the few words before it.
+	most := fieldCap + 48 + len("No shell was opened: ")
+	for _, e := range errs {
+		m, _ := onZathras(80, 24, "web", 0)
+		press(m, "s")
+		m.update(shellOpenedMsg{n: m.sh.n, err: e.err})
+		if len(m.notice) > most || !strings.HasSuffix(m.notice, " bytes more)") {
+			t.Errorf("%s, when the shell is opened: the notice is %d bytes, ending %q; want at most %d with the note", e.name, len(m.notice), m.notice[max(len(m.notice)-20, 0):], most)
+		}
+
+		m, _ = onZathras(80, 24, "web", 0)
+		press(m, "s")
+		m.update(shellOpenedMsg{n: m.sh.n})
+		m.update(shellEndedMsg{opened: true, err: e.err})
+		if len(m.notice) > most || !strings.HasSuffix(m.notice, " bytes more)") {
+			t.Errorf("%s, once the shell is open: the notice is %d bytes, ending %q; want at most %d with the note", e.name, len(m.notice), m.notice[max(len(m.notice)-20, 0):], most)
+		}
+	}
+}
