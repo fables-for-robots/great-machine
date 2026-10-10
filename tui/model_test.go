@@ -781,9 +781,6 @@ func TestTheFirstDial(t *testing.T) {
 	m, clock := newTestModel(80, 24)
 	effs := m.update(dialFailedMsg{epoch: 1, err: refused})
 	wantEffects(t, "refused at the first dial", effs, effFail{err: refused})
-	if !errors.Is(m.fatal, refused) {
-		t.Errorf("the model ends with %v", m.fatal)
-	}
 
 	// No answer: tried again after a second, then two, and the header
 	// has why.
@@ -808,8 +805,8 @@ func TestTheFirstDial(t *testing.T) {
 	m.update(lostMsg{epoch: 1})
 	m.update(retryMsg{n: m.waitN})
 	wantEffects(t, "refused after it was let in", m.update(dialFailedMsg{epoch: m.epoch, err: refused}), effWait{pause: 2 * time.Second, n: 2})
-	if m.fatal != nil || !strings.Contains(m.dialErr, "not on the allowlist") {
-		t.Errorf("refused after it was let in: fatal %v, and the header has %q", m.fatal, m.dialErr)
+	if !strings.Contains(m.dialErr, "not on the allowlist") {
+		t.Errorf("refused after it was let in: the header has %q", m.dialErr)
 	}
 
 	// The times of a Config are what counts.

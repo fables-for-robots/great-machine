@@ -6,7 +6,8 @@
 // Everything of it is made up but the shell: Shell starts A REAL SHELL ON
 // THE MACHINE THAT RUNS IT, as the user who runs it.
 //
-// It is not part of the program, and nothing of great-machine uses it.
+// It is not part of the program: the program great-machine does not use
+// it, and only the demos of the web page and of the terminal UI do.
 package demo
 
 import (
@@ -726,17 +727,20 @@ func (d *Demo) connected(id wire.ID) (*zathras, error) {
 	return nil, wire.Errorf(wire.CodeUnavailable, "zathras %s is not connected", id)
 }
 
-// Store is not of the demo: the page asks for no store.
+// Store is not of the demo: neither the page nor the terminal UI asks
+// for a store.
 func (d *Demo) Store(ctx context.Context) (wire.StoreInfo, error) {
 	return wire.StoreInfo{}, wire.Errorf(wire.CodeUnavailable, "the demo has no store")
 }
 
-// Rollout is not of the demo: the page rolls nothing out.
+// Rollout is not of the demo: neither the page nor the terminal UI rolls
+// anything out.
 func (d *Demo) Rollout(ctx context.Context, by wire.ID, req wire.RolloutRequest) (wire.RolloutInfo, error) {
 	return wire.RolloutInfo{}, wire.Errorf(wire.CodeUnavailable, "the demo rolls out by itself")
 }
 
-// Rollback is not of the demo: the page rolls nothing back.
+// Rollback is not of the demo: neither the page nor the terminal UI rolls
+// anything back.
 func (d *Demo) Rollback(ctx context.Context, by wire.ID, req wire.RollbackRequest) (wire.RolloutInfo, error) {
 	return wire.RolloutInfo{}, wire.Errorf(wire.CodeUnavailable, "the demo rolls back nothing")
 }

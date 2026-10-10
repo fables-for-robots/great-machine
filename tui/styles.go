@@ -24,7 +24,6 @@ var (
 	stWarn  = lipgloss.NewStyle().Foreground(lipgloss.Yellow)
 	stBad   = lipgloss.NewStyle().Foreground(lipgloss.Red).Bold(true)
 	stBusy  = lipgloss.NewStyle().Foreground(lipgloss.Cyan)
-	stHead  = lipgloss.NewStyle().Faint(true).Underline(true)
 )
 
 // seg is a piece of a line: text, which may be anything, and its look.

@@ -216,7 +216,6 @@ type model struct {
 	retryAt    time.Time     // when the pause is over; the zero time while a dial is under way
 	waitN      int           // the number of the pause that counts
 	dialErr    string        // why the last dial failed; clean
-	fatal      error         // why the program ends, when it does not end by a key
 
 	// The fleet, as it came last: services by name, zathrases by name
 	// and then by ID.
@@ -235,16 +234,15 @@ type model struct {
 	svcTop  int
 
 	// screenService: the service, and of its zathrases what is chosen.
-	service      string
-	zID          wire.ID
-	zIdx         int
-	zTop         int
-	rollouts     []wire.RolloutInfo
-	rolloutsAre  asked
-	rolloutsErr  string // draal's refusal; clean
-	rolloutsOf   rolloutKey
-	rolloutsN    int       // the number of the request whose answer counts: the newest
-	rolloutsFrom time.Time // when they came
+	service     string
+	zID         wire.ID
+	zIdx        int
+	zTop        int
+	rollouts    []wire.RolloutInfo
+	rolloutsAre asked
+	rolloutsErr string // draal's refusal; clean
+	rolloutsOf  rolloutKey
+	rolloutsN   int // the number of the request whose answer counts: the newest
 
 	// screenZathras: the zathras, as it was seen last.
 	zathras   wire.ID
@@ -436,7 +434,6 @@ func (m *model) dialFailed(msg dialFailedMsg) []effect {
 		return nil
 	}
 	if e, ok := refusal(msg.err); ok && e.Code == wire.CodeUnauthorized && !m.everDialed {
-		m.fatal = msg.err
 		return []effect{effFail{err: msg.err}}
 	}
 	m.dialErr = ""
@@ -632,7 +629,7 @@ func (m *model) newRollouts(msg rolloutsMsg) {
 	for i := range list {
 		list[i].Reason, list[i].State = capped(list[i].Reason), wire.RolloutState(capped(string(list[i].State)))
 	}
-	m.rollouts, m.rolloutsAre, m.rolloutsErr, m.rolloutsFrom = list, askedHave, "", m.cfg.Now()
+	m.rollouts, m.rolloutsAre, m.rolloutsErr = list, askedHave, ""
 }
 
 // newHistory takes the samples of the zathras that is open.
