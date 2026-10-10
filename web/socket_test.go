@@ -656,7 +656,10 @@ func TestSocketOfAPageThatDoesNotReadIsClosedAndHoldsUpNoOther(t *testing.T) {
 		}()
 		return out, nil
 	}
-	srv := serveSockets(t, Config{Controller: &fake{logs: endless}, WriteWait: 200 * time.Millisecond})
+	// No ping falls into this test: only the deadline of a write may end the
+	// page that does not read; a ping would end it too, later, and hide a
+	// write that has no deadline.
+	srv := serveSockets(t, Config{Controller: &fake{logs: endless}, WriteWait: 200 * time.Millisecond, PingEvery: time.Hour})
 
 	// The first page never reads. The lines fill what the connection
 	// holds, and then one of them is not taken.
