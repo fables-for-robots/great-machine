@@ -428,8 +428,12 @@ func (c *shellExec) Run() error {
 	usual, _ := xterm.GetState(fd)
 
 	// Everything the goroutine of the shell writes to the terminal goes
-	// through out, which is shut when the shell is left behind.
+	// through out, which is shut however Run returns: nothing of the
+	// shell is written once Bubble Tea has the terminal back. On the
+	// ways out but one the goroutine has written its last before it
+	// tells how the shell ended; the one is the shell left behind.
 	out := &shutOut{w: r.cfg.Out}
+	defer out.shut()
 	done := make(chan shellDone, 1)
 	r.spawn(func() {
 		defer func() {
@@ -454,7 +458,7 @@ func (c *shellExec) Run() error {
 		// waited for: a terminal that is held holds it. If the shell has
 		// the terminal in the mode of a shell, the terminal is put back:
 		// Bubble Tea takes the mode it finds now for the one to restore at
-		// the end.
+		// the end. Out is shut first, before the terminal is put back.
 		out.shut()
 		if usual != nil {
 			xterm.Restore(fd, usual)
@@ -487,30 +491,30 @@ func (r *runner) attach(ctx context.Context, p *pendingShell, name string, out i
 	return shellEndedMsg{opened: true, exit: exit, detached: detached, err: err}
 }
 
-// errLeftBehind is what a write of a shell that was left behind returns.
-// term.Attach ends its copy of the shell's output on an error at once,
-// and the error goes nowhere: the shell's end is no longer told.
-var errLeftBehind = errors.New("the shell was left behind, and the terminal is no longer its")
-
 // shutOut is the terminal as the goroutine of a shell writes to it: it
 // passes every write on as it comes, one at a time, until it is shut.
-// From then on a write reaches nothing and returns errLeftBehind. Shut
-// does not wait for the write that is under way, if one is: a terminal
-// that is held (Ctrl-S) holds that write, and must not hold Run. That
-// one piece may still arrive after Run has returned, and nothing follows
-// it, as term.Attach has it for the end of its context.
+// From then on a write reaches nothing and is reported written. An error
+// would give term.Attach of a shell that is left behind an end other
+// than its context, and on that end term.Attach waits for the session
+// and for its reading of the terminal, which may never come, and the
+// session would never be closed; so the shell ends by its context
+// alone. Shut does not wait for the write that is under way, if one is:
+// a terminal that is held (Ctrl-S) holds that write, and must not hold
+// Run. That one piece may still arrive after Run has returned, and
+// nothing follows it, as term.Attach has it for the end of its context.
 type shutOut struct {
 	w      io.Writer
 	mu     sync.Mutex // held by the write that is under way
 	closed atomic.Bool
 }
 
-// Write writes p to the terminal, unless out is shut.
+// Write writes p to the terminal, unless out is shut: then it throws p
+// away.
 func (o *shutOut) Write(p []byte) (int, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.closed.Load() {
-		return 0, errLeftBehind
+		return len(p), nil
 	}
 	return o.w.Write(p)
 }

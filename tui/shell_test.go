@@ -739,8 +739,29 @@ func TestShellThatDoesNotEndWithTheContext(t *testing.T) {
 	sh.out <- []byte("WRITTEN-AFTER-RUN\r\n")
 	release()
 	sh.isClosed(t)
+	// The line was read from the session, and so was to be written: it
+	// is thrown away, and the terminal is quiet.
+	await(t, "the session's line to be read", func() bool { return len(sh.out) == 0 })
 	term.quietBehindTheMark()
 	term.nextReader()
+}
+
+// What the goroutine of a shell writes once it is left behind is thrown
+// away and reported written, so that term.Attach has no error of it to
+// end on: a shell that is left behind ends by its context alone.
+func TestShutOutThrowsAwayWhatIsWrittenOnceShut(t *testing.T) {
+	var b strings.Builder
+	out := &shutOut{w: &b}
+	if n, err := out.Write([]byte("before")); n != 6 || err != nil {
+		t.Errorf("Write before the shut = %d, %v; want 6, nil", n, err)
+	}
+	out.shut()
+	if n, err := out.Write([]byte("after")); n != 5 || err != nil {
+		t.Errorf("Write once shut = %d, %v; want 5, nil", n, err)
+	}
+	if b.String() != "before" {
+		t.Errorf("the terminal has %q, want what came before the shut alone", b.String())
+	}
 }
 
 // The context ends while draal has not answered the request for a
