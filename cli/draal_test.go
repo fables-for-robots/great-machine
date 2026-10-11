@@ -423,6 +423,12 @@ func TestRunDraalServesTheStore(t *testing.T) {
 		}
 		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
+		// The page of the store has a policy of its own, draal's page
+		// another: an answer has one of them, never both, which a
+		// browser would hold it to at once.
+		if policies := resp.Header.Values("Content-Security-Policy"); len(policies) != 1 || !strings.Contains(policies[0], "default-src 'self'") {
+			t.Errorf("GET %s: the policies are %q, want one that allows the page's own origin alone", path, policies)
+		}
 		return resp.StatusCode, string(body)
 	}
 	if status, body := get("store/api/refs"); status != http.StatusOK ||
