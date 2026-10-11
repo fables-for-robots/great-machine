@@ -2,9 +2,16 @@
 // draal listens on, and the dial of a zathras or an operator.
 //
 // A peer is known by its endpoint ID, the public half of its key, which
-// the handshake proves. Every connection is for wire.ALPN. Both sides of a
-// connection open streams and accept them: a zathras dials draal, and
-// draal opens the streams on which it sends its commands.
+// the handshake proves. Every connection that is dialed here is for
+// wire.ALPN. Both sides of a connection open streams and accept them: a
+// zathras dials draal, and draal opens the streams on which it sends its
+// commands.
+//
+// The endpoint draal listens on can accept other protocols as well, each
+// given to a handler (ListenConfig.Handlers): that is how draal answers
+// jaccard-store's protocol under its own endpoint ID. Two endpoints with
+// one key evict each other at the relay, so a second protocol under the
+// same ID is the same endpoint or none.
 //
 // Listen is over the node package of jaccard-store, which binds the
 // endpoint and announces it. The dial is this package's own, modelled on
