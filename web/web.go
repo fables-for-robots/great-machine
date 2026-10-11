@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fables-for-robots/great-machine/draal"
+	"github.com/fables-for-robots/great-machine/wire"
 )
 
 // embedded is the build of the page, as it was in web/dist when the
@@ -54,6 +55,10 @@ type Config struct {
 	Controller draal.Controller
 	// Dist is the build of the page. nil: the one that is embedded.
 	Dist fs.FS
+	// Store is the page of the store, served under /store/ and asked
+	// with that part of the path taken off: jaccard-store's admin page,
+	// which is read-only. nil: there is none.
+	Store http.Handler
 	// Each of these has a default when it is zero:
 	PingEvery time.Duration // how often an idle socket is pinged; 30 seconds
 	WriteWait time.Duration // how long one message to a browser may take; 10 seconds
@@ -131,8 +136,26 @@ func New(cfg Config) http.Handler {
 	h.mux.HandleFunc("/api/zathras/{id}/logs", h.get(h.logs))
 	h.mux.HandleFunc("/api/zathras/{id}/shell", h.get(h.shell))
 	h.mux.HandleFunc("/api/", h.noSuchPath)
+	// The page of the store asks for what it shows by paths beside its
+	// own, so it is asked for with the slash: without it those paths
+	// would be beside /store.
+	h.mux.HandleFunc("/store", h.store(http.RedirectHandler("/store/", http.StatusMovedPermanently)))
+	h.mux.HandleFunc("/store/", h.store(http.StripPrefix("/store", cfg.Store)))
 	h.mux.HandleFunc("/", h.page)
 	return h
+}
+
+// store returns next for a draal that has a page of the store, and a
+// refusal for one that has none: the page of the fleet, which answers
+// every path it does not know, is not the answer to /store.
+func (h *handler) store(next http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.cfg.Store == nil {
+			h.refuse(w, r, wire.Errorf(wire.CodeNotFound, "this draal has no page of the store"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	}
 }
 
 // ServeHTTP answers a request, under whatever host name it was asked:
