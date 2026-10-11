@@ -380,6 +380,13 @@ func (s *Store) Admin() http.Handler {
 // Stop ends the answering: no new request is begun, the requests under way
 // have StopGrace, and then every connection of the store is closed. It
 // returns when that is done. It may be called more than once.
+//
+// A request ends with its context, which is done when the grace is over.
+// One that does not, as a verification in the middle of a large pack does
+// not until it is through, has the grace a second time and is then left
+// behind: Stop says so and returns, and what the request still asks of the
+// database after Close fails, which leaves nothing that the next start of
+// the store does not find.
 func (s *Store) Stop() {
 	s.stop.Do(func() {
 		defer close(s.stopped)
@@ -411,8 +418,19 @@ func (s *Store) Stop() {
 		for conn := range conns {
 			conn.Close()
 		}
-		<-ended
-		s.serving.Wait()
+		gone := make(chan struct{})
+		go func() {
+			<-ended
+			s.serving.Wait()
+			close(gone)
+		}()
+		last := time.NewTimer(s.cfg.StopGrace)
+		defer last.Stop()
+		select {
+		case <-gone:
+		case <-last.C:
+			s.log.Warn("the store is stopped, with requests that have not ended with their context", "streams", s.streams.Load(), "after", 2*s.cfg.StopGrace)
+		}
 	})
 	<-s.stopped
 }

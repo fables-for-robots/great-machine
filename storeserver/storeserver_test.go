@@ -66,6 +66,7 @@ type gate struct {
 
 	mu     sync.Mutex
 	hold   chan struct{} // while set and open, PresignGet waits for it, or for its context
+	deaf   bool          // PresignGet waits for hold alone, whatever its context says
 	putErr error         // while set, what PresignPut fails with
 	// waiting gets a value for every PresignGet that begins to wait.
 	waiting chan struct{}
@@ -97,10 +98,14 @@ func (g *gate) failUploads(err error) {
 
 func (g *gate) PresignGet(ctx context.Context, objectKey string, ttl time.Duration) (string, error) {
 	g.mu.Lock()
-	hold := g.hold
+	hold, deaf := g.hold, g.deaf
 	g.mu.Unlock()
 	if hold != nil {
 		g.waiting <- struct{}{}
+		if deaf {
+			<-hold
+			return "", errors.New("the bucket of the test was held")
+		}
 		select {
 		case <-hold:
 		case <-ctx.Done():
@@ -665,6 +670,54 @@ func TestStopEndsARequestThatOutlivesTheGrace(t *testing.T) {
 	if n := w.store.streams.Load(); n != 0 {
 		t.Errorf("%d streams are still being served after Stop", n)
 	}
+}
+
+// A request that does not end with its context, as a verification that
+// walks a large pack does not until it is through: Stop gives it the
+// grace a second time, says so, and returns. draal is not held by it.
+func TestStopReturnsThoughARequestDoesNotEnd(t *testing.T) {
+	w := start(t, func(cfg *Config) { cfg.StopGrace = 50 * time.Millisecond })
+	if _, err := pushDir(t, w.dial(w.operator), storePath(t, "abc-web", "the program of web"), webRef); err != nil {
+		t.Fatalf("the push: %v", err)
+	}
+	conn := w.dial(newKey(t))
+	w.bucket.mu.Lock()
+	w.bucket.deaf = true
+	w.bucket.mu.Unlock()
+	release := w.bucket.holdPulls()
+	// The request is let go before the store is closed, which the
+	// cleanup of start does.
+	t.Cleanup(func() {
+		release()
+		eventually(t, "the request that was held to end", func() bool { return w.store.streams.Load() == 0 })
+	})
+	go ask(t, conn, jswire.Request{Op: jswire.OpPull, Name: webRef})
+	select {
+	case <-w.bucket.waiting:
+	case <-time.After(patience):
+		t.Fatal("timed out waiting for the pull to be under way")
+	}
+	stopped := make(chan struct{})
+	began := time.Now()
+	go func() {
+		w.store.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop waits for a request that does not end with its context")
+	}
+	if took := time.Since(began); took < 100*time.Millisecond {
+		t.Errorf("Stop returned after %s: the request had no second grace", took)
+	}
+	if n := w.store.streams.Load(); n != 1 {
+		t.Errorf("%d streams are being served, want the one that was held", n)
+	}
+	if log := w.log.String(); !strings.Contains(log, "have not ended") {
+		t.Errorf("the store did not say that it stopped with a request that has not ended:\n%s", log)
+	}
+	gone(t, "the store is stopped", conn)
 }
 
 // A bucket that cannot do its part: the client is told which step
