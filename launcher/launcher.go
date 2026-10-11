@@ -274,7 +274,7 @@ func (l *Launcher) give(f *os.File) {
 		return
 	}
 	if err := f.Chown(int(l.user.UID), -1); err != nil {
-		l.log.Debug("a standard stream was not given to the user of the process, which cannot open it anew", "user", l.user.UID, "error", err)
+		l.log.Warn("a standard stream was not given to the user of the process, which cannot open it anew", "user", l.user.UID, "error", err)
 	}
 }
 

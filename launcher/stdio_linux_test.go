@@ -74,3 +74,43 @@ func TestWhatIsStartedCanOpenItsTerminal(t *testing.T) {
 		})
 	}
 }
+
+// What is given to another user is what a process is started on, a pipe
+// or a terminal, and nothing else: a file that a process writes to, and
+// a device of the system, as /dev/null is, keep their owner.
+func TestWhatIsNoPipeAndNoTerminalKeepsItsOwner(t *testing.T) {
+	rootWithSysAdmin(t)
+	l := newLauncher(t, Config{User: another})
+	file, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer null.Close()
+	owner := func(f *os.File) uint32 {
+		t.Helper()
+		info, err := f.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info.Sys().(*syscall.Stat_t).Uid
+	}
+	before := map[*os.File]uint32{file: owner(file), null: owner(null)}
+	cmd := exec.Command("/bin/sh", "-c", "exit 0")
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = null, file, file
+	if err := l.Start(cmd, cmd.Start); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	for f, uid := range before {
+		if got := owner(f); got != uid {
+			t.Errorf("%s belongs to %d after a process was started on it as another user, want %d as before", f.Name(), got, uid)
+		}
+	}
+}
