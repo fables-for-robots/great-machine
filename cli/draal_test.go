@@ -11,17 +11,21 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/amber-store/jaccard-store/bucket/buckettest"
+	jsnode "github.com/amber-store/jaccard-store/node"
 	jsserver "github.com/amber-store/jaccard-store/server"
+	jswire "github.com/amber-store/jaccard-store/wire"
 	"github.com/coder/websocket"
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/operator"
 	"github.com/fables-for-robots/great-machine/push"
 	"github.com/fables-for-robots/great-machine/web"
 	"github.com/fables-for-robots/great-machine/wire"
+	irohkey "github.com/tmc/go-iroh/key"
 )
 
 // draalForTest is the configuration of a draal whose iroh endpoint stays
@@ -536,6 +540,182 @@ func TestRunDraalStopsWhileAPushIsUnderWay(t *testing.T) {
 	}
 	if !strings.Contains(logged.String(), "stopping the store with requests under way") {
 		t.Errorf("draal does not say that it stopped with a request under way:\n%s", logged.String())
+	}
+}
+
+// gatedBucket is a bucket whose URLs of a pull can be held back.
+type gatedBucket struct {
+	jsserver.Bucket
+
+	mu   sync.Mutex
+	hold chan struct{} // while set, PresignGet waits for it to be closed, or for its context
+	// waiting gets a value for every PresignGet that begins to wait.
+	waiting chan struct{}
+}
+
+// holdPulls makes every pull from now on wait until what it returns is
+// called, or until the request is ended.
+func (b *gatedBucket) holdPulls() (release func()) {
+	hold := make(chan struct{})
+	b.mu.Lock()
+	b.hold = hold
+	b.mu.Unlock()
+	return sync.OnceFunc(func() { close(hold) })
+}
+
+func (b *gatedBucket) PresignGet(ctx context.Context, objectKey string, ttl time.Duration) (string, error) {
+	b.mu.Lock()
+	hold := b.hold
+	b.mu.Unlock()
+	if hold != nil {
+		b.waiting <- struct{}{}
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	return b.Bucket.PresignGet(ctx, objectKey, ttl)
+}
+
+// dialStore connects to the store of a draal, for jaccard-store's
+// protocol, with a key nobody knows: a pull is every peer's. The
+// connection ends with the test.
+func dialStore(t *testing.T, id wire.ID, addr netip.AddrPort) *jsnode.Conn {
+	t.Helper()
+	k, err := node.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := irohkey.ParseEndpointID(string(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	conn, err := jsnode.Dial(ctx, jsnode.DialConfig{
+		Key:    k.Iroh(),
+		ALPN:   jswire.ALPN,
+		Server: server,
+		Addrs:  []netip.AddrPort{addr},
+		Log:    quietLog(io.Discard),
+	})
+	if err != nil {
+		t.Fatalf("dialing the store: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
+
+// askStore sends one request of jaccard-store's protocol on a stream of
+// its own and returns what the store answered. An answer that is a
+// refusal is returned as the answer, not as an error.
+func askStore(conn *jsnode.Conn, wait time.Duration, req jswire.Request) (jswire.Response, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	s, err := conn.OpenStreamConn(ctx)
+	if err != nil {
+		return jswire.Response{}, err
+	}
+	defer s.Close()
+	s.SetDeadline(time.Now().Add(wait))
+	if err := jswire.WriteFrame(s, req); err != nil {
+		return jswire.Response{}, err
+	}
+	var resp jswire.Response
+	err = jswire.ReadFrame(s, &resp)
+	return resp, err
+}
+
+// TestRunDraalLetsARequestOfTheStoreEndWhenItIsToldToEnd: draal is told
+// to end while a pull is under way. The store is stopped before the
+// endpoint is closed, so the pull has its grace on a connection that is
+// still there: its answer reaches the client, and draal returns when it
+// has.
+func TestRunDraalLetsARequestOfTheStoreEndWhenItIsToldToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opKey, err := node.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := draalForTest(t, "127.0.0.1:0")
+	cfg.operators = []wire.ID{opKey.ID()}
+	gated := &gatedBucket{Bucket: cfg.objects, waiting: make(chan struct{}, 16)}
+	cfg.objects = gated
+	// Longer than the test waits for anything: it does not pass by
+	// waiting the grace out.
+	cfg.storeGrace = 30 * time.Second
+	var logged buffer
+	_, done := startDraal(t, ctx, cfg, &logged)
+	id, addr := served(t, &logged)
+
+	if _, err := push.Push(context.Background(), push.Config{
+		Key:     opKey,
+		Server:  id,
+		Addrs:   []netip.AddrPort{addr},
+		Prefix:  wire.StorePrefix("web"),
+		TempDir: t.TempDir(),
+	}, []string{webStorePath(t)}); err != nil {
+		t.Fatalf("the push: %v", err)
+	}
+
+	pulling, idle := dialStore(t, id, addr), dialStore(t, id, addr)
+	// The store has both connections before draal is told to end.
+	if _, err := askStore(idle, 20*time.Second, jswire.Request{Op: jswire.OpPull, Name: "nothing"}); err != nil {
+		t.Fatalf("asking on the connection that will be idle: %v", err)
+	}
+	release := gated.holdPulls()
+	defer release()
+	answer := make(chan error, 1)
+	go func() {
+		resp, err := askStore(pulling, 20*time.Second, jswire.Request{Op: jswire.OpPull, Name: wire.StorePrefix("web") + "abc-web"})
+		if err == nil && resp.Error != nil {
+			err = resp.Error
+		}
+		answer <- err
+	}()
+	select {
+	case <-gated.waiting:
+	case err := <-answer:
+		t.Fatalf("the pull ended before it was under way: %v", err)
+	case <-time.After(20 * time.Second):
+		t.Fatal("timed out waiting for the pull to be under way")
+	}
+
+	cancel()
+	// The store is being stopped when a connection of it that has
+	// nothing under way is closed: no request is answered on it.
+	waitFor(t, "the store to close the connection that has nothing under way", func() bool {
+		_, err := askStore(idle, time.Second, jswire.Request{Op: jswire.OpPull, Name: "nothing"})
+		return err != nil
+	})
+	select {
+	case err := <-done:
+		t.Fatalf("runDraal returned while a pull had its grace: %v", err)
+	case err := <-answer:
+		t.Fatalf("the pull under way was ended when draal was told to end: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-answer:
+		if err != nil {
+			t.Errorf("the pull that was under way when draal was told to end: %v, want its answer", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("timed out waiting for the answer of the pull")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("runDraal returned %v, want nil", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatalf("runDraal did not return when the pull had ended\n%s", logged.String())
+	}
+	if strings.Contains(logged.String(), "stopping the store with requests under way") {
+		t.Errorf("draal says that it stopped with a request under way, and the request had ended:\n%s", logged.String())
 	}
 }
 
