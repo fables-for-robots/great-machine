@@ -76,7 +76,15 @@
             nixpkgs.legacyPackages.${builtins.currentSystem}
           else
             null;
-          goEnv = gonixgo.lib.mkGoEnv { inherit pkgs evalPkgs; };
+          # Buildbarn's packages, of which the mount of a zathras is
+          # made, need Go 1.27, which is not yet the Go of this nixpkgs.
+          # The Go that resolves the packages while Nix evaluates has to
+          # be the same one.
+          goEnv = gonixgo.lib.mkGoEnv {
+            inherit pkgs evalPkgs;
+            go = pkgs.buildPackages.go_1_27;
+            evalGo = if evalPkgs != null then evalPkgs.go_1_27 else null;
+          };
 
           # The source gonixgo builds: the repository with the build of
           # the page at web/dist, where the package web embeds it.
@@ -164,7 +172,7 @@
           hardeningDisable = [ "all" ];
 
           packages = with pkgs; [
-            go
+            go_1_27
             sqlc
             (nodejs pkgs)
             self.packages.${system}.default
@@ -178,7 +186,7 @@
         bare = pkgs.mkShell {
           hardeningDisable = [ "all" ];
 
-          packages = with pkgs; [ go sqlc (nodejs pkgs) ];
+          packages = with pkgs; [ go_1_27 sqlc (nodejs pkgs) ];
         };
       });
     };
