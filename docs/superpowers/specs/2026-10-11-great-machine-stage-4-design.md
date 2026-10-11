@@ -138,7 +138,9 @@ knew the server's ID: pushing and deleting are closed now.
 A refusal is the store's answer with an error of jaccard-store's protocol,
 code `bad_request` (it has no code for a refusal) and the message
 `unauthorized: <operation> is for operators`, and is logged with the peer
-and the operation, as a refusal of draal's own protocol is.
+and the operation, as a refusal of draal's own protocol is. A push begins
+by asking what the store has, so the refusal that `great-machine rollout`
+prints for a key that is no operator's names `list`.
 
 ### 3.4 What draal accepts on the store's protocol
 
@@ -149,8 +151,15 @@ request that does not parse is closed without an answer, as
 `jaccard-stored` does. Everything else is the server's to check, as it
 does for any client.
 
+A stream that was answered is kept until the peer has ended it, 2
+seconds at most: closing a connection discards what its streams have not
+delivered, so a request is not over before its answer was read.
+
 When draal stops, the store's requests under way are given 10 seconds,
 the grace `jaccard-stored` gives them, before the connections are closed.
+A request ends with its context then. One that does not, as a
+verification in the middle of a large pack does not until it is through,
+has the 10 seconds once more and is left behind: draal is not held by it.
 The database of the store is closed after that, and after the sweeper has
 returned.
 
@@ -551,8 +560,11 @@ To design §13:
 - **The store does not have a path of a closure** (it was never pushed,
   §7): the `prepare` fails with the path, and the rollout halts before
   anything was restarted.
-- **The bucket cannot be reached by draal**: a push fails with what the
-  bucket said, and `rollout` ends before draal heard of it.
+- **The bucket is not there, or cannot be reached**: draal asks the
+  bucket nothing when it starts, so it starts. A push then fails, and
+  `rollout` ends before draal heard of a rollout: at the upload, with the
+  address the laptop could not reach, or with `internal` and the step
+  that failed, whose cause is in draal's log.
 - **A binary cannot be executed** (it is gone, or no program): zathras
   checks it at `prepare` and at `activate`, as before; one that fails
   after that is a service that ended at once with status 127 or 126 and
