@@ -24,8 +24,10 @@ package launcher
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -117,4 +119,105 @@ func parseID(text string) (uint32, error) {
 		return 0, fmt.Errorf("%s is no ID: it stands for none", text)
 	}
 	return uint32(n), nil
+}
+
+// Config is what a Launcher is made of.
+type Config struct {
+	// User is who the processes run as, with the group and no others.
+	// nil: the user of this process, and its groups.
+	User *User
+	// Log is where the launcher logs. nil: slog.Default().
+	Log *slog.Logger
+}
+
+// ErrClosed is what Start returns once the launcher was closed.
+var ErrClosed = errors.New("launcher: closed")
+
+// Launcher starts processes. Its methods may be called from any
+// goroutine.
+type Launcher struct {
+	user *User
+	log  *slog.Logger
+	// exe is the program itself, which is what every process is started
+	// as.
+	exe string
+	// thread is what a launcher is on Linux, and nothing elsewhere.
+	thread
+}
+
+// New returns a launcher. On Linux it starts the launcher's thread, which
+// drops CAP_SYS_ADMIN from its bounding set, takes it out of its
+// inheritable set, clears its ambient set and sets no_new_privs.
+//
+// It fails when the processes are to run as another user and this
+// process is not root, which alone can start them so.
+func New(cfg Config) (*Launcher, error) {
+	l := &Launcher{user: cfg.User, log: cfg.Log}
+	if l.log == nil {
+		l.log = slog.Default()
+	}
+	if l.user != nil && os.Geteuid() != 0 {
+		own := User{UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}
+		if *l.user != own {
+			return nil, fmt.Errorf("launcher: only root starts a process as another user, and this process is user %d: it cannot start one as %d:%d",
+				own.UID, l.user.UID, l.user.GID)
+		}
+		// Its own user is what a process has anyway, and to set it
+		// would be to set its groups, which takes root as well.
+		l.user = nil
+	}
+	exe, err := self()
+	if err != nil {
+		return nil, fmt.Errorf("launcher: finding the program: %w", err)
+	}
+	l.exe = exe
+	if err := l.begin(); err != nil {
+		return nil, err
+	}
+	return l, nil
+}
+
+// Start starts cmd with start, which is cmd.Start or what calls it
+// (pty.StartWithSize). Before that it makes cmd the program itself,
+// started with Arg to replace itself with what cmd was to run, and sets
+// the user of Config. On Linux start runs on the launcher's thread. Start
+// returns what start returned.
+//
+// A program that cannot be executed is therefore no error of Start: the
+// process that was to become it says why on its standard error and ends,
+// with 127 for a program that is not there and 126 otherwise. A cmd whose
+// Err is set, for a name that was not found, is not started: Start
+// returns that error. Once the launcher is closed Start returns ErrClosed.
+func (l *Launcher) Start(cmd *exec.Cmd, start func() error) error {
+	if cmd.Err != nil {
+		return cmd.Err
+	}
+	l.rewrite(cmd)
+	return l.run(start)
+}
+
+// rewrite makes cmd the program itself, which is to replace itself with
+// the program of cmd, and gives it the user of the launcher.
+func (l *Launcher) rewrite(cmd *exec.Cmd) {
+	argv := cmd.Args
+	if len(argv) == 0 {
+		// As os/exec has it for a command without arguments.
+		argv = []string{cmd.Path}
+	}
+	args := make([]string, 0, 3+len(argv))
+	args = append(args, "great-machine", Arg, cmd.Path)
+	cmd.Path, cmd.Args = l.exe, append(args, argv...)
+	if l.user != nil {
+		if cmd.SysProcAttr == nil {
+			cmd.SysProcAttr = &syscall.SysProcAttr{}
+		}
+		// No Groups: the process has the group and no others.
+		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: l.user.UID, Gid: l.user.GID}
+	}
+}
+
+// Close ends the launcher's thread. No Start may follow: one that does
+// returns ErrClosed. Close may be called more than once.
+func (l *Launcher) Close() {
+	l.end()
 }
