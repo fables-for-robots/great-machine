@@ -31,6 +31,15 @@ type Config struct {
 	BackoffMin     time.Duration // 0: 1 second
 	BackoffMax     time.Duration // 0: 2 minutes
 	Log            *slog.Logger  // nil: slog.Default()
+	// Start, if set, starts a process in the place of cmd.Start: it is
+	// given the command and what starts it, and returns what that
+	// returned. It is (*launcher.Launcher).Start. nil: the process is
+	// started as it is.
+	//
+	// Through a launcher a binary that cannot be executed is no failure
+	// to start: the process that was to become it ends with 127 or 126,
+	// having said why where the service writes.
+	Start func(cmd *exec.Cmd, start func() error) error
 }
 
 // drainTimeout is how long the output of a service that has ended is
@@ -440,7 +449,11 @@ func (s *Supervisor) spawn(t *activation) (*process, error) {
 	cmd.Stdout = outW
 	cmd.Stderr = errW
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	err = cmd.Start()
+	if s.cfg.Start != nil {
+		err = s.cfg.Start(cmd, cmd.Start)
+	} else {
+		err = cmd.Start()
+	}
 	started := time.Now()
 	outW.Close()
 	errW.Close()
