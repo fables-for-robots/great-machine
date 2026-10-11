@@ -585,3 +585,40 @@ func TestRunDraalWithoutARegion(t *testing.T) {
 		t.Errorf("the endpoint was bound though the store could not be opened:\n%s", logged.String())
 	}
 }
+
+// TestRunDraalWithAScratchThatIsItsDataDirectory: the store empties its
+// scratch directory at every start. A draal that is told to keep
+// everything in one place, --store-scratch being --data, loses nothing by
+// it: its key and both databases are there after a run, and it is the
+// same draal the next time.
+func TestRunDraalWithAScratchThatIsItsDataDirectory(t *testing.T) {
+	cfg := draalForTest(t, "127.0.0.1:0")
+	cfg.store.scratch = cfg.data
+	run := func() wire.ID {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		var logged buffer
+		_, done := startDraal(t, ctx, cfg, &logged)
+		id, _ := served(t, &logged)
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("runDraal returned %v", err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("runDraal did not return")
+		}
+		return id
+	}
+	first := run()
+	for _, name := range []string{draalKeyFile, draalDBFile, "store.sqlite"} {
+		if _, err := os.Stat(filepath.Join(cfg.data, name)); err != nil {
+			t.Errorf("after one run of draal: %v", err)
+		}
+	}
+	if second := run(); second != first {
+		t.Errorf("draal was %s, and is %s after it was started once more", first, second)
+	}
+}

@@ -70,6 +70,10 @@ func TestInvalidCommandLines(t *testing.T) {
 		{"rollout: --jobs 0", nil, []string{"rollout", "--draal", idA, "--jobs", "0", "web", "/nix/store/abc-web/bin/web"}, "--jobs: 0 is not a number of store paths"},
 		{"rollout: the variable stands in for --jobs", map[string]string{"GREAT_MACHINE_JOBS": "0"},
 			[]string{"rollout", "--draal", idA, "web", "/nix/store/abc-web/bin/web"}, "--jobs: 0 is not a number of store paths"},
+		// The store answers 64 requests of a connection at a time, and a
+		// push has two under way when it goes from one step to the next.
+		{"rollout: more --jobs than the store answers", nil, []string{"rollout", "--draal", idA, "--jobs", "33", "web", "/nix/store/abc-web/bin/web"},
+			"--jobs: 33 is more than 32 store paths at a time, which is the most"},
 		{"rollout: no --draal", nil, []string{"rollout", "web", "/nix/store/abc-web/bin/web"}, "--draal is required"},
 		{"rollout: a bad --draal", nil, []string{"rollout", "--draal", "nonsense", "web", "/nix/store/abc-web/bin/web"}, `--draal: "nonsense"`},
 		{"id: an argument", nil, []string{"id", "now"}, `id takes no argument, got "now"`},
@@ -87,6 +91,16 @@ func TestInvalidCommandLines(t *testing.T) {
 			`--s3-endpoint: "minio:9000" is not the URL of an S3 service`},
 		{"draal: the variable stands in for --s3-endpoint", map[string]string{"GREAT_MACHINE_S3_ENDPOINT": "s3.example.com"},
 			[]string{"draal", "--data", "d", "--s3-bucket", "packs"}, `--s3-endpoint: "s3.example.com" is not the URL of an S3 service`},
+		// The endpoint is in every URL a client is handed: it names a
+		// host, and carries nothing that is not the service's address.
+		{"draal: an --s3-endpoint without a host", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--s3-endpoint", "http://:9000"},
+			`--s3-endpoint: "http://:9000" is not the URL of an S3 service`},
+		{"draal: an --s3-endpoint with a user in it", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--s3-endpoint", "http://user:secret@host"},
+			`--s3-endpoint: "http://user:secret@host" is not the URL of an S3 service`},
+		{"draal: an --s3-endpoint with a query", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--s3-endpoint", "http://host/path?x=1"},
+			`--s3-endpoint: "http://host/path?x=1" is not the URL of an S3 service`},
+		{"draal: an --s3-endpoint with a fragment", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--s3-endpoint", "http://host#frag"},
+			`--s3-endpoint: "http://host#frag" is not the URL of an S3 service`},
 		{"draal: a --store-max-pack-size that is no size", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-max-pack-size", "lots"},
 			`--store-max-pack-size: "lots" is not a size: want bytes, or a number with KiB, MiB or GiB`},
 		{"draal: a --store-max-pack-size of nothing", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-max-pack-size", "0"},
@@ -95,6 +109,8 @@ func TestInvalidCommandLines(t *testing.T) {
 			`--store-max-pack-size: "16GB" is not a size`},
 		{"draal: the variable stands in for --store-max-pack-size", map[string]string{"GREAT_MACHINE_STORE_MAX_PACK_SIZE": "-1"},
 			[]string{"draal", "--data", "d", "--s3-bucket", "packs"}, `--store-max-pack-size: "-1" is not a size`},
+		{"draal: a --store-max-pack-size with a sign", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-max-pack-size", "+1GiB"},
+			`--store-max-pack-size: "+1GiB" is not a size`},
 		{"draal: no --store-verify-jobs at all", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-verify-jobs", "0"},
 			"--store-verify-jobs: 0 is not a number of packs to verify at once: want 1 or more"},
 		{"draal: an operator that is no endpoint ID", nil,
@@ -193,6 +209,18 @@ func TestReadDraal(t *testing.T) {
 		t.Errorf("from the variables: got %+v, want %+v", got, want)
 	}
 
+	// A scratch directory of blanks is none: the store then makes its own
+	// in the data directory.
+	read(t, draalCommand(), reader, "--data", "data", "--store-scratch", "   ")
+	if got.store.scratch != "" {
+		t.Errorf("--store-scratch of blanks is read as %q, want none", got.store.scratch)
+	}
+	// And an endpoint may have a path, which some services are under.
+	read(t, draalCommand(), reader, "--data", "data", "--s3-endpoint", "https://gateway.example.com/s3")
+	if got.store.bucket.Endpoint != "https://gateway.example.com/s3" {
+		t.Errorf("--s3-endpoint with a path is read as %q", got.store.bucket.Endpoint)
+	}
+
 	// A flag wins over its variable, and --operator may be repeated.
 	read(t, draalCommand(), reader, "--data", "data", "--operator", idC, "--operator", idA, "--bind", "0.0.0.0:4433",
 		"--s3-bucket", "other", "--s3-prefix", "", "--s3-endpoint", "https://s3.example.com", "--s3-region", "auto", "--s3-path-style=false",
@@ -228,7 +256,7 @@ func TestParseSize(t *testing.T) {
 			t.Errorf("parseSize(%q) = %d, %v; want %d", text, got, err, want)
 		}
 	}
-	for _, text := range []string{"", "0", "-1", "lots", "16GB", "1.5GiB", "GiB", "9223372036854775807GiB", "1TiB"} {
+	for _, text := range []string{"", "0", "-1", "+1", "+1GiB", "0x10", "1e3", "lots", "16GB", "1.5GiB", "GiB", "9223372036854775807GiB", "1TiB"} {
 		if got, err := parseSize(text); err == nil {
 			t.Errorf("parseSize(%q) = %d, want an error", text, got)
 		}

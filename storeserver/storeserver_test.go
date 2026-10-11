@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -952,5 +953,33 @@ func TestABucketThatCannotBeReached(t *testing.T) {
 	// Nothing points at what was not uploaded.
 	if _, err := pull(t, w.dial(newKey(t)), webRef); !errors.Is(err, client.ErrNotFound) {
 		t.Errorf("a pull of what could not be pushed: %v, want client.ErrNotFound", err)
+	}
+}
+
+// The most jobs a push has, of many more store paths than that: every
+// job has a stream of its own for each of its requests, one after the
+// other, and all of them stay within what the store answers of a
+// connection at a time.
+func TestAPushWithTheMostJobsThereAre(t *testing.T) {
+	w := start(t, nil)
+	var paths []string
+	for i := range 90 {
+		paths = append(paths, storePath(t, fmt.Sprintf("p%02d-thing", i), fmt.Sprintf("the program number %d", i)))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*patience)
+	defer cancel()
+	res, err := push.Push(ctx, push.Config{
+		Key:     w.operator,
+		Server:  w.listener.ID(),
+		Addrs:   []netip.AddrPort{w.listener.LocalAddr()},
+		Prefix:  wire.StorePrefix("web"),
+		Jobs:    push.MaxJobs,
+		TempDir: t.TempDir(),
+	}, paths)
+	if err != nil || res.Pushed != 90 {
+		t.Fatalf("a push of 90 store paths with %d jobs: %+v, %v", push.MaxJobs, res, err)
+	}
+	if strings.Contains(w.log.String(), "more streams than the store answers") {
+		t.Errorf("the push opened more streams than the store answers at a time:\n%s", w.log.String())
 	}
 }

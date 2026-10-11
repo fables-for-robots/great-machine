@@ -204,3 +204,13 @@ func TestPushThatFailedBeforeTheContextEnded(t *testing.T) {
 	}
 	empty(t, cfg.TempDir)
 }
+
+// More jobs than the store answers the streams of is refused before
+// anything is dialed: the store would close the streams beyond, and the
+// push would fail in its middle with nothing that says why.
+func TestPushRefusesMoreJobsThanTheStoreAnswers(t *testing.T) {
+	_, err := Push(context.Background(), Config{Server: "nobody is dialed", Prefix: "/services/web/nix/store/", Jobs: MaxJobs + 1}, []string{"/nix/store/abc-web"})
+	if err == nil || !strings.Contains(err.Error(), "33 store paths at a time") || !strings.Contains(err.Error(), "32 is the most") {
+		t.Fatalf("Push with %d jobs: %v, want it refused, with the most there is", MaxJobs+1, err)
+	}
+}

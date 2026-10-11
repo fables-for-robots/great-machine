@@ -120,6 +120,9 @@ func readRollout(c *cli.Context) (rolloutConfig, error) {
 	if cfg.jobs < 1 {
 		return rolloutConfig{}, usageError("--jobs: %d is not a number of store paths to push at a time: want 1 or more", cfg.jobs)
 	}
+	if cfg.jobs > push.MaxJobs {
+		return rolloutConfig{}, usageError("--jobs: %d is more than %d store paths at a time, which is the most: the store answers 64 requests of a connection at a time, and a push has two under way when it goes from one step to the next", cfg.jobs, push.MaxJobs)
+	}
 	return cfg, nil
 }
 

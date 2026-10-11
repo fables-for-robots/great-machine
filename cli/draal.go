@@ -58,7 +58,7 @@ func draalCommand() *cli.Command {
 			&cli.BoolFlag{Name: "s3-path-style", EnvVars: []string{"GREAT_MACHINE_S3_PATH_STYLE"},
 				Usage: "address the bucket in the path of a URL, not in its host name"},
 			&cli.StringFlag{Name: "store-scratch", EnvVars: []string{"GREAT_MACHINE_STORE_SCRATCH"},
-				Usage: "`DIR` in which packs are verified; it is emptied at start (default: scratch in --data)"},
+				Usage: "`DIR` in which packs are verified: the store makes a directory of its own there, great-machine-scratch, which it empties at every start (default: --data)"},
 			&cli.IntFlag{Name: "store-verify-jobs", EnvVars: []string{"GREAT_MACHINE_STORE_VERIFY_JOBS"}, Value: 2,
 				Usage: "packs verified at once; each needs scratch space for its uncompressed data"},
 			&cli.StringFlag{Name: "store-max-pack-size", EnvVars: []string{"GREAT_MACHINE_STORE_MAX_PACK_SIZE"}, Value: "16GiB",
@@ -106,7 +106,7 @@ type draalConfig struct {
 // storeConfig is what the command line of draal says of the store.
 type storeConfig struct {
 	bucket       bucket.Config
-	scratch      string // "": the directory scratch in the data directory
+	scratch      string // where the store makes its scratch directory; "": the data directory
 	verifyJobs   int
 	maxPackBytes int64
 	noVerify     bool
@@ -159,7 +159,7 @@ func readStore(c *cli.Context) (storeConfig, error) {
 			Region:    strings.TrimSpace(c.String("s3-region")),
 			PathStyle: c.Bool("s3-path-style"),
 		},
-		scratch:    c.String("store-scratch"),
+		scratch:    strings.TrimSpace(c.String("store-scratch")),
 		verifyJobs: c.Int("store-verify-jobs"),
 		noVerify:   c.Bool("store-no-verify"),
 	}
@@ -168,10 +168,14 @@ func readStore(c *cli.Context) (storeConfig, error) {
 		return storeConfig{}, err
 	}
 	// The endpoint is in every URL a client is given. One without a
-	// scheme would be taken for a path, and found out by the first push.
+	// scheme would be taken for a path, and found out by the first push;
+	// one without a host names no service; and a user, a query or a
+	// fragment is no part of where a service is.
 	if e := cfg.bucket.Endpoint; e != "" {
-		if u, err := url.Parse(e); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return storeConfig{}, usageError("--s3-endpoint: %q is not the URL of an S3 service: want http://HOST[:PORT] or https://HOST[:PORT]", e)
+		u, err := url.Parse(e)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
+			u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			return storeConfig{}, usageError("--s3-endpoint: %q is not the URL of an S3 service: want http://HOST[:PORT] or https://HOST[:PORT], with the path the service is under if it has one", e)
 		}
 	}
 	if cfg.verifyJobs < 1 {

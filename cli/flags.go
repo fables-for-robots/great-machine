@@ -126,6 +126,12 @@ func parseSize(text string) (int64, error) {
 			break
 		}
 	}
+	// Digits alone: ParseInt would take a sign.
+	for _, c := range digits {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("%q is not a size: want bytes, or a number with KiB, MiB or GiB", text)
+		}
+	}
 	n, err := strconv.ParseInt(digits, 10, 64)
 	if err != nil || n <= 0 || n > (1<<62)/factor {
 		return 0, fmt.Errorf("%q is not a size: want bytes, or a number with KiB, MiB or GiB", text)

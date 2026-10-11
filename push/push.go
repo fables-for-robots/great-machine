@@ -32,6 +32,14 @@ import (
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
+// MaxJobs is the most store paths that are pushed at a time. The store
+// answers 64 requests of a connection at a time and closes the stream of
+// one more without an answer. Every job has one request under way, on a
+// stream of its own, and two for the moment in which it goes from one
+// step to the next: the store has not let go of the stream that was
+// answered when the next one arrives.
+const MaxJobs = 32
+
 const (
 	// defaultJobs is how many store paths are pushed at a time when Config
 	// does not say.
@@ -50,7 +58,7 @@ type Config struct {
 	Server   wire.ID          // the store: the endpoint ID of draal
 	Addrs    []netip.AddrPort // for tests: where the server is
 	Prefix   string
-	Jobs     int      // 0: 20
+	Jobs     int      // 0: 20; MaxJobs at the most
 	TempDir  string   // "": the system's
 	Progress Progress // nil: none
 }
@@ -107,6 +115,9 @@ func Push(ctx context.Context, cfg Config, storePaths []string) (Result, error) 
 	jobs := cfg.Jobs
 	if jobs <= 0 {
 		jobs = defaultJobs
+	}
+	if jobs > MaxJobs {
+		return Result{}, fmt.Errorf("pushing %d store paths at a time: %d is the most, as the store answers 64 requests of a connection at a time and a push has two under way when it goes from one step to the next", jobs, MaxJobs)
 	}
 
 	// Before anything is dialed: a name the server will not take should
