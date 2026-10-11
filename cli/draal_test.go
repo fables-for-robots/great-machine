@@ -557,3 +557,31 @@ func TestRunDraalStoreFails(t *testing.T) {
 		t.Errorf("the endpoint was bound though the store could not be opened:\n%s", logged.String())
 	}
 }
+
+// TestRunDraalWithoutARegion: the URLs of the store are signed for a
+// region, which --s3-region gives or the AWS configuration has. A draal
+// that has neither ends at its start, before anything is bound, and says
+// what gives it one.
+func TestRunDraalWithoutARegion(t *testing.T) {
+	absent := filepath.Join(t.TempDir(), "absent")
+	for _, name := range []string{"AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("AWS_CONFIG_FILE", absent)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", absent)
+	cfg := draalConfig{data: t.TempDir(), local: true}
+	cfg.store.bucket.Bucket = "packs"
+	var logged buffer
+	err := runDraal(context.Background(), cfg, quietLog(&logged))
+	if err == nil {
+		t.Fatal("runDraal returned nil for a bucket without a region")
+	}
+	for _, want := range []string{"the store: ", "no region", "--s3-region", "GREAT_MACHINE_S3_REGION", "AWS_REGION"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not have %q: %v", want, err)
+		}
+	}
+	if strings.Contains(logged.String(), "msg=serving") {
+		t.Errorf("the endpoint was bound though the store could not be opened:\n%s", logged.String())
+	}
+}

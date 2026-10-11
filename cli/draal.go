@@ -54,7 +54,7 @@ func draalCommand() *cli.Command {
 			&cli.StringFlag{Name: "s3-endpoint", EnvVars: []string{"GREAT_MACHINE_S3_ENDPOINT"},
 				Usage: "`URL` of an S3 service other than AWS; it is in the URLs that clients are given, so the laptop and the pods have to reach it under this name"},
 			&cli.StringFlag{Name: "s3-region", EnvVars: []string{"GREAT_MACHINE_S3_REGION"},
-				Usage: "`REGION` of the bucket (default: what the AWS configuration says)"},
+				Usage: "`REGION` of the bucket, which the URLs of the store are signed for (default: what the AWS configuration says, as AWS_REGION; one of the two has to say it)"},
 			&cli.BoolFlag{Name: "s3-path-style", EnvVars: []string{"GREAT_MACHINE_S3_PATH_STYLE"},
 				Usage: "address the bucket in the path of a URL, not in its host name"},
 			&cli.StringFlag{Name: "store-scratch", EnvVars: []string{"GREAT_MACHINE_STORE_SCRATCH"},
@@ -221,6 +221,11 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 		Log:          log,
 	})
 	if err != nil {
+		// The URLs of the store are signed for a region. jaccard-store
+		// says that it has none, and cannot say where one is given.
+		if cfg.store.bucket.Region == "" && strings.Contains(err.Error(), "no region") {
+			return fmt.Errorf("the store: %w: give the region of the bucket with --s3-region, or set GREAT_MACHINE_S3_REGION or AWS_REGION", err)
+		}
 		return fmt.Errorf("the store: %w", err)
 	}
 	// Deferred before the listener is, so that it happens after it: the
