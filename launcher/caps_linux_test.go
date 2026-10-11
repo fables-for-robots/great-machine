@@ -292,6 +292,74 @@ func TestALauncherThatCannotDropRefuses(t *testing.T) {
 	}
 }
 
+// withSysAdminInheritable runs the test binary as a process that has
+// CAP_SYS_ADMIN in its inheritable and ambient sets too, and that makes
+// a launcher; it returns what the process wrote. A runtime may put the
+// capabilities of a container into those sets.
+//
+// It is started from a thread that has raised the capability into both,
+// and is never used again.
+func withSysAdminInheritable(t *testing.T) string {
+	t.Helper()
+	cmd := exec.Command(os.Args[0])
+	cmd.Env = append(os.Environ(), childEnv+"=new")
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	started := make(chan error, 1)
+	go func() {
+		runtime.LockOSThread()
+		header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
+		var sets [2]unix.CapUserData
+		if err := unix.Capget(&header, &sets[0]); err != nil {
+			started <- fmt.Errorf("reading the capabilities: %w", err)
+			return
+		}
+		sets[0].Inheritable |= 1 << capSysAdmin
+		if err := unix.Capset(&header, &sets[0]); err != nil {
+			started <- fmt.Errorf("raising CAP_SYS_ADMIN into the inheritable set: %w", err)
+			return
+		}
+		if err := unix.Prctl(unix.PR_CAP_AMBIENT, unix.PR_CAP_AMBIENT_RAISE, capSysAdmin, 0, 0); err != nil {
+			started <- fmt.Errorf("raising CAP_SYS_ADMIN into the ambient set: %w", err)
+			return
+		}
+		started <- cmd.Start()
+	}()
+	if err := <-started; err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("the process with CAP_SYS_ADMIN inheritable: %v: %s", err, out.String())
+	}
+	return out.String()
+}
+
+// What a launcher starts has no CAP_SYS_ADMIN though the process that
+// made the launcher had it in its inheritable and ambient sets too: for
+// root a capability that is inheritable is permitted again once a
+// program is executed, whatever the bounding set says.
+func TestWhatIsStartedHasNoCapSysAdminThoughItWasInheritable(t *testing.T) {
+	rootWithSysAdmin(t)
+	out := withSysAdminInheritable(t)
+	made, rest, _ := strings.Cut(out, "\n")
+	if made != "made" {
+		t.Fatalf("no launcher was made: %q", out)
+	}
+	var r report
+	reported, _, _ := strings.Cut(rest, "\n")
+	if err := json.Unmarshal([]byte(reported), &r); err != nil {
+		t.Fatalf("the child reported %q: %v", rest, err)
+	}
+	for _, name := range []string{"CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"} {
+		if set(t, r.Status, name)&(1<<capSysAdmin) != 0 {
+			t.Errorf("%s of the child has CAP_SYS_ADMIN: %s", name, r.Status[name])
+		}
+	}
+	if r.Status["NoNewPrivs"] != "1" {
+		t.Errorf("NoNewPrivs of the child is %q, want 1", r.Status["NoNewPrivs"])
+	}
+}
+
 // A launcher warns when what it starts as root keeps capabilities a
 // container does not have by default, as in a privileged container, and
 // names them; in the container of a pod it has nothing to warn about.
