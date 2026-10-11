@@ -19,6 +19,15 @@
 // child. So what a Launcher starts is the program itself, which is a file
 // of the image, with Arg: started so, it replaces itself with the program
 // that was meant (Replace), as a process of its own that holds nobody.
+// The same goes for the working directory of what is started, which
+// os/exec changes to between the fork and the execution: the process
+// that replaces itself changes to it.
+//
+// What is started is started as it would have been without a launcher,
+// with one difference besides: a signal that this process was itself
+// started ignoring, other than SIGHUP and SIGINT, is not ignored by what
+// a launcher starts. The Go program in between takes every other signal
+// for itself, and the execution sets what was taken back to its default.
 package launcher
 
 import (
@@ -31,12 +40,17 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"golang.org/x/term"
 )
 
 // Arg is the first argument of the program when it is started to replace
 // itself with another:
 //
-//	great-machine exec-in-place PATH ARGV0 [ARG...]
+//	great-machine exec-in-place DIR PATH ARGV0 [ARG...]
+//
+// DIR is the working directory to change to first; empty, it stays where
+// it is.
 const Arg = "exec-in-place"
 
 // The exit status of a program that was to replace itself and could not,
@@ -48,21 +62,28 @@ const (
 
 // Replace is called first thing in main, and in the TestMain of a test
 // that starts processes through a Launcher. When args are not those of
-// Arg it returns (0, false) at once. When they are, it replaces the
-// process with the program at PATH, with the arguments from ARGV0 on and
-// the environment of the process, and does not return; when that fails it
-// says so on standard error and returns the exit status, 127 for a program
-// that is not there and 126 for any other failure, and true.
+// Arg it returns (0, false) at once. When they are, it changes to DIR,
+// unless that is empty, and replaces the process with the program at
+// PATH, with the arguments from ARGV0 on and the environment of the
+// process, and does not return; when that fails it says so on standard
+// error and returns the exit status, 127 for a program that is not there
+// and 126 for any other failure, and true.
 func Replace(args []string) (status int, was bool) {
 	if len(args) < 2 || args[1] != Arg {
 		return 0, false
 	}
-	if len(args) < 4 {
-		fmt.Fprintf(os.Stderr, "great-machine: %s is how a zathras starts a program: it takes PATH ARGV0 [ARG...]\n", Arg)
+	if len(args) < 5 {
+		fmt.Fprintf(os.Stderr, "great-machine: %s is how a zathras starts a program: it takes DIR PATH ARGV0 [ARG...]\n", Arg)
 		return statusNotExecuted, true
 	}
-	path := args[2]
-	err := syscall.Exec(path, args[3:], os.Environ())
+	dir, path := args[2], args[3]
+	if dir != "" {
+		if err := os.Chdir(dir); err != nil {
+			fmt.Fprintf(os.Stderr, "great-machine: changing to the working directory %s: %v\n", dir, errors.Unwrap(err))
+			return statusNotExecuted, true
+		}
+	}
+	err := syscall.Exec(path, args[4:], os.Environ())
 	if !errors.Is(err, syscall.ENOENT) {
 		fmt.Fprintf(os.Stderr, "great-machine: executing %s: %v\n", path, err)
 		return statusNotExecuted, true
@@ -177,17 +198,24 @@ func New(cfg Config) (*Launcher, error) {
 	return l, nil
 }
 
-// Start starts cmd with start, which is cmd.Start or what calls it
-// (pty.StartWithSize). Before that it makes cmd the program itself,
-// started with Arg to replace itself with what cmd was to run, and sets
-// the user of Config. On Linux start runs on the launcher's thread. Start
-// returns what start returned.
+// Start starts cmd with start, which is cmd.Start or what calls it.
+// Before that it makes cmd the program itself, started with Arg to
+// change to the working directory of cmd and to replace itself with what
+// cmd was to run, and sets the user of Config. On Linux start runs on the
+// launcher's thread. Start returns what start returned.
 //
-// A program that cannot be executed is therefore no error of Start: the
-// process that was to become it says why on its standard error and ends,
-// with 127 for a program that is not there and 126 otherwise. A cmd whose
-// Err is set, for a name that was not found, is not started: Start
-// returns that error. Once the launcher is closed Start returns ErrClosed.
+// With a user, the standard streams of cmd that are pipes or terminals
+// are given to that user first, so that the program can open them anew
+// by their names, /dev/stdout or the terminal of its session, as it could
+// if it had made them. They have to be the command's when Start is
+// called: a terminal that start itself opens is not seen here.
+//
+// A program that cannot be executed, and a working directory that cannot
+// be changed to, are therefore no errors of Start: the process that was
+// to become the program says why on its standard error and ends, with
+// 127 for a program that is not there and 126 otherwise. A cmd whose Err
+// is set, for a name that was not found, is not started: Start returns
+// that error. Once the launcher is closed Start returns ErrClosed.
 func (l *Launcher) Start(cmd *exec.Cmd, start func() error) error {
 	if cmd.Err != nil {
 		return cmd.Err
@@ -196,24 +224,63 @@ func (l *Launcher) Start(cmd *exec.Cmd, start func() error) error {
 	return l.run(start)
 }
 
-// rewrite makes cmd the program itself, which is to replace itself with
-// the program of cmd, and gives it the user of the launcher.
+// rewrite makes cmd the program itself, which is to change to the working
+// directory of cmd and to replace itself with the program of cmd, and
+// gives it the user of the launcher.
 func (l *Launcher) rewrite(cmd *exec.Cmd) {
 	argv := cmd.Args
 	if len(argv) == 0 {
 		// As os/exec has it for a command without arguments.
 		argv = []string{cmd.Path}
 	}
-	args := make([]string, 0, 3+len(argv))
-	args = append(args, "great-machine", Arg, cmd.Path)
-	cmd.Path, cmd.Args = l.exe, append(args, argv...)
+	args := make([]string, 0, 4+len(argv))
+	args = append(args, "great-machine", Arg, cmd.Dir, cmd.Path)
+	cmd.Path, cmd.Args, cmd.Dir = l.exe, append(args, argv...), ""
 	if l.user != nil {
 		if cmd.SysProcAttr == nil {
 			cmd.SysProcAttr = &syscall.SysProcAttr{}
 		}
 		// No Groups: the process has the group and no others.
 		cmd.SysProcAttr.Credential = &syscall.Credential{Uid: l.user.UID, Gid: l.user.GID}
+		for _, stream := range []any{cmd.Stdin, cmd.Stdout, cmd.Stderr} {
+			if f, ok := stream.(*os.File); ok && f != nil {
+				l.give(f)
+			}
+		}
 	}
+}
+
+// give makes the user of the launcher the owner of f, when f is a pipe or
+// a terminal: what a process is started on, and nothing that is a file of
+// somebody's or a device of the system, as /dev/null is. That it could
+// not be done is no reason not to start the process, which then cannot
+// open its standard streams anew.
+func (l *Launcher) give(f *os.File) {
+	info, err := f.Stat()
+	if err != nil {
+		return
+	}
+	switch {
+	case info.Mode()&os.ModeNamedPipe != 0:
+	case info.Mode()&os.ModeCharDevice != 0 && isTerminal(f):
+	default:
+		return
+	}
+	if err := f.Chown(int(l.user.UID), -1); err != nil {
+		l.log.Debug("a standard stream was not given to the user of the process, which cannot open it anew", "user", l.user.UID, "error", err)
+	}
+}
+
+// isTerminal says whether f is a terminal, without making the file
+// blocking, as asking for its descriptor would.
+func isTerminal(f *os.File) bool {
+	raw, err := f.SyscallConn()
+	if err != nil {
+		return false
+	}
+	is := false
+	raw.Control(func(fd uintptr) { is = term.IsTerminal(int(fd)) })
+	return is
 }
 
 // Close ends the launcher's thread. No Start may follow: one that does

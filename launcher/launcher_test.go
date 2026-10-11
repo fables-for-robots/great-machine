@@ -10,7 +10,7 @@ func TestReplaceIsForItsArgumentAlone(t *testing.T) {
 		nil,
 		{"great-machine"},
 		{"great-machine", "zathras"},
-		{"great-machine", "zathras", Arg, "/bin/true", "true"},
+		{"great-machine", "zathras", Arg, "", "/bin/true", "true"},
 		{Arg},
 	} {
 		if status, was := Replace(args); status != 0 || was {
@@ -24,7 +24,8 @@ func TestReplaceIsForItsArgumentAlone(t *testing.T) {
 func TestReplaceWithoutAProgram(t *testing.T) {
 	for _, args := range [][]string{
 		{"great-machine", Arg},
-		{"great-machine", Arg, "/bin/true"},
+		{"great-machine", Arg, ""},
+		{"great-machine", Arg, "", "/bin/true"},
 	} {
 		if status, was := Replace(args); status != 126 || !was {
 			t.Errorf("Replace(%q) = %d, %v; want 126, true", args, status, was)

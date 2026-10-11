@@ -203,11 +203,40 @@ func TestStartStartsTheProgramItselfAndReturnsWhatStartReturned(t *testing.T) {
 	if err != failed || calls != 1 {
 		t.Errorf("Start = %v after %d calls of start, want what start returned after one", err, calls)
 	}
-	if want := []string{"great-machine", Arg, "/bin/sh", "sh", "-c", "exit 0"}; !slices.Equal(cmd.Args, want) {
+	if want := []string{"great-machine", Arg, "", "/bin/sh", "sh", "-c", "exit 0"}; !slices.Equal(cmd.Args, want) {
 		t.Errorf("the arguments of the command are %q, want %q", cmd.Args, want)
 	}
 	if cmd.Path == "/bin/sh" || !filepath.IsAbs(cmd.Path) {
 		t.Errorf("the command's program is %q, want the program itself", cmd.Path)
+	}
+
+	// The working directory is not the command's any more: what os/exec
+	// does with it, it does between the fork and the execution, where
+	// nothing may touch the store. The program that replaces itself
+	// changes to it.
+	in := exec.Command("/bin/sh", "-c", "exit 0")
+	in.Dir = "/some/directory"
+	if err := l.Start(in, func() error { return failed }); err != failed {
+		t.Errorf("Start = %v, want what start returned", err)
+	}
+	if want := []string{"great-machine", Arg, "/some/directory", "/bin/sh", "/bin/sh", "-c", "exit 0"}; !slices.Equal(in.Args, want) || in.Dir != "" {
+		t.Errorf("a command with a working directory became %q in %q, want %q in none", in.Args, in.Dir, want)
+	}
+}
+
+// A working directory that is not there is found out by the process that
+// was to change to it, as a program that is not there is: it says so and
+// ends with 126.
+func TestAWorkingDirectoryThatIsNotThere(t *testing.T) {
+	l := newLauncher(t, Config{})
+	cmd := reporting()
+	cmd.Dir = filepath.Join(t.TempDir(), "nothing")
+	r, errOut, status := run(t, l, cmd)
+	if status != 126 || r.Pid != 0 {
+		t.Errorf("the exit status is %d and the program reported %+v, want 126 and no program", status, r)
+	}
+	if !strings.Contains(errOut, "changing to the working directory "+cmd.Args[2]) || !strings.Contains(errOut, "no such file") {
+		t.Errorf("standard error does not say which directory could not be changed to and why: %q", errOut)
 	}
 }
 
