@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -175,7 +176,7 @@ func readStore(c *cli.Context) (storeConfig, error) {
 		u, err := url.Parse(e)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
 			u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-			return storeConfig{}, usageError("--s3-endpoint: %q is not the URL of an S3 service: want http://HOST[:PORT] or https://HOST[:PORT], with the path the service is under if it has one", shownEndpoint(e))
+			return storeConfig{}, usageError("--s3-endpoint: %s is not the URL of an S3 service: want http://HOST[:PORT] or https://HOST[:PORT], with the path the service is under if it has one", shownEndpoint(e))
 		}
 	}
 	if cfg.verifyJobs < 1 {
@@ -187,21 +188,16 @@ func readStore(c *cli.Context) (storeConfig, error) {
 	return cfg, nil
 }
 
-// shownEndpoint is a value of --s3-endpoint as a refusal repeats it:
-// without what stands before an @, and behind a ? or a #, which is where
-// somebody may have put a secret. A refusal goes to the log of a pod.
+// shownEndpoint is a value of --s3-endpoint as a refusal repeats it. One
+// with an @, a ? or a # in it is not repeated at all: a user, a query
+// and a fragment are where somebody may have put a secret, a refusal
+// goes to the log of a pod, and no cut of such a value is sure to leave
+// the secret out.
 func shownEndpoint(e string) string {
-	if at := strings.LastIndex(e, "@"); at >= 0 {
-		scheme := ""
-		if i := strings.Index(e, "://"); i >= 0 && i < at {
-			scheme = e[:i+len("://")]
-		}
-		e = scheme + "…@" + e[at+1:]
+	if strings.ContainsAny(e, "@?#") {
+		return "a value with an @, a ? or a # in it, which is not repeated here,"
 	}
-	if i := strings.IndexAny(e, "?#"); i >= 0 {
-		e = e[:i+1] + "…"
-	}
-	return e
+	return strconv.Quote(e)
 }
 
 // runDraal is draal until ctx is done, which SIGINT and SIGTERM do. That

@@ -100,11 +100,11 @@ func TestInvalidCommandLines(t *testing.T) {
 		{"draal: an --s3-endpoint without a host", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://:9000"},
 			`--s3-endpoint: "http://:9000" is not the URL of an S3 service`},
 		{"draal: an --s3-endpoint with a user in it", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://user:secret@host"},
-			`--s3-endpoint: "http://…@host" is not the URL of an S3 service`},
+			`--s3-endpoint: a value with an @, a ? or a # in it, which is not repeated here, is not the URL of an S3 service`},
 		{"draal: an --s3-endpoint with a query", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://host/path?x=1"},
-			`--s3-endpoint: "http://host/path?…" is not the URL of an S3 service`},
+			`--s3-endpoint: a value with an @, a ? or a # in it, which is not repeated here, is not the URL of an S3 service`},
 		{"draal: an --s3-endpoint with a fragment", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://host#frag"},
-			`--s3-endpoint: "http://host#…" is not the URL of an S3 service`},
+			`--s3-endpoint: a value with an @, a ? or a # in it, which is not repeated here, is not the URL of an S3 service`},
 		{"draal: a --store-max-pack-size that is no size", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-max-pack-size", "lots"},
 			`--store-max-pack-size: "lots" is not a size: want bytes, or a number with KiB, MiB or GiB`},
 		{"draal: a --store-max-pack-size of nothing", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-max-pack-size", "0"},
@@ -487,15 +487,21 @@ func TestHelpNamesEveryCommand(t *testing.T) {
 	}
 }
 
-// A refusal goes to the log of a pod. An endpoint that is refused is
-// repeated in it without what may be a secret: what stands before an @,
-// and behind a ? or a #.
-func TestARefusedEndpointIsRepeatedWithoutWhatMayBeASecret(t *testing.T) {
+// A refusal goes to the log of a pod. An endpoint that is refused and has
+// an @, a ? or a # in it is not repeated there at all: a user, a query
+// and a fragment are where somebody may have put a secret, and no cut of
+// such a value is sure to leave it out.
+func TestARefusedEndpointThatMayHaveASecretInItIsNotRepeated(t *testing.T) {
 	for _, endpoint := range []string{
 		"https://key:hush@s3.example.com",
 		"https://s3.example.com/path?signature=hush",
 		"https://s3.example.com/path#hush",
 		"https://key:hu?sh@s3.example.com/path?signature=hush#hush",
+		// An @ behind a ? or a #, and one before the scheme.
+		"https://s3.example.com/path?signature=abc@hush",
+		"https://s3.example.com/path#abc@hush",
+		"https://s3.example.com?email=a@hush.example&k=hush",
+		"hush@h://a@hush",
 		// What is no URL at all.
 		"https://key:hush@s3 .example.com",
 		"key:hush@s3.example.com",
@@ -520,8 +526,11 @@ func TestARefusedEndpointIsRepeatedWithoutWhatMayBeASecret(t *testing.T) {
 				if !strings.Contains(stderr.String(), "--s3-endpoint: ") || !strings.Contains(stderr.String(), "is not the URL of an S3 service") {
 					t.Errorf("stderr is %q, want the refusal of the endpoint", stderr.String())
 				}
-				if strings.Contains(stderr.String(), "hush") || strings.Contains(stderr.String(), "sh@") {
-					t.Errorf("stderr repeats what may be a secret: %q", stderr.String())
+				if strings.Contains(stderr.String(), "hush") || strings.Contains(stderr.String(), "sh@") || strings.Contains(stderr.String(), "s3.example.com") {
+					t.Errorf("stderr repeats the endpoint, which may have a secret in it: %q", stderr.String())
+				}
+				if !strings.Contains(stderr.String(), "is not repeated here") {
+					t.Errorf("stderr is %q, want it to say that the value is not repeated", stderr.String())
 				}
 			})
 		}
