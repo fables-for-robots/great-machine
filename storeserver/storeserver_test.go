@@ -20,6 +20,7 @@ import (
 	"github.com/amber-store/core/ingest"
 	"github.com/amber-store/core/key"
 	"github.com/amber-store/core/packstore"
+	"github.com/amber-store/jaccard-store/bucket"
 	"github.com/amber-store/jaccard-store/bucket/buckettest"
 	"github.com/amber-store/jaccard-store/client"
 	jsnode "github.com/amber-store/jaccard-store/node"
@@ -774,5 +775,55 @@ func TestTheStoreIsKeptInItsDirectory(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("%s: %v", path, err)
 		}
+	}
+}
+
+// The bucket is not asked anything when the store is opened: one that
+// cannot be reached shows when a client is sent to it, and the error is
+// the client's, with the address it could not reach.
+func TestABucketThatCannotBeReached(t *testing.T) {
+	// An address nothing listens on: that of a server that is closed.
+	closed := httptest.NewServer(http.NotFoundHandler())
+	addr := closed.Listener.Addr().String()
+	closed.Close()
+	// The credentials are those of the environment, as in draal: none of
+	// whoever runs the test.
+	absent := filepath.Join(t.TempDir(), "absent")
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_CONFIG_FILE", absent)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", absent)
+
+	operator := newKey(t)
+	store, err := Open(context.Background(), Config{
+		Dir:    t.TempDir(),
+		Bucket: bucket.Config{Bucket: "packs", Endpoint: "http://" + addr, Region: "us-east-1", PathStyle: true},
+		Authz:  authz.NewAllowlist([]wire.ID{operator.ID()}),
+		Log:    quiet,
+	})
+	if err != nil {
+		t.Fatalf("Open with a bucket that cannot be reached: %v", err)
+	}
+	defer store.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), patience)
+	defer cancel()
+	l, err := node.Listen(ctx, node.ListenConfig{Key: newKey(t), Local: true, Handlers: map[string]func(node.Conn){ALPN: store.ServeConn}, Log: quiet})
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer l.Close()
+	go l.Accept(ctx)
+	w := &world{t: t, store: store, listener: l, operator: operator}
+
+	_, err = pushDir(t, w.dial(operator), storePath(t, "abc-web", "the program of web"), webRef)
+	if err == nil || !strings.Contains(err.Error(), addr) {
+		t.Fatalf("a push to a store whose bucket cannot be reached: %v, want an error that names %s", err, addr)
+	}
+	t.Logf("the push failed with: %v", err)
+	// Nothing points at what was not uploaded.
+	if _, err := pull(t, w.dial(newKey(t)), webRef); !errors.Is(err, client.ErrNotFound) {
+		t.Errorf("a pull of what could not be pushed: %v, want client.ErrNotFound", err)
 	}
 }
