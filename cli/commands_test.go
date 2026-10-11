@@ -100,11 +100,11 @@ func TestInvalidCommandLines(t *testing.T) {
 		{"draal: an --s3-endpoint without a host", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://:9000"},
 			`--s3-endpoint: "http://:9000" is not the URL of an S3 service`},
 		{"draal: an --s3-endpoint with a user in it", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://user:secret@host"},
-			`--s3-endpoint: "http://user:secret@host" is not the URL of an S3 service`},
+			`--s3-endpoint: "http://…@host" is not the URL of an S3 service`},
 		{"draal: an --s3-endpoint with a query", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://host/path?x=1"},
-			`--s3-endpoint: "http://host/path?x=1" is not the URL of an S3 service`},
+			`--s3-endpoint: "http://host/path?…" is not the URL of an S3 service`},
 		{"draal: an --s3-endpoint with a fragment", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://host#frag"},
-			`--s3-endpoint: "http://host#frag" is not the URL of an S3 service`},
+			`--s3-endpoint: "http://host#…" is not the URL of an S3 service`},
 		{"draal: a --store-max-pack-size that is no size", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-max-pack-size", "lots"},
 			`--store-max-pack-size: "lots" is not a size: want bytes, or a number with KiB, MiB or GiB`},
 		{"draal: a --store-max-pack-size of nothing", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-max-pack-size", "0"},
@@ -483,6 +483,47 @@ func TestHelpNamesEveryCommand(t *testing.T) {
 	for _, name := range []string{"draal", "zathras", "id", "rollout", "rollback", "status", "logs", "shell", "tui", "version"} {
 		if !strings.Contains(stdout.String(), "\n   "+name+" ") {
 			t.Errorf("the help does not name %s:\n%s", name, stdout.String())
+		}
+	}
+}
+
+// A refusal goes to the log of a pod. An endpoint that is refused is
+// repeated in it without what may be a secret: what stands before an @,
+// and behind a ? or a #.
+func TestARefusedEndpointIsRepeatedWithoutWhatMayBeASecret(t *testing.T) {
+	for _, endpoint := range []string{
+		"https://key:hush@s3.example.com",
+		"https://s3.example.com/path?signature=hush",
+		"https://s3.example.com/path#hush",
+		"https://key:hu?sh@s3.example.com/path?signature=hush#hush",
+		// What is no URL at all.
+		"https://key:hush@s3 .example.com",
+		"key:hush@s3.example.com",
+	} {
+		for _, how := range []string{"flag", "variable"} {
+			t.Run(how+" "+endpoint, func(t *testing.T) {
+				cleanEnvironment(t)
+				args := []string{"great-machine", "draal", "--data", t.TempDir(), "--s3-bucket", "packs"}
+				if how == "flag" {
+					args = append(args, "--s3-endpoint", endpoint)
+				} else {
+					t.Setenv("GREAT_MACHINE_S3_ENDPOINT", endpoint)
+				}
+				// A command line that is not refused would start a
+				// draal: it gets a context that ends.
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				var stdout, stderr bytes.Buffer
+				if got := run(ctx, newApp(&stdout, &stderr), args); got != 2 {
+					t.Errorf("the exit status is %d, want 2", got)
+				}
+				if !strings.Contains(stderr.String(), "--s3-endpoint: ") || !strings.Contains(stderr.String(), "is not the URL of an S3 service") {
+					t.Errorf("stderr is %q, want the refusal of the endpoint", stderr.String())
+				}
+				if strings.Contains(stderr.String(), "hush") || strings.Contains(stderr.String(), "sh@") {
+					t.Errorf("stderr repeats what may be a secret: %q", stderr.String())
+				}
+			})
 		}
 	}
 }
