@@ -23,7 +23,7 @@ func (d *Draal) admit(peer wire.ID, req *wire.Request) error {
 	)
 	switch {
 	case req.Store != nil:
-		op = authz.OpStore
+		op, service = authz.OpStore, req.Store.Service
 	case req.Rollout != nil:
 		op, service = authz.OpRollout, req.Rollout.Service
 	case req.Rollback != nil:
@@ -152,7 +152,7 @@ func asked(req *wire.Request) []string {
 func (d *Draal) respond(ctx context.Context, peer wire.ID, req *wire.Request, send func(*wire.Response) bool) error {
 	switch {
 	case req.Store != nil:
-		info, err := d.Store(ctx)
+		info, err := d.Store(ctx, req.Store.Service)
 		if err != nil {
 			return err
 		}

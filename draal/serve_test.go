@@ -533,7 +533,7 @@ func TestHistory(t *testing.T) {
 func requests(zathras wire.ID) map[string]*wire.Request {
 	rollout := webRollout(1)
 	return map[string]*wire.Request{
-		"store":    {Store: &wire.StoreRequest{}},
+		"store":    {Store: &wire.StoreRequest{Service: "web"}},
 		"rollout":  {Rollout: &rollout},
 		"rollback": {Rollback: &wire.RollbackRequest{Service: "web"}},
 		"watch":    {Watch: &wire.WatchRequest{}},
@@ -595,9 +595,23 @@ func TestARefusalAboutAZathrasNamesNoService(t *testing.T) {
 func TestProtocolStore(t *testing.T) {
 	cfg := testConfig(t)
 	w := startWorld(t, cfg)
-	_, resp, err := ask(t, w.dial(operatorID), &wire.Request{Store: &wire.StoreRequest{}})
-	if err != nil || resp.Store == nil || *resp.Store != cfg.Store {
-		t.Fatalf("store = %+v, %v; want %+v", resp, err, cfg.Store)
+	op := w.dial(operatorID)
+	_, resp, err := ask(t, op, &wire.Request{Store: &wire.StoreRequest{Service: "web"}})
+	want := wire.StoreInfo{Server: cfg.Store.Server, Prefix: wire.StorePrefix("web")}
+	if err != nil || resp.Store == nil || *resp.Store != want {
+		t.Fatalf("store of web = %+v, %v; want %+v", resp, err, want)
+	}
+	// The request names its service: one that names none, or what is no
+	// name of a service, is refused.
+	for _, service := range []string{"", "a/b"} {
+		if _, _, err := ask(t, op, &wire.Request{Store: &wire.StoreRequest{Service: service}}); wire.CodeOf(err) != wire.CodeBadRequest {
+			t.Errorf("store of %q = %v, want a bad-request", service, err)
+		}
+	}
+	// It is authorized for the service it names.
+	_, _, err = ask(t, w.dial(strangerID), &wire.Request{Store: &wire.StoreRequest{Service: "web"}})
+	if wire.CodeOf(err) != wire.CodeUnauthorized || !strings.Contains(err.Error(), "on service web") {
+		t.Errorf("store of web as a stranger = %v, want unauthorized, naming the service", err)
 	}
 }
 

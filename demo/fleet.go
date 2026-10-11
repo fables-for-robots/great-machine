@@ -729,7 +729,7 @@ func (d *Demo) connected(id wire.ID) (*zathras, error) {
 
 // Store is not of the demo: neither the page nor the terminal UI asks
 // for a store.
-func (d *Demo) Store(ctx context.Context) (wire.StoreInfo, error) {
+func (d *Demo) Store(ctx context.Context, service string) (wire.StoreInfo, error) {
 	return wire.StoreInfo{}, wire.Errorf(wire.CodeUnavailable, "the demo has no store")
 }
 

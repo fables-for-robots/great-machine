@@ -81,9 +81,20 @@ func webRollout(parallel int) wire.RolloutRequest {
 func TestStore(t *testing.T) {
 	cfg := testConfig(t)
 	d := New(cfg)
-	got, err := d.Store(context.Background())
-	if err != nil || got != cfg.Store {
-		t.Fatalf("Store = %+v, %v; want %+v", got, err, cfg.Store)
+	// Every service has a prefix of its own, and one draal has not heard
+	// of yet has one like any other: the first rollout of a service
+	// pushes before draal knows the service.
+	for _, service := range []string{"web", "never-rolled-out"} {
+		got, err := d.Store(context.Background(), service)
+		want := wire.StoreInfo{Server: cfg.Store.Server, Prefix: "/services/" + service + "/nix/store/"}
+		if err != nil || got != want {
+			t.Errorf("Store(%q) = %+v, %v; want %+v", service, got, err, want)
+		}
+	}
+	for _, service := range []string{"", "Web", "a/b", "..", "web/../api"} {
+		if got, err := d.Store(context.Background(), service); wire.CodeOf(err) != wire.CodeBadRequest {
+			t.Errorf("Store(%q) = %+v, %v; want a bad-request", service, got, err)
+		}
 	}
 }
 

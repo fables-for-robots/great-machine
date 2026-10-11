@@ -416,7 +416,7 @@ func TestCloseTwiceAndFromSeveralGoroutines(t *testing.T) {
 					}
 					under.Add(1)
 					for {
-						if _, err := c.Store(context.Background()); err != nil {
+						if _, err := c.Store(context.Background(), "web"); err != nil {
 							return
 						}
 					}
@@ -453,7 +453,7 @@ func TestCloseTwiceAndFromSeveralGoroutines(t *testing.T) {
 			if err := c.Close(); err != nil {
 				t.Errorf("one more Close = %v, want nil", err)
 			}
-			if _, err := c.Store(context.Background()); !errors.Is(err, ErrClosed) {
+			if _, err := c.Store(context.Background(), "web"); !errors.Is(err, ErrClosed) {
 				t.Errorf("Store on a closed client = %v, want ErrClosed", err)
 			}
 			if _, err := c.Watch(context.Background()); !errors.Is(err, ErrClosed) {

@@ -48,7 +48,7 @@ var _ draal.Controller = (*fake)(nil)
 // unset is what a fake answers when the test gave it nothing to answer.
 var unset = wire.Errorf(wire.CodeUnavailable, "the fake has no answer")
 
-func (f *fake) Store(ctx context.Context) (wire.StoreInfo, error) {
+func (f *fake) Store(ctx context.Context, service string) (wire.StoreInfo, error) {
 	panic("the API asked for the store")
 }
 

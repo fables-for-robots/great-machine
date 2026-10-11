@@ -20,6 +20,8 @@ import (
 type Config struct {
 	DB    *db.DB
 	Authz authz.Authorizer
+	// Store names the jaccard-store server. Its prefix is not looked at:
+	// every service has a prefix of its own, wire.StorePrefix.
 	Store wire.StoreInfo
 	// StoreDir is the directory a rollout's binary has to be in. "":
 	// /nix/store. The tests of the whole point it at a directory they can
@@ -116,9 +118,10 @@ type Shell interface {
 // Controller is what an operator can do. The handler of the protocol and,
 // in stage 2, the HTTP API are written against it.
 type Controller interface {
-	// Store returns the jaccard-store server and the prefix that closures
-	// are pushed to.
-	Store(ctx context.Context) (wire.StoreInfo, error)
+	// Store returns where the closures of a service are pushed to: the
+	// jaccard-store server and the prefix of the service. A name that is
+	// no name of a service is a bad-request.
+	Store(ctx context.Context, service string) (wire.StoreInfo, error)
 	// Rollout records a new generation of a service and the rollout to it.
 	Rollout(ctx context.Context, by wire.ID, req wire.RolloutRequest) (wire.RolloutInfo, error)
 	// Rollback records a rollout to the stable generation of a service.

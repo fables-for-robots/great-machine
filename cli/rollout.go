@@ -164,7 +164,7 @@ func runRollout(ctx context.Context, cfg rolloutConfig, deps rolloutDeps, stdout
 	// The step lasts until the push says what the server has: asking
 	// draal where the store is, and the store what it holds.
 	p.begin("asking the store")
-	store, err := client.Store(ctx)
+	store, err := client.Store(ctx, cfg.service)
 	if err != nil {
 		return fmt.Errorf("asking draal for the store: %w", err)
 	}
