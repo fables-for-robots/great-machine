@@ -3,16 +3,21 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
 // echo is a store's page for the tests: it answers with the method and
-// the path it was asked with.
+// the path it was asked with, under a policy of its own, as the page of
+// jaccard-store has one.
 var echo = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Security-Policy", echoPolicy)
 	fmt.Fprintf(w, "%s %s", r.Method, r.URL.Path)
 })
+
+const echoPolicy = "default-src 'none'"
 
 // The store's page is the handler it is given, under /store/, asked with
 // that part of the path taken off: jaccard-store's admin page asks for
@@ -58,8 +63,21 @@ func TestTheStoresPageHasTheSecurityHeaders(t *testing.T) {
 				t.Errorf("GET %s: %s is %q, want %q once", path, header, got, want)
 			}
 		}
-		if got := a.header.Values("Content-Security-Policy"); len(got) != 1 {
-			t.Errorf("GET %s: there are %d policies, want one: %q", path, len(got), got)
+		// The answer is the store's page's, not that of the page of
+		// the fleet, which has these headers too; and it has one
+		// policy, the store's own. The redirect is draal's.
+		got := a.header.Values("Content-Security-Policy")
+		if path == "/store" {
+			if len(got) != 1 {
+				t.Errorf("GET %s: there are %d policies, want one: %q", path, len(got), got)
+			}
+			continue
+		}
+		if !strings.HasPrefix(a.body, "GET /") {
+			t.Errorf("GET %s = %d %q, want the answer of the store's page", path, a.status, a.body)
+		}
+		if len(got) != 1 || got[0] != echoPolicy {
+			t.Errorf("GET %s: the policies are %q, want the store's own, %q, alone", path, got, echoPolicy)
 		}
 	}
 }
