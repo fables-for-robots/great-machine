@@ -32,7 +32,10 @@ type ListenConfig struct {
 	// that is accepted for it. A handler is called in a goroutine of its
 	// own and returns when it is done with the connection, which is then
 	// closed: it need not close it. Close of the listener closes the
-	// connections of handlers too.
+	// connections of handlers too, and does not wait for the handlers:
+	// a handler returns when its connection is done, may still be
+	// running when Close has returned, and can be started on a
+	// connection that Close has closed already.
 	//
 	// Such a connection is handed over by Accept, which goes on to the
 	// next: it is taken only while Accept is called.
