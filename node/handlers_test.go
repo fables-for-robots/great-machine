@@ -161,19 +161,24 @@ func TestWithoutAHandlerAnotherProtocolIsRefused(t *testing.T) {
 	}
 }
 
-// ended fails the test unless the connection of a client has ended: no
-// stream can be opened on it any more.
+// ended fails the test unless the connection of a client has ended: a
+// stream is refused on it at once. An open that only runs out of its time
+// is no sign of an end: a connection whose peer accepts no streams stops
+// taking them at the peer's limit, open as it is.
 func ended(t *testing.T, what string, c *jsnode.Conn) {
 	t.Helper()
 	deadline := time.Now().Add(patience)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		s, err := c.OpenStreamConn(ctx)
+		ranOut := ctx.Err() != nil
 		cancel()
-		if err != nil {
+		if err != nil && !ranOut {
 			return
 		}
-		s.Close()
+		if err == nil {
+			s.Close()
+		}
 		if time.Now().After(deadline) {
 			t.Fatalf("%s: the connection of the client is still open", what)
 		}
