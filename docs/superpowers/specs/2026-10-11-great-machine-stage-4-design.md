@@ -95,13 +95,19 @@ together:
 |---|---|
 | the database | `store.sqlite` in `--data`, beside `draal.sqlite` |
 | the packs | the bucket of `--s3-bucket`, under `--s3-prefix` |
-| the scratch space of verification | `--store-scratch`, by default `scratch` in `--data` |
+| the scratch space of verification | `great-machine-scratch`, a directory the store makes for itself in `--store-scratch`, which is `--data` unless told otherwise |
 | the key | none of its own: draal's |
 
 The settings jaccard-store's server has and draal has no flag for keep
 jaccard-store's defaults: an upload has an hour, a URL is valid for an
 hour, a part is 64 MiB. The sweeper runs every 30 seconds, as in
 `jaccard-stored`.
+
+jaccard-store's server empties its scratch directory whenever it starts.
+That is why the store's is a directory of its own making, by a name
+nothing else has: a `--store-scratch` that is the data directory, or one
+above it, or `/`, would otherwise cost draal its key and its databases
+at its next start, as a review of this stage's code showed.
 
 Verification needs scratch space for `--store-max-pack-size` times
 `--store-verify-jobs`, 32 GiB with the defaults. That does not belong on
@@ -168,7 +174,8 @@ returned.
 jaccard-store's admin page, which shows what the store holds and what
 sharing and compression save, is part of draal's web page under `/store/`.
 It is read-only, and has the authentication of draal's page: none (design §4,
-§9).
+§9). The header of draal's page has a link to it. The demo of the page,
+which has no store, answers there with a line that says so.
 
 ### 3.6 Flags
 
@@ -179,10 +186,10 @@ New:
 |---|---|---|---|
 | `--s3-bucket NAME` | `GREAT_MACHINE_S3_BUCKET` | required | the bucket of the store |
 | `--s3-prefix P` | `GREAT_MACHINE_S3_PREFIX` | none | put before the name of every object in the bucket |
-| `--s3-endpoint URL` | `GREAT_MACHINE_S3_ENDPOINT` | AWS | an S3 service other than AWS. It is in the URLs that clients are given, so the laptop and the pods have to reach it under that name |
-| `--s3-region R` | `GREAT_MACHINE_S3_REGION` | the AWS SDK's | the region of the bucket |
+| `--s3-endpoint URL` | `GREAT_MACHINE_S3_ENDPOINT` | AWS | an S3 service other than AWS: `http://` or `https://`, a host, a port and a path if it has them, and nothing else. It is in the URLs that clients are given, so the laptop and the pods have to reach it under that name |
+| `--s3-region R` | `GREAT_MACHINE_S3_REGION` | the AWS SDK's, as `AWS_REGION` | the region of the bucket, which the URLs are signed for. One of the two has to say it: without a region draal ends at its start, and names the flag |
 | `--s3-path-style` | `GREAT_MACHINE_S3_PATH_STYLE` | off | the bucket in the path of a URL, not in its host name |
-| `--store-scratch DIR` | `GREAT_MACHINE_STORE_SCRATCH` | `scratch` in `--data` | where packs are verified |
+| `--store-scratch DIR` | `GREAT_MACHINE_STORE_SCRATCH` | `--data` | where packs are verified, in `great-machine-scratch` there (§3.2) |
 | `--store-verify-jobs N` | `GREAT_MACHINE_STORE_VERIFY_JOBS` | 2 | packs verified at once |
 | `--store-max-pack-size SIZE` | `GREAT_MACHINE_STORE_MAX_PACK_SIZE` | `16GiB` | the largest pack, uncompressed |
 | `--store-no-verify` | `GREAT_MACHINE_STORE_NO_VERIFY` | off | record a pack without reading its data, as jaccard-store's `--no-verify` |
@@ -229,15 +236,19 @@ later.
 
 `rollout` pushes the store paths of a closure several at a time already,
 `--jobs` of them (design §3, §6.1). The default of `--jobs` becomes 20,
-from 5.
+from 5, and 32 is the most it takes: with more, the push's own streams
+went beyond the 64 that draal answers of a connection at a time (§3.4),
+and a rollout failed in its middle against a store that was well, as a
+review of this stage's code showed. A push has two streams under way for
+the moment in which it goes from one step to the next, hence half of 64.
 
 - **On the laptop** every path that is being pushed is imported into a
   temporary store of its own, which holds it once more, uncompressed, with
   its pack beside it: up to 20 of them at once under `--temp-dir`. A
   laptop short of room gives a smaller `--jobs`.
-- **On the connection** the 20 pushes, and the 16 questions of what the
-  store has, are streams of one connection to draal, within the 64 that
-  draal answers at a time (§3.4).
+- **On the connection** the pushes, and before them the 16 questions of
+  what the store has, are streams of one connection to draal, within the
+  64 that draal answers at a time (§3.4).
 - **In draal** a push ends with the verification of its pack, 2 at a
   time by default (`--store-verify-jobs`): the commits of the others wait
   for their turn. Most store paths are small and verified at once; where
@@ -260,6 +271,7 @@ project's command without its flags:
 | `Listen` | `127.0.0.1:0`: loopback, a port the system picks |
 | `Mount` | `/nix/store` |
 | `PreloadListen` | empty: no preload endpoint |
+| `MountOptions` | `sidecar.DefaultMountOptions`, which the command of the sidecar has as its default and the package has not: empty is the kernel's hard mount |
 | everything else | the package's defaults |
 
 - **The mount has a key of its own.** A zathras's own connection to draal
@@ -404,18 +416,32 @@ threads of zathras keep `CAP_SYS_ADMIN`, and mount and unmount with it.
   `/proc/self/exe`, which is a file of the image whatever is mounted, as
 
   ```
-  great-machine exec-in-place PATH ARGV0 [ARG...]
+  great-machine exec-in-place DIR PATH ARGV0 [ARG...]
   ```
 
-  Started so, the program does one thing: it replaces itself with the
-  program at `PATH` (`execve`), with the arguments from `ARGV0` on and its
-  own environment. It is a process of its own by then, which waits for
-  the mount as any program does and holds nobody. It is the same process
-  as before: the process group, the session, the terminal, the user and
-  the capabilities are those the launcher gave it. An `execve` that fails
-  is said on standard error, which is the service's, and the exit status
-  is 127 for a program that is not there and 126 for any other failure:
-  to the supervisor, a service that ended at once (design §7.1).
+  Started so, the program does one thing: it changes to `DIR`, unless
+  that is empty, and replaces itself with the program at `PATH`
+  (`execve`), with the arguments from `ARGV0` on and its own environment.
+  It is a process of its own by then, which waits for the mount as any
+  program does and holds nobody. It is the same process as before: the
+  process group, the session, the terminal, the user and the
+  capabilities are those the launcher gave it. An `execve` that fails, or
+  a working directory that cannot be changed to, is said on standard
+  error, which is the service's, and the exit status is 127 for a program
+  that is not there and 126 for any other failure: to the supervisor, a
+  service that ended at once (design §7.1).
+
+  The working directory is that process's to change to for the same
+  reason as the execution: `os/exec` changes to one between the fork and
+  the execution, and a directory of the store that the kernel has not
+  been told of yet is asked of the server in this same process. A review
+  of this stage's code showed that zathras stands still on that as well.
+
+  One thing is not as it would be without the program in between: a
+  signal that zathras itself was started ignoring, other than SIGHUP and
+  SIGINT, is not ignored by what it starts. The Go program in between
+  takes the others for itself, and the execution sets them back to their
+  defaults. zathras ignores none itself.
 - **A service cannot reach into zathras.** To trace a process, or read its
   memory, one needs every capability that process has, and the service
   lacks one that zathras has.
@@ -431,6 +457,14 @@ the group, or with the group of the same number when none is given, and
 no others. The launcher sets them as each process starts
 (`SysProcAttr.Credential`). A process that is not root has no capability
 after it executes a program, whatever the bounding set holds.
+
+What such a process is started on, zathras made as root: the pipes of a
+service's output, the terminal of a shell. The launcher gives the pipes
+and the terminal to the user before the start, so that a service can
+open `/dev/stdout` anew, as many are configured to, and a shell its own
+terminal. For that the terminal of a shell is opened before the shell is
+started, and not by what starts it. A review of this stage's code found
+both refused.
 
 That is the way where the container has to be privileged after all, as
 on nodes with SELinux, which does not let a container that is not
@@ -599,8 +633,10 @@ To design §13:
   process still mounts; with `--user`, the child's user and group and
   empty sets; the refusal and the warning of §5.4. Without root, the
   `no_new_privs` alone. Everywhere: a program started through it gets its
-  arguments, `ARGV0` among them, and its environment; one that is not
-  there ends with 127 and says so. The test binary is its own
+  arguments, `ARGV0` among them, its environment and its working
+  directory; one that is not there ends with 127 and says so, and a
+  working directory that is not there with 126. As another user it opens
+  `/dev/stdout` and its terminal anew. The test binary is its own
   `exec-in-place`.
 - **`storemount`**, on Linux as root, against a store in the test's
   process and a mount on a temporary directory: a path is fetched when it
@@ -608,7 +644,8 @@ To design §13:
   a binary is executed from the mount through the launcher with a cache
   that is empty, and 300 times more while the garbage collector runs
   without pause (the one process serving what its child is executed
-  from), a store path pushed under another service's prefix alone is not
+  from), every other time with a working directory in the mount that the
+  kernel has not been told of, a store path pushed under another service's prefix alone is not
   found, and `Stop` leaves nothing mounted.
 - **`e2e`**: draal with its store over a bucket in memory. The closures
   of rollouts of two services are pushed with the operator's key through
@@ -618,6 +655,18 @@ To design §13:
   The
   zathrases of `e2e` run with a fake `Preload` in the place of the fake
   preload endpoint, as they run on macOS too.
+- **`cli`**: the command of a zathras with a service in it, under a draal
+  of the test: the service and a shell are started by the launcher
+  (`no_new_privs`, the user of `--user`), the store is asked for the
+  closure first, and it is stopped only when a service that ignores
+  SIGTERM has had its stop timeout and is gone.
+- **`e2e`, on Linux as root**: one rollout with nothing standing in. The
+  closure is pushed to draal's endpoint ID; the store of the zathras is
+  the mount, over the directory that is the Nix store of the tests,
+  fetched from draal's store with a key draal does not know; the service
+  is started from it by a launcher, and runs the binary of the mount
+  without `CAP_SYS_ADMIN`; the mount of another service is told that the
+  store has no such path for it.
 - **On a cluster**, by hand, as the first runs of stage 3: `deploy/` on
   kind on x86_64, with a bucket of RustFS in the cluster. A rollout, a
   shell that shows the capabilities of §1, a zathras killed and started
