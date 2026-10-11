@@ -73,8 +73,10 @@ export default defineConfig({
     // passed on with the Host it came with (no changeOrigin): the API
     // refuses a WebSocket whose Origin is not its Host, and the Origin a
     // browser sends is this server.
+    // The page of the store is draal's to serve as well.
     proxy: {
       "/api": { target: "http://127.0.0.1:8080", ws: true },
+      "/store": { target: "http://127.0.0.1:8080" },
     },
   },
 });

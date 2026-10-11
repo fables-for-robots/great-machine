@@ -176,6 +176,18 @@ button {
   font-weight: 600;
 }
 
+/* The way to the page of the store, which is a page of its own. */
+.store {
+  color: var(--ffr-ink-100);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.store:hover {
+  color: var(--ffr-white);
+}
+
 .link {
   display: inline-flex;
   align-items: center;
@@ -478,7 +490,7 @@ h2 {
     flex-basis: 100%;
   }
 
-  .link {
+  .store {
     margin-left: auto;
   }
 
