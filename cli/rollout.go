@@ -30,7 +30,7 @@ func rolloutCommand() *cli.Command {
 			"with 1 when it halted or was superseded. An interrupt ends the following\n" +
 			"and not the rollout.",
 		Flags: operatorFlags(parallelFlag(), detachFlag(),
-			&cli.IntFlag{Name: "jobs", EnvVars: []string{"GREAT_MACHINE_JOBS"}, Value: 5,
+			&cli.IntFlag{Name: "jobs", EnvVars: []string{"GREAT_MACHINE_JOBS"}, Value: 20,
 				Usage: "store paths pushed at a time"},
 			&cli.StringFlag{Name: "temp-dir", EnvVars: []string{"GREAT_MACHINE_TEMP_DIR"},
 				Usage: "`DIR` in which the temporary stores of a push are made (default: the system's)"},

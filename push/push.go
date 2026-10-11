@@ -34,7 +34,7 @@ import (
 const (
 	// defaultJobs is how many store paths are pushed at a time when Config
 	// does not say.
-	defaultJobs = 5
+	defaultJobs = 20
 	// lookups is how many references the server is asked about at a time.
 	lookups = 16
 	// minDedup is the share of a store path's bytes a pack on the server
@@ -49,7 +49,7 @@ type Config struct {
 	Server   wire.ID          // the jaccard-store server
 	Addrs    []netip.AddrPort // for tests: where the server is
 	Prefix   string
-	Jobs     int      // 0: 5
+	Jobs     int      // 0: 20
 	TempDir  string   // "": the system's
 	Progress Progress // nil: none
 }

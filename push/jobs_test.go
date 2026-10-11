@@ -53,19 +53,21 @@ func until(t *testing.T, what string, cond func() bool) {
 }
 
 func TestPushJobs(t *testing.T) {
+	// paths is how many store paths are pushed: more than may be pushed
+	// at a time, so that the bound is what holds the rest back.
 	tests := []struct {
-		jobs, want int
+		jobs, want, paths int
 	}{
-		{1, 1},
-		{2, 2},
-		{0, 5}, // the default
+		{1, 1, 8},
+		{2, 2, 8},
+		{0, 20, 24}, // the default
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("jobs %d", tt.jobs), func(t *testing.T) {
 			srv := startServer(t)
 			cfg := srv.config()
 			cfg.Jobs = tt.jobs
-			paths := storePaths(t, 8)
+			paths := storePaths(t, tt.paths)
 			hold := make(chan struct{})
 			count := watch(t, hold)
 
@@ -89,8 +91,8 @@ func TestPushJobs(t *testing.T) {
 			if out.err != nil {
 				t.Fatalf("Push: %v", out.err)
 			}
-			if out.res != (Result{Pushed: 8, Present: 0}) {
-				t.Errorf("Push = %+v, want eight pushed", out.res)
+			if out.res != (Result{Pushed: tt.paths, Present: 0}) {
+				t.Errorf("Push = %+v, want %d pushed", out.res, tt.paths)
 			}
 			if _, most := count(); most != tt.want {
 				t.Errorf("%d store paths were pushed at a time, want %d", most, tt.want)
