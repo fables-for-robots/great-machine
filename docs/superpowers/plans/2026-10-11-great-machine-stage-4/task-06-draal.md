@@ -5,7 +5,6 @@ Here the parts meet. draal opens the store in its data directory, binds its endp
 **The order of draal's end is part of the task.** The web page first, as before; then `Serve` returns; then the store is stopped, which is when its requests have their grace, while their connections are still there; then the endpoint is closed; then the store's database; then draal's. In `runDraal` that is the order of the `defer`s, last one first.
 
 **Files:**
-- Create: `cli/d/draal.key`
 - Modify: `web/web.go`, `cli/draal.go`, `cli/flags.go`, `draal/control.go`, `draal/draal.go`, `operator/client.go`, `wire/messages.go`, `ui/src/components/Layout.tsx`, `ui/src/styles/base.css`, `ui/vite.config.ts`, `push/push.go`, `scripts/test-page.sh`, `web/demo/main.go`, `cli/rollout.go`
 - Test: `web/store_test.go`, `cli/commands_test.go`, `cli/draal_test.go`, `cli/fake_test.go`, `draal/control_test.go`, `draal/serve_test.go`, `e2e/harness_test.go`, `storeserver/storeserver_test.go`, `web/demo/main_test.go`, `push/jobs_test.go`
 
@@ -1692,12 +1691,6 @@ Change `cli/commands_test.go`:
  		}
 ```
 
-Create `cli/d/draal.key`:
-
-```text
-57081763e5cae8a4cf860fd8afcafc175d89a396c5542c94e974929cec33567b
-```
-
 Change `cli/draal_test.go`:
 
 ```diff
@@ -1824,6 +1817,12 @@ Expected: it fails, with
 push/jobs_test.go:212:116: undefined: MaxJobs
 commands_test.go:158: stderr is "resolving the binary: failed after 0.0s ...", want it to say "--jobs: 33 is more than 32 store paths at a time, which is the most"
 commands_test.go:155: the exit status is 1, want 2 (draal: an --s3-endpoint without a host, with a user in it, with a query, with a fragment; a --store-max-pack-size with a sign)
+```
+
+The command lines that are not refused yet start a draal, in the directory they name, which is `cli/d`: this run leaves a key and a database there. Remove them, so that neither is committed:
+
+```bash
+rm -rf cli/d
 ```
 
 - [ ] **Step 37: Write the code: 32 jobs of a push at the most; an endpoint that names a host and nothing but an address; a size of digits; a scratch directory of blanks is none**
@@ -1967,7 +1966,7 @@ Expected: `ok` for every package named. `gofmt -l .` and `go vet ./...` print no
 - [ ] **Step 39: Commit**
 
 ```bash
-git add cli/commands_test.go cli/d/draal.key cli/draal_test.go push/jobs_test.go storeserver/storeserver_test.go cli/draal.go cli/flags.go cli/rollout.go push/push.go
+git add cli/commands_test.go cli/draal_test.go push/jobs_test.go storeserver/storeserver_test.go cli/draal.go cli/flags.go cli/rollout.go push/push.go
 git commit -m 'Draal: values of the command lines that cannot be meant are refused: more jobs than the store answers, an endpoint that is no address, a size with a sign; a scratch that is the data directory loses nothing'
 ```
 
