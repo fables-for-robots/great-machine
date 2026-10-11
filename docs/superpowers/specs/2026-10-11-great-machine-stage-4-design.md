@@ -58,6 +58,8 @@ It is done when:
 - the service and a shell of a zathras have neither `CAP_SYS_ADMIN` nor a
   way to gain it, which `/proc/self/status` in a shell shows;
 - nothing listens in the pod for a list of store paths to fetch;
+- every service has its own references in the store, and the `/nix/store`
+  of a pod is made of its service's alone;
 - a pod that ends leaves no mount on its node.
 
 ## 2. Terms
@@ -180,13 +182,39 @@ The credentials of the bucket come from the AWS SDK's default chain
 (`AWS_ACCESS_KEY_ID` and the rest), as in `jaccard-stored`. At start
 draal logs its endpoint ID as before, and the bucket.
 
-### 3.7 The prefix
+### 3.7 A prefix for every service
 
-The reference of a store path in the store is `/nix/store/<name>`: the
-prefix is no longer a setting, since the store is great-machine's own and
-holds nothing else. The `store` request of an operator (design §5.2) stays, and
-is answered with draal's endpoint ID and `/nix/store/`. `rollout` pushes
-to what it is told, as before, so the operator's side does not change.
+Every service has references of its own in the store: the reference of a
+store path that was pushed for the service `web` is
+
+```
+/services/web/nix/store/<name>
+```
+
+The prefix is no setting. One function of the code (`wire.StorePrefix`)
+makes it of the name of a service, which is a DNS label (design §2) and
+so needs no escaping; draal and zathras both call it. `/services/` leaves
+the rest of the names of the store free for anything else it may hold
+later.
+
+- **A pod sees its service's store paths.** The mount of a zathras looks a
+  name up under its service's prefix (§4.1): a store path that was pushed
+  for another service alone is not in its `/nix/store`.
+- **The `store` request names the service.** Of an operator (design §5.2)
+  it is now `store`: service, and is answered with draal's endpoint ID and
+  that service's prefix. It is authorized as before, for the service it
+  names, and a name that is no service name is `bad-request`. `rollout`
+  asks for the service it rolls out, and pushes to what it is told. A
+  service draal has not heard of yet has a prefix like any other: the
+  first rollout of a service pushes before draal knows it.
+- **A store path that two services run is pushed for each.** Its second
+  reference costs one request and no upload: the push begins with the
+  root of the content, and a server that has a pack of that root points
+  the new reference at it (jaccard-store's `push-start` answers
+  `Stored`). On the laptop the store path is still read and imported, to
+  know its root, as for any reference the server does not have.
+- **A rollback pushes nothing**, as before: the stable generation's
+  closure is under the service's prefix since its own rollout.
 
 ## 4. zathras mounts the store
 
@@ -198,7 +226,7 @@ project's command without its flags:
 | Setting of `sidecar.Config` | Value |
 |---|---|
 | `Server` | the endpoint ID of draal (`--draal`) |
-| `Prefix` | `/nix/store/` (§3.7) |
+| `Prefix` | the prefix of the service of `--service` (§3.7) |
 | `Cache` | `--store-cache` |
 | `Dial` | jaccard-store's dial of draal's ID for the store's ALPN, with a key the mount makes at start and keeps in memory |
 | `Listen` | `127.0.0.1:0`: loopback, a port the system picks |
@@ -226,7 +254,8 @@ project's command without its flags:
 - **The cache** is a directory that outlives the container, an `emptyDir`
   of the pod (§6), so that a zathras that is started again finds what was
   fetched. A cache is of one server and one prefix, and jaccard-nfs-nix-store
-  refuses another: a pod whose draal changes is a new pod.
+  refuses another: a pod whose draal or whose service changes is a new
+  pod.
 
 ### 4.2 Preparing
 
@@ -454,7 +483,9 @@ Changed:
   store's ALPN, which the endpoint then accepts as well; `Accept` returns
   great-machine's connections alone.
 - `authz`: the two operations of the store.
-- `draal`, `cli`: the store, its flags, the prefix (§3.7).
+- `wire`: `StorePrefix`, and the service in the `store` request.
+- `draal`, `cli`, `operator`: the store, its flags, the prefix of a
+  service (§3.7).
 - `zathras`: `Config.Preload` is an interface with `Preload(ctx, names)`,
   which `storemount` satisfies; nil is `--no-store`.
 - `supervisor`, `ptyshell`: a process is started through the launcher
@@ -491,6 +522,8 @@ To design §13:
   store's ALPN to the handler and one of great-machine's to `Accept`;
   without a handler the store's ALPN is not accepted.
 - **`authz`**: the two operations, for an operator and a stranger.
+- **`wire`**: `StorePrefix` of a service, and the `store` request with
+  its service.
 - **`launcher`**, on Linux as root, in a container as `test-pid1.sh`
   runs one (a new script, `scripts/test-linux.sh`, runs every test that
   needs root and the kernel): a child started through it has no
@@ -503,10 +536,14 @@ To design §13:
   is named, `Preload` fetches a list and fails on a path the store lacks,
   a binary is executed from the mount through the launcher with a cache
   that is empty (the one process serving what its child is executed
-  from), and `Stop` leaves nothing mounted.
-- **`e2e`**: draal with its store over a bucket in memory. A rollout's
-  closure is pushed with the operator's key through draal's endpoint ID,
-  and fetched again with a stranger's key through the same ID. The
+  from), a store path pushed under another service's prefix alone is not
+  found, and `Stop` leaves nothing mounted.
+- **`e2e`**: draal with its store over a bucket in memory. The closures
+  of rollouts of two services are pushed with the operator's key through
+  draal's endpoint ID, each under its service's prefix, as the `store`
+  request answers it; a store path the two have in common is uploaded
+  once. They are fetched again with a stranger's key through the same ID.
+  The
   zathrases of `e2e` run with a fake `Preload` in the place of the fake
   preload endpoint, as they run on macOS too.
 - **On a cluster**, by hand, as the first runs of stage 3: `deploy/` on
@@ -543,14 +580,17 @@ What any of these finds otherwise changes this document first.
 - Taking over the references of an existing jaccard-store server (§7).
 - Removing what the store holds: a closure that no generation needs any
   more stays in the bucket, as before.
-- Limiting pulls to the zathrases draal knows.
+- Limiting pulls to the zathrases draal knows, or a pull of a service's
+  references to the pods of that service: pulls are open (§3.3), and
+  the prefixes keep the services' stores apart, not their secrets.
 - A store shared by the pods of a node.
 - Tokens of clamp (design §17).
 
 ## 15. What else changes
 
 The design document and the README are brought up to this at the end of
-the stage: design §1 (the picture), §3 (the flags), §4 (the table), §7.3,
-§7.6 (a shell lacks `CAP_SYS_ADMIN`), §11, §12 and §13, and the
+the stage: design §1 (the picture), §3 (the flags), §4 (the table), §5.2
+(the `store` request), §7.3, §7.6 (a shell lacks `CAP_SYS_ADMIN`), §11,
+§12 and §13, and the
 README's getting started, its tables of flags, what has to be there, the
 network, and the security notes.
