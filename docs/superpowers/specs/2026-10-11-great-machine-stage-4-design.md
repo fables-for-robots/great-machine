@@ -380,6 +380,33 @@ threads of zathras keep `CAP_SYS_ADMIN`, and mount and unmount with it.
   which it runs on its thread and whose error it returns. Nothing else of
   zathras starts a process, but the zathras that the first process starts
   (design §7.2), which needs `CAP_SYS_ADMIN` and is not started by the launcher.
+- **Nothing is executed from the mount by zathras itself.** Go starts a
+  process with `vfork`: the thread that starts it stands still until the
+  child has executed its program, and until then the runtime cannot stop
+  the world, which every garbage collection begins with, so a collection
+  that begins meanwhile holds every other goroutine. A program on the
+  mount is read through the NFS server of this same process, whose
+  goroutines are among the held: the child waits for the server, the
+  server for the collection, the collection for the child. This was seen
+  (§13): of 300 starts of a program on the mount, with collections
+  running, the process stood still within the first few and for good.
+
+  So what the launcher's thread starts is the program itself,
+  `/proc/self/exe`, which is a file of the image whatever is mounted, as
+
+  ```
+  great-machine exec-in-place PATH ARGV0 [ARG...]
+  ```
+
+  Started so, the program does one thing: it replaces itself with the
+  program at `PATH` (`execve`), with the arguments from `ARGV0` on and its
+  own environment. It is a process of its own by then, which waits for
+  the mount as any program does and holds nobody. It is the same process
+  as before: the process group, the session, the terminal, the user and
+  the capabilities are those the launcher gave it. An `execve` that fails
+  is said on standard error, which is the service's, and the exit status
+  is 127 for a program that is not there and 126 for any other failure:
+  to the supervisor, a service that ended at once (design §7.1).
 - **A service cannot reach into zathras.** To trace a process, or read its
   memory, one needs every capability that process has, and the service
   lacks one that zathras has.
@@ -494,7 +521,7 @@ To the table of design §11:
 |---|---|---|
 | `storeserver` | the store in draal: the jaccard-store server, its database, bucket and sweeper, the answering of the store's ALPN with authorization, and the admin page | jaccard-store, `authz`, `node` |
 | `storemount` | the mount in zathras: jaccard-nfs-nix-store's sidecar, configured as §4.1, and `Preload` | jaccard-nfs-nix-store, jaccard-store |
-| `launcher` | the thread that starts the service and the shells (§5) | |
+| `launcher` | the thread that starts the service and the shells, and the program replacing itself with another (§5) | |
 
 Changed:
 
@@ -512,6 +539,8 @@ Changed:
 - `supervisor`, `ptyshell`: a process is started through the launcher
   they are given; without one, as before.
 - `web`: the store's page under `/store/`.
+- `cmd/great-machine`: `exec-in-place` is looked for before anything else
+  (§5.2).
 
 Gone: `preload`, the client of the sidecar's endpoint.
 
@@ -524,6 +553,10 @@ To design §13:
   anything was restarted.
 - **The bucket cannot be reached by draal**: a push fails with what the
   bucket said, and `rollout` ends before draal heard of it.
+- **A binary cannot be executed** (it is gone, or no program): zathras
+  checks it at `prepare` and at `activate`, as before; one that fails
+  after that is a service that ended at once with status 127 or 126 and
+  a line on its standard error that says why (§5.2).
 - **The mount cannot be made** (no `CAP_SYS_ADMIN`, AppArmor, SELinux):
   zathras ends at start with the error of `mount`, and says that the
   container needs what §5.1 gives it.
@@ -553,12 +586,16 @@ To design §13:
   `CAP_SYS_ADMIN` in any set and `NoNewPrivs: 1`, and the rest of the
   process still mounts; with `--user`, the child's user and group and
   empty sets; the refusal and the warning of §5.4. Without root, the
-  `no_new_privs` alone.
+  `no_new_privs` alone. Everywhere: a program started through it gets its
+  arguments, `ARGV0` among them, and its environment; one that is not
+  there ends with 127 and says so. The test binary is its own
+  `exec-in-place`.
 - **`storemount`**, on Linux as root, against a store in the test's
   process and a mount on a temporary directory: a path is fetched when it
   is named, `Preload` fetches a list and fails on a path the store lacks,
   a binary is executed from the mount through the launcher with a cache
-  that is empty (the one process serving what its child is executed
+  that is empty, and 300 times more while the garbage collector runs
+  without pause (the one process serving what its child is executed
   from), a store path pushed under another service's prefix alone is not
   found, and `Stop` leaves nothing mounted.
 - **`e2e`**: draal with its store over a bucket in memory. The closures
@@ -575,28 +612,42 @@ To design §13:
   again with its cache, and a pod deleted leaving `findmnt -t nfs4` on
   the node empty. The results go into the plan's ledger.
 
-## 13. To be settled first
+## 13. Settled first
 
-1. **go-iroh.** An endpoint bound by jaccard-store's `node.Bind` with
-   great-machine's ALPN, given the store's with `SetALPNs`, accepts both,
-   and `Conn.ALPN` tells them apart; jaccard-store's dial of its ID
-   completes, from a second process.
-2. **Go 1.27 and gonixgo.** The flake's nixpkgs has `go_1_27`, and
-   gonixgo v0.2.0 builds the program with jaccard-nfs-nix-store's
-   packages, without cgo, for Linux on amd64 and arm64; macOS builds the
-   rest.
-3. **The mount without privileges.** In a kind cluster on x86_64: a
-   container that is not privileged, with `CAP_SYS_ADMIN` and AppArmor
-   `Unconfined`, mounts the NFS server it runs on its own `/nix/store`,
-   executes from it, and leaves nothing on the node when it ends.
-4. **The launcher.** A child started from a goroutine locked to its thread
-   has the thread's bounding set, inheritable set and `no_new_privs`, and
-   the other threads keep their capabilities. A child executed from the
-   mount while the parent serves the mount does not wait for ever: a fork
-   holds `syscall.ForkLock` until the child has executed, and nothing that
-   answers the mount may wait for that lock.
+Four things could have changed what is above. They were tried while the
+plan was written, on arm64, and one of them did: §5.2 has its
+`exec-in-place` from the fourth.
 
-What any of these finds otherwise changes this document first.
+1. **go-iroh.** Settled, in one process over loopback, with go-iroh
+   v0.3.0: an endpoint bound by jaccard-store's `node.Bind` for
+   great-machine's ALPN and then given both with `SetALPNs` accepts a
+   dial for either, and `Conn.ALPN` says which; a dial for a third is
+   refused in the handshake (`no application protocol`). `SetALPNs` has
+   to be called before the first `Accept`.
+2. **Go 1.27 and gonixgo.** The plan says what was built (its section
+   "What was run").
+3. **The mount without privileges.** Settled as far as a laptop goes: in
+   a Docker container that is not privileged, with `CAP_SYS_ADMIN` and
+   Docker's default seccomp profile, a process mounts the NFS server it
+   runs, on a port the system picked, on its own `/nix/store`, executes
+   from it, and has nothing mounted after `Stop`. Docker Desktop has no
+   AppArmor: that `Unconfined` is needed, and enough, where there is one
+   is still to be seen on a cluster (§12), and so is what a pod leaves on
+   its node.
+4. **The launcher.** Settled, and not as expected. A child started from a
+   goroutine locked to its thread has the thread's bounding set, no
+   inheritable or ambient capability and `no_new_privs`; as another user
+   it has no capability at all; a thread of the rest still has
+   `CAP_SYS_ADMIN`, mounts, and has no `no_new_privs`. But a program
+   executed straight from the mount by the process that serves the mount
+   stops that process: with an empty cache the first time it was tried,
+   and with a full one within the first few of 300 starts while
+   collections ran, until the test was killed after a minute, a goroutine
+   "stopping the world" and the launcher's "running, locked to thread".
+   It is no matter of `syscall.ForkLock`, which nothing that answers the
+   mount takes. Through `exec-in-place` the same 300 starts took 22 ms at
+   the longest under 3,600 collections, and a start with an empty cache
+   38 ms.
 
 ## 14. Not in this stage
 
