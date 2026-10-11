@@ -403,6 +403,10 @@ func TestAStrangerMayNotWrite(t *testing.T) {
 	// Every operation of a push by itself, as a client of its own making
 	// would send them.
 	for _, op := range []jswire.Op{jswire.OpPushStart, jswire.OpPushUpload, jswire.OpPushCommit, jswire.OpList, jswire.OpDelete} {
+		// Three of the five were refused above already: what is held is
+		// that this one leaves a line of its own.
+		line := "refused peer=" + string(stranger.ID()) + " operation=" + string(op)
+		before := strings.Count(w.log.String(), line)
 		resp, err := ask(t, conn, jswire.Request{Op: op, Name: webRef, Root: root[:], UploadID: "1"})
 		if err != nil {
 			t.Errorf("%s of a stranger: %v, want a refusal", op, err)
@@ -412,8 +416,8 @@ func TestAStrangerMayNotWrite(t *testing.T) {
 		if resp.Error == nil || resp.Error.Code != jswire.CodeBadRequest || resp.Error.Message != want {
 			t.Errorf("%s of a stranger: %+v, want the refusal %q", op, resp.Error, want)
 		}
-		if !strings.Contains(w.log.String(), "refused peer="+string(stranger.ID())+" operation="+string(op)) {
-			t.Errorf("the refusal of %s is not logged with the peer and the operation:\n%s", op, w.log.String())
+		if logged := strings.Count(w.log.String(), line) - before; logged != 1 {
+			t.Errorf("the refusal of %s left %d lines with the peer and the operation, want one:\n%s", op, logged, w.log.String())
 		}
 	}
 
