@@ -11,8 +11,11 @@
 # dials iroh's relays as every draal does.
 set -eu
 
-# A jaccard-store server that is never dialed: draal only hands it on.
-server=0000000000000000000000000000000000000000000000000000000000000000
+# A bucket that is never asked anything: draal asks its bucket nothing
+# until something is pushed, so the name of one, and a region to sign
+# URLs for, is all it takes, and no credentials.
+bucket=great-machine-test-page
+region=us-east-1
 
 if [ "${1:-}" = --image ]; then
 	image=${2:?usage: test-page.sh --image IMAGE}
@@ -67,10 +70,10 @@ if [ -n "$image" ]; then
 	# loopback address of the container, where only the container reaches
 	# it. That is why it is asked from inside, with busybox's wget.
 	docker run -d --name "$name" --tmpfs /nix/store "$image" \
-		draal --data /tmp/draal --jaccard-server "$server" --jaccard-prefix nix/ >/dev/null
+		draal --data /tmp/draal --s3-bucket "$bucket" --s3-region "$region" >/dev/null
 else
 	# Port 0 is a port the system picks; draal logs the one it got.
-	"$program" draal --data "$tmp/data" --jaccard-server "$server" --jaccard-prefix nix/ \
+	"$program" draal --data "$tmp/data" --s3-bucket "$bucket" --s3-region "$region" \
 		--web-addr 127.0.0.1:0 2>"$tmp/log" &
 	pid=$!
 fi
@@ -94,5 +97,8 @@ echo "$page" | grep -qi '<!doctype html>' || fail "GET $url is no page: $page"
 # A path that is no file is the page too: its routes are the browser's.
 page=$(get "${url}s/web") || fail "GET ${url}s/web failed"
 echo "$page" | grep -qi '<!doctype html>' || fail "GET ${url}s/web is no page: $page"
+# The page of the store is jaccard-store's own, and is in the program too.
+page=$(get "${url}store/") || fail "GET ${url}store/ failed"
+echo "$page" | grep -qi 'jaccard-store' || fail "GET ${url}store/ is not the page of the store: $page"
 
 echo ok
