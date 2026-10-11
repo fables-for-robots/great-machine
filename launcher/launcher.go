@@ -235,6 +235,13 @@ func (l *Launcher) rewrite(cmd *exec.Cmd) {
 	}
 	args := make([]string, 0, 4+len(argv))
 	args = append(args, "great-machine", Arg, cmd.Dir, cmd.Path)
+	// os/exec gives a command that has a working directory and no
+	// environment of its own the environment of this process, with PWD
+	// naming the directory. The directory is no longer the command's
+	// when os/exec starts it, so that is done here.
+	if cmd.Env == nil && cmd.Dir != "" {
+		cmd.Env = cmd.Environ()
+	}
 	cmd.Path, cmd.Args, cmd.Dir = l.exe, append(args, argv...), ""
 	if l.user != nil {
 		if cmd.SysProcAttr == nil {

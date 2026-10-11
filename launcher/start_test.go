@@ -390,3 +390,35 @@ func TestAnotherUserTakesRoot(t *testing.T) {
 		t.Errorf("as its own user the program ran as %d:%d and ended with %d", r.Uid, r.Gid, status)
 	}
 }
+
+// A command without an environment of its own is started with that of
+// this process, and with PWD naming its working directory, as os/exec
+// has it: the directory is changed to by the program that replaces
+// itself, and the variable is not left naming another.
+func TestAProgramWithoutAnEnvironmentOfItsOwnHasItsWorkingDirectoryInPWD(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(childEnv, "report")
+	t.Setenv("PWD", "/somewhere/else")
+	l := newLauncher(t, Config{})
+	cmd := exec.Command(os.Args[0])
+	cmd.Dir = dir
+	r, errOut, status := run(t, l, cmd)
+	if status != 0 {
+		t.Fatalf("the child ended with %d: %s", status, errOut)
+	}
+	if r.Dir != dir {
+		t.Errorf("the working directory is %q, want %q", r.Dir, dir)
+	}
+	var pwd []string
+	for _, kv := range r.Environ {
+		if strings.HasPrefix(kv, "PWD=") {
+			pwd = append(pwd, kv)
+		}
+	}
+	if len(pwd) != 1 || pwd[0] != "PWD="+dir {
+		t.Errorf("PWD of the child is %q, want %q, once", pwd, "PWD="+dir)
+	}
+}
