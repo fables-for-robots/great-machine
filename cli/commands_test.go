@@ -21,6 +21,10 @@ import (
 // message on stderr for a command line that is not valid. None of them
 // gets as far as the network.
 func TestInvalidCommandLines(t *testing.T) {
+	// A command line that is not refused starts a draal in its data
+	// directory: one of the test's, so that a refusal that is lost
+	// leaves nothing in the tree.
+	d := t.TempDir()
 	tests := []struct {
 		name string
 		env  map[string]string
@@ -80,49 +84,49 @@ func TestInvalidCommandLines(t *testing.T) {
 
 		// draal.
 		{"draal: no --data", nil, []string{"draal", "--s3-bucket", "packs"}, "--data is required: give it, or set GREAT_MACHINE_DATA"},
-		{"draal: no --s3-bucket", nil, []string{"draal", "--data", "d"}, "--s3-bucket is required: give it, or set GREAT_MACHINE_S3_BUCKET"},
+		{"draal: no --s3-bucket", nil, []string{"draal", "--data", d}, "--s3-bucket is required: give it, or set GREAT_MACHINE_S3_BUCKET"},
 		// The flags of a draal of before, which was told where the store
 		// is: it is the store now.
-		{"draal: --jaccard-server, which is gone", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--jaccard-server", idB},
+		{"draal: --jaccard-server, which is gone", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--jaccard-server", idB},
 			"flag provided but not defined: -jaccard-server"},
-		{"draal: --jaccard-prefix, which is gone", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--jaccard-prefix", "nix/"},
+		{"draal: --jaccard-prefix, which is gone", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--jaccard-prefix", "nix/"},
 			"flag provided but not defined: -jaccard-prefix"},
-		{"draal: an --s3-endpoint that is no URL", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--s3-endpoint", "minio:9000"},
+		{"draal: an --s3-endpoint that is no URL", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "minio:9000"},
 			`--s3-endpoint: "minio:9000" is not the URL of an S3 service`},
 		{"draal: the variable stands in for --s3-endpoint", map[string]string{"GREAT_MACHINE_S3_ENDPOINT": "s3.example.com"},
-			[]string{"draal", "--data", "d", "--s3-bucket", "packs"}, `--s3-endpoint: "s3.example.com" is not the URL of an S3 service`},
+			[]string{"draal", "--data", d, "--s3-bucket", "packs"}, `--s3-endpoint: "s3.example.com" is not the URL of an S3 service`},
 		// The endpoint is in every URL a client is handed: it names a
 		// host, and carries nothing that is not the service's address.
-		{"draal: an --s3-endpoint without a host", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--s3-endpoint", "http://:9000"},
+		{"draal: an --s3-endpoint without a host", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://:9000"},
 			`--s3-endpoint: "http://:9000" is not the URL of an S3 service`},
-		{"draal: an --s3-endpoint with a user in it", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--s3-endpoint", "http://user:secret@host"},
+		{"draal: an --s3-endpoint with a user in it", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://user:secret@host"},
 			`--s3-endpoint: "http://user:secret@host" is not the URL of an S3 service`},
-		{"draal: an --s3-endpoint with a query", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--s3-endpoint", "http://host/path?x=1"},
+		{"draal: an --s3-endpoint with a query", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://host/path?x=1"},
 			`--s3-endpoint: "http://host/path?x=1" is not the URL of an S3 service`},
-		{"draal: an --s3-endpoint with a fragment", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--s3-endpoint", "http://host#frag"},
+		{"draal: an --s3-endpoint with a fragment", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://host#frag"},
 			`--s3-endpoint: "http://host#frag" is not the URL of an S3 service`},
-		{"draal: a --store-max-pack-size that is no size", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-max-pack-size", "lots"},
+		{"draal: a --store-max-pack-size that is no size", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-max-pack-size", "lots"},
 			`--store-max-pack-size: "lots" is not a size: want bytes, or a number with KiB, MiB or GiB`},
-		{"draal: a --store-max-pack-size of nothing", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-max-pack-size", "0"},
+		{"draal: a --store-max-pack-size of nothing", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-max-pack-size", "0"},
 			`--store-max-pack-size: "0" is not a size`},
-		{"draal: a --store-max-pack-size in a unit there is not", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-max-pack-size", "16GB"},
+		{"draal: a --store-max-pack-size in a unit there is not", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-max-pack-size", "16GB"},
 			`--store-max-pack-size: "16GB" is not a size`},
 		{"draal: the variable stands in for --store-max-pack-size", map[string]string{"GREAT_MACHINE_STORE_MAX_PACK_SIZE": "-1"},
-			[]string{"draal", "--data", "d", "--s3-bucket", "packs"}, `--store-max-pack-size: "-1" is not a size`},
-		{"draal: a --store-max-pack-size with a sign", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-max-pack-size", "+1GiB"},
+			[]string{"draal", "--data", d, "--s3-bucket", "packs"}, `--store-max-pack-size: "-1" is not a size`},
+		{"draal: a --store-max-pack-size with a sign", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-max-pack-size", "+1GiB"},
 			`--store-max-pack-size: "+1GiB" is not a size`},
-		{"draal: no --store-verify-jobs at all", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-verify-jobs", "0"},
+		{"draal: no --store-verify-jobs at all", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-verify-jobs", "0"},
 			"--store-verify-jobs: 0 is not a number of packs to verify at once: want 1 or more"},
 		{"draal: an operator that is no endpoint ID", nil,
-			[]string{"draal", "--data", "d", "--s3-bucket", "packs", "--operator", idA, "--operator", "alice"},
+			[]string{"draal", "--data", d, "--s3-bucket", "packs", "--operator", idA, "--operator", "alice"},
 			`--operator: "alice" is not an endpoint ID`},
 		{"draal: the variable stands in for --operator", map[string]string{"GREAT_MACHINE_OPERATORS": idA + ",bob"},
-			[]string{"draal", "--data", "d", "--s3-bucket", "packs"}, `--operator: "bob" is not an endpoint ID`},
-		{"draal: a bad --bind", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--bind", "4433"}, `--bind: "4433" is not an address to bind`},
-		{"draal: a bad --web-addr", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--web-addr", "8080"}, `--web-addr: "8080" is not an address to listen on`},
+			[]string{"draal", "--data", d, "--s3-bucket", "packs"}, `--operator: "bob" is not an endpoint ID`},
+		{"draal: a bad --bind", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--bind", "4433"}, `--bind: "4433" is not an address to bind`},
+		{"draal: a bad --web-addr", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--web-addr", "8080"}, `--web-addr: "8080" is not an address to listen on`},
 		{"draal: the variable stands in for --web-addr", map[string]string{"GREAT_MACHINE_WEB_ADDR": "localhost"},
-			[]string{"draal", "--data", "d", "--s3-bucket", "packs"}, `--web-addr: "localhost" is not an address to listen on`},
-		{"draal: an argument", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "now"}, `draal takes no argument, got "now"`},
+			[]string{"draal", "--data", d, "--s3-bucket", "packs"}, `--web-addr: "localhost" is not an address to listen on`},
+		{"draal: an argument", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "now"}, `draal takes no argument, got "now"`},
 
 		// zathras.
 		{"zathras: no --draal", nil, []string{"zathras", "--service", "web"}, "--draal is required: give it, or set GREAT_MACHINE_DRAAL"},
