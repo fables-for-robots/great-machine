@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/fables-for-robots/great-machine/node"
@@ -107,4 +109,26 @@ func service(name string) (string, error) {
 		return "", usageError("%q is not the name of a service: want a DNS label, such as web or api-2", name)
 	}
 	return name, nil
+}
+
+// parseSize reads a count of bytes: a number, or one with the unit KiB,
+// MiB or GiB, as jaccard-stored reads one.
+func parseSize(text string) (int64, error) {
+	units := []struct {
+		suffix string
+		factor int64
+	}{{"KiB", 1 << 10}, {"MiB", 1 << 20}, {"GiB", 1 << 30}}
+	factor := int64(1)
+	digits := strings.TrimSpace(text)
+	for _, u := range units {
+		if rest, ok := strings.CutSuffix(digits, u.suffix); ok {
+			digits, factor = strings.TrimSpace(rest), u.factor
+			break
+		}
+	}
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || n <= 0 || n > (1<<62)/factor {
+		return 0, fmt.Errorf("%q is not a size: want bytes, or a number with KiB, MiB or GiB", text)
+	}
+	return n * factor, nil
 }

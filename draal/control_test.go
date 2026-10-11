@@ -55,7 +55,7 @@ func testConfig(t *testing.T) Config {
 	return Config{
 		DB:             openDB(t, filepath.Join(t.TempDir(), "draal.sqlite")),
 		Authz:          authz.NewAllowlist([]wire.ID{operatorID}),
-		Store:          wire.StoreInfo{Server: nodetest.ID(99), Prefix: "nix/"},
+		ID:             nodetest.ID(99),
 		Settle:         time.Millisecond,
 		StableAfter:    50 * time.Millisecond,
 		PrepareTimeout: time.Minute,
@@ -86,7 +86,8 @@ func TestStore(t *testing.T) {
 	// pushes before draal knows the service.
 	for _, service := range []string{"web", "never-rolled-out"} {
 		got, err := d.Store(context.Background(), service)
-		want := wire.StoreInfo{Server: cfg.Store.Server, Prefix: "/services/" + service + "/nix/store/"}
+		// The store is draal itself: its own endpoint ID is the server.
+		want := wire.StoreInfo{Server: cfg.ID, Prefix: "/services/" + service + "/nix/store/"}
 		if err != nil || got != want {
 			t.Errorf("Store(%q) = %+v, %v; want %+v", service, got, err, want)
 		}

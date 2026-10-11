@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/amber-store/jaccard-store/bucket"
 	"github.com/fables-for-robots/great-machine/wire"
 	"github.com/urfave/cli/v2"
 )
@@ -74,20 +75,38 @@ func TestInvalidCommandLines(t *testing.T) {
 		{"id: an argument", nil, []string{"id", "now"}, `id takes no argument, got "now"`},
 
 		// draal.
-		{"draal: no --data", nil, []string{"draal", "--jaccard-server", idB, "--jaccard-prefix", "nix/"}, "--data is required: give it, or set GREAT_MACHINE_DATA"},
-		{"draal: no --jaccard-server", nil, []string{"draal", "--data", "d", "--jaccard-prefix", "nix/"}, "--jaccard-server is required: give it, or set JACCARD_SERVER"},
-		{"draal: no --jaccard-prefix", nil, []string{"draal", "--data", "d", "--jaccard-server", idB}, "--jaccard-prefix is required: give it, or set JACCARD_PREFIX"},
-		{"draal: a bad --jaccard-server", nil, []string{"draal", "--data", "d", "--jaccard-server", "nonsense", "--jaccard-prefix", "nix/"}, `--jaccard-server: "nonsense" is not an endpoint ID`},
+		{"draal: no --data", nil, []string{"draal", "--s3-bucket", "packs"}, "--data is required: give it, or set GREAT_MACHINE_DATA"},
+		{"draal: no --s3-bucket", nil, []string{"draal", "--data", "d"}, "--s3-bucket is required: give it, or set GREAT_MACHINE_S3_BUCKET"},
+		// The flags of a draal of before, which was told where the store
+		// is: it is the store now.
+		{"draal: --jaccard-server, which is gone", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--jaccard-server", idB},
+			"flag provided but not defined: -jaccard-server"},
+		{"draal: --jaccard-prefix, which is gone", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--jaccard-prefix", "nix/"},
+			"flag provided but not defined: -jaccard-prefix"},
+		{"draal: an --s3-endpoint that is no URL", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--s3-endpoint", "minio:9000"},
+			`--s3-endpoint: "minio:9000" is not the URL of an S3 service`},
+		{"draal: the variable stands in for --s3-endpoint", map[string]string{"GREAT_MACHINE_S3_ENDPOINT": "s3.example.com"},
+			[]string{"draal", "--data", "d", "--s3-bucket", "packs"}, `--s3-endpoint: "s3.example.com" is not the URL of an S3 service`},
+		{"draal: a --store-max-pack-size that is no size", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-max-pack-size", "lots"},
+			`--store-max-pack-size: "lots" is not a size: want bytes, or a number with KiB, MiB or GiB`},
+		{"draal: a --store-max-pack-size of nothing", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-max-pack-size", "0"},
+			`--store-max-pack-size: "0" is not a size`},
+		{"draal: a --store-max-pack-size in a unit there is not", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-max-pack-size", "16GB"},
+			`--store-max-pack-size: "16GB" is not a size`},
+		{"draal: the variable stands in for --store-max-pack-size", map[string]string{"GREAT_MACHINE_STORE_MAX_PACK_SIZE": "-1"},
+			[]string{"draal", "--data", "d", "--s3-bucket", "packs"}, `--store-max-pack-size: "-1" is not a size`},
+		{"draal: no --store-verify-jobs at all", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--store-verify-jobs", "0"},
+			"--store-verify-jobs: 0 is not a number of packs to verify at once: want 1 or more"},
 		{"draal: an operator that is no endpoint ID", nil,
-			[]string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--operator", idA, "--operator", "alice"},
+			[]string{"draal", "--data", "d", "--s3-bucket", "packs", "--operator", idA, "--operator", "alice"},
 			`--operator: "alice" is not an endpoint ID`},
 		{"draal: the variable stands in for --operator", map[string]string{"GREAT_MACHINE_OPERATORS": idA + ",bob"},
-			[]string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/"}, `--operator: "bob" is not an endpoint ID`},
-		{"draal: a bad --bind", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--bind", "4433"}, `--bind: "4433" is not an address to bind`},
-		{"draal: a bad --web-addr", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--web-addr", "8080"}, `--web-addr: "8080" is not an address to listen on`},
+			[]string{"draal", "--data", "d", "--s3-bucket", "packs"}, `--operator: "bob" is not an endpoint ID`},
+		{"draal: a bad --bind", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--bind", "4433"}, `--bind: "4433" is not an address to bind`},
+		{"draal: a bad --web-addr", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "--web-addr", "8080"}, `--web-addr: "8080" is not an address to listen on`},
 		{"draal: the variable stands in for --web-addr", map[string]string{"GREAT_MACHINE_WEB_ADDR": "localhost"},
-			[]string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/"}, `--web-addr: "localhost" is not an address to listen on`},
-		{"draal: an argument", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "now"}, `draal takes no argument, got "now"`},
+			[]string{"draal", "--data", "d", "--s3-bucket", "packs"}, `--web-addr: "localhost" is not an address to listen on`},
+		{"draal: an argument", nil, []string{"draal", "--data", "d", "--s3-bucket", "packs", "now"}, `draal takes no argument, got "now"`},
 
 		// zathras.
 		{"zathras: no --draal", nil, []string{"zathras", "--service", "web"}, "--draal is required: give it, or set GREAT_MACHINE_DRAAL"},
@@ -132,35 +151,87 @@ func TestReadDraal(t *testing.T) {
 		return err
 	}
 
+	// The least there is to say: where the data is, and the bucket. The
+	// store has its defaults.
+	read(t, draalCommand(), reader, "--data", "data", "--s3-bucket", "packs")
+	want := draalConfig{
+		data:    "data",
+		store:   storeConfig{bucket: bucket.Config{Bucket: "packs"}, verifyJobs: 2, maxPackBytes: 16 << 30},
+		webAddr: "127.0.0.1:8080",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the least: got %+v, want %+v", got, want)
+	}
+
 	// The variables alone. The operators have commas between them, and
 	// what a comma too many leaves empty is passed over.
 	t.Setenv("GREAT_MACHINE_DATA", "/var/lib/draal")
 	t.Setenv("GREAT_MACHINE_OPERATORS", idA+", "+idB+",")
-	t.Setenv("JACCARD_SERVER", idC)
-	t.Setenv("JACCARD_PREFIX", "nix/")
+	t.Setenv("GREAT_MACHINE_S3_BUCKET", "packs")
+	t.Setenv("GREAT_MACHINE_S3_PREFIX", "great-machine")
+	t.Setenv("GREAT_MACHINE_S3_ENDPOINT", "http://rustfs.storage:9000")
+	t.Setenv("GREAT_MACHINE_S3_REGION", "eu-central-1")
+	t.Setenv("GREAT_MACHINE_S3_PATH_STYLE", "true")
+	t.Setenv("GREAT_MACHINE_STORE_SCRATCH", "/scratch")
+	t.Setenv("GREAT_MACHINE_STORE_VERIFY_JOBS", "4")
+	t.Setenv("GREAT_MACHINE_STORE_MAX_PACK_SIZE", "64MiB")
+	t.Setenv("GREAT_MACHINE_STORE_NO_VERIFY", "true")
 	read(t, draalCommand(), reader)
-	want := draalConfig{
+	want = draalConfig{
 		data:      "/var/lib/draal",
 		operators: []wire.ID{wire.ID(idA), wire.ID(idB)},
-		store:     wire.StoreInfo{Server: wire.ID(idC), Prefix: "nix/"},
-		webAddr:   "127.0.0.1:8080",
+		store: storeConfig{
+			bucket:       bucket.Config{Bucket: "packs", Prefix: "great-machine", Endpoint: "http://rustfs.storage:9000", Region: "eu-central-1", PathStyle: true},
+			scratch:      "/scratch",
+			verifyJobs:   4,
+			maxPackBytes: 64 << 20,
+			noVerify:     true,
+		},
+		webAddr: "127.0.0.1:8080",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("from the variables: got %+v, want %+v", got, want)
 	}
 
 	// A flag wins over its variable, and --operator may be repeated.
-	read(t, draalCommand(), reader, "--data", "data", "--operator", idC, "--operator", idA,
-		"--jaccard-server", idA, "--jaccard-prefix", "store/", "--bind", "0.0.0.0:4433")
+	read(t, draalCommand(), reader, "--data", "data", "--operator", idC, "--operator", idA, "--bind", "0.0.0.0:4433",
+		"--s3-bucket", "other", "--s3-prefix", "", "--s3-endpoint", "https://s3.example.com", "--s3-region", "auto", "--s3-path-style=false",
+		"--store-scratch", "scratch", "--store-verify-jobs", "1", "--store-max-pack-size", "1073741824", "--store-no-verify=false")
 	want = draalConfig{
 		data:      "data",
 		operators: []wire.ID{wire.ID(idC), wire.ID(idA)},
-		store:     wire.StoreInfo{Server: wire.ID(idA), Prefix: "store/"},
-		webAddr:   "127.0.0.1:8080",
-		bind:      netip.MustParseAddrPort("0.0.0.0:4433"),
+		store: storeConfig{
+			bucket:       bucket.Config{Bucket: "other", Endpoint: "https://s3.example.com", Region: "auto"},
+			scratch:      "scratch",
+			verifyJobs:   1,
+			maxPackBytes: 1 << 30,
+		},
+		webAddr: "127.0.0.1:8080",
+		bind:    netip.MustParseAddrPort("0.0.0.0:4433"),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("from the flags: got %+v, want %+v", got, want)
+	}
+}
+
+// A size is bytes, or a number with a unit of 1024.
+func TestParseSize(t *testing.T) {
+	for text, want := range map[string]int64{
+		"1":       1,
+		"4096":    4096,
+		"5KiB":    5 << 10,
+		"64MiB":   64 << 20,
+		"16GiB":   16 << 30,
+		" 2 GiB ": 2 << 30,
+	} {
+		if got, err := parseSize(text); err != nil || got != want {
+			t.Errorf("parseSize(%q) = %d, %v; want %d", text, got, err, want)
+		}
+	}
+	for _, text := range []string{"", "0", "-1", "lots", "16GB", "1.5GiB", "GiB", "9223372036854775807GiB", "1TiB"} {
+		if got, err := parseSize(text); err == nil {
+			t.Errorf("parseSize(%q) = %d, want an error", text, got)
+		}
 	}
 }
 
@@ -173,7 +244,7 @@ func TestReadDraalWebAddr(t *testing.T) {
 		got, err = readDraal(c)
 		return err
 	}
-	args := []string{"--data", "d", "--jaccard-server", idA, "--jaccard-prefix", "nix/"}
+	args := []string{"--data", "d", "--s3-bucket", "packs"}
 	with := func(more ...string) []string { return append(append([]string{}, args...), more...) }
 
 	read(t, draalCommand(), reader, args...)

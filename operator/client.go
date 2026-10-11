@@ -142,7 +142,8 @@ func unexpected(what string) error {
 }
 
 // Store asks where the closures of a service are to be pushed: for the
-// jaccard-store server and the prefix of the service.
+// endpoint ID of the store, which is draal's own, and the prefix of the
+// service.
 func (c *Client) Store(ctx context.Context, service string) (wire.StoreInfo, error) {
 	resp, err := c.call(ctx, "store", &wire.Request{Store: &wire.StoreRequest{Service: service}})
 	if err != nil {

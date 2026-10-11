@@ -152,7 +152,7 @@ func (h *harness) startDraal() {
 	d := draal.New(draal.Config{
 		DB:             database,
 		Authz:          authz.NewAllowlist([]wire.ID{h.opKey.ID()}),
-		Store:          wire.StoreInfo{Server: h.draalKey.ID(), Prefix: "test/"},
+		ID:             h.draalKey.ID(),
 		StoreDir:       h.storeDir,
 		Settle:         h.opts.settle,
 		StableAfter:    h.opts.stableAfter,

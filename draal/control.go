@@ -14,14 +14,15 @@ import (
 // rolloutsListed is how many rollouts of a service Rollouts returns.
 const rolloutsListed = 20
 
-// Store returns the jaccard-store server draal was given and the prefix
-// of the service. A service draal has not heard of has a prefix like any
-// other: the first rollout of a service pushes before draal knows it.
+// Store returns draal's own endpoint ID, which is the store's, and the
+// prefix of the service. A service draal has not heard of has a prefix
+// like any other: the first rollout of a service pushes before draal
+// knows it.
 func (d *Draal) Store(ctx context.Context, service string) (wire.StoreInfo, error) {
 	if err := wire.ValidService(service); err != nil {
 		return wire.StoreInfo{}, err
 	}
-	return wire.StoreInfo{Server: d.cfg.Store.Server, Prefix: wire.StorePrefix(service)}, nil
+	return wire.StoreInfo{Server: d.cfg.ID, Prefix: wire.StorePrefix(service)}, nil
 }
 
 // ServiceOf returns the service of a connected zathras.

@@ -597,7 +597,7 @@ func TestProtocolStore(t *testing.T) {
 	w := startWorld(t, cfg)
 	op := w.dial(operatorID)
 	_, resp, err := ask(t, op, &wire.Request{Store: &wire.StoreRequest{Service: "web"}})
-	want := wire.StoreInfo{Server: cfg.Store.Server, Prefix: wire.StorePrefix("web")}
+	want := wire.StoreInfo{Server: cfg.ID, Prefix: wire.StorePrefix("web")}
 	if err != nil || resp.Store == nil || *resp.Store != want {
 		t.Fatalf("store of web = %+v, %v; want %+v", resp, err, want)
 	}

@@ -184,9 +184,10 @@ type StoreRequest struct {
 	Service string `json:"service"`
 }
 
-// StoreInfo is where the closures of a service are pushed to: the
-// jaccard-store server, and the prefix of the references a push makes
-// there, which is the service's own (StorePrefix).
+// StoreInfo is where the closures of a service are pushed to: the server,
+// which is draal itself, answering jaccard-store's protocol under its own
+// endpoint ID, and the prefix of the references a push makes there, which
+// is the service's own (StorePrefix).
 type StoreInfo struct {
 	Server ID     `json:"server"`
 	Prefix string `json:"prefix"`
