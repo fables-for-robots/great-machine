@@ -78,6 +78,18 @@ func TestDemoServes(t *testing.T) {
 		t.Fatalf("the history is %d with %d samples (%v), want 200 with fifteen minutes of them", resp.StatusCode, len(answer.Samples), err)
 	}
 
+	// The header of the page has a link to the store's page. The demo
+	// has no store, and says so there in the place of an error.
+	store, err := client.Get(url + "store/")
+	if err != nil {
+		t.Fatalf("GET store/: %v", err)
+	}
+	defer store.Body.Close()
+	said, _ := io.ReadAll(store.Body)
+	if store.StatusCode != http.StatusOK || !strings.Contains(string(said), "the demo has a made-up fleet and no store") {
+		t.Errorf("GET store/ is %d %q, want 200 and a line that says the demo has no store", store.StatusCode, said)
+	}
+
 	// Ended as an interrupt ends it: the socket is closed as going away.
 	stop()
 	select {
