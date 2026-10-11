@@ -448,8 +448,22 @@ func TestAPushByNoOperatorSaysSo(t *testing.T) {
 		Prefix:  wire.StorePrefix("web"),
 		TempDir: t.TempDir(),
 	}, []string{dir})
-	if err == nil || !strings.Contains(err.Error(), "unauthorized: list is for operators") {
-		t.Fatalf("Push as a stranger: %v, want it to say unauthorized: list is for operators", err)
+	if want := `asking the store for the reference "/services/web/nix/store/abc-web": list: bad_request: unauthorized: list is for operators`; err == nil || err.Error() != want {
+		t.Fatalf("Push as a stranger: %v\nwant: %s", err, want)
+	}
+	// And when nothing answers under the ID it was given: the store is
+	// what it names, with what the dial said.
+	dialing, stop := context.WithTimeout(ctx, 2*time.Second)
+	defer stop()
+	_, err = push.Push(dialing, push.Config{
+		Key:     newKey(t),
+		Server:  newKey(t).ID(),
+		Addrs:   []netip.AddrPort{w.listener.LocalAddr()},
+		Prefix:  wire.StorePrefix("web"),
+		TempDir: t.TempDir(),
+	}, []string{dir})
+	if err == nil || !strings.HasPrefix(err.Error(), "the store: ") {
+		t.Fatalf("Push to an ID nothing answers under: %v, want an error of the store", err)
 	}
 	// With the operator's key the same push goes through, to the same
 	// endpoint.
