@@ -216,6 +216,25 @@ later.
 - **A rollback pushes nothing**, as before: the stable generation's
   closure is under the service's prefix since its own rollout.
 
+### 3.8 Twenty store paths at a time
+
+`rollout` pushes the store paths of a closure several at a time already,
+`--jobs` of them (design §3, §6.1). The default of `--jobs` becomes 20,
+from 5.
+
+- **On the laptop** every path that is being pushed is imported into a
+  temporary store of its own, which holds it once more, uncompressed, with
+  its pack beside it: up to 20 of them at once under `--temp-dir`. A
+  laptop short of room gives a smaller `--jobs`.
+- **On the connection** the 20 pushes, and the 16 questions of what the
+  store has, are streams of one connection to draal, within the 64 that
+  draal answers at a time (§3.4).
+- **In draal** a push ends with the verification of its pack, 2 at a
+  time by default (`--store-verify-jobs`): the commits of the others wait
+  for their turn. Most store paths are small and verified at once; where
+  large ones are many, more verification jobs take more scratch space
+  (§3.2).
+
 ## 4. zathras mounts the store
 
 ### 4.1 The mount in the process
@@ -484,6 +503,8 @@ Changed:
   great-machine's connections alone.
 - `authz`: the two operations of the store.
 - `wire`: `StorePrefix`, and the service in the `store` request.
+- `push`: 20 jobs when `Config` does not say; `cli`: `--jobs` 20 by
+  default (§3.8).
 - `draal`, `cli`, `operator`: the store, its flags, the prefix of a
   service (§3.7).
 - `zathras`: `Config.Preload` is an interface with `Preload(ctx, names)`,
@@ -524,6 +545,8 @@ To design §13:
 - **`authz`**: the two operations, for an operator and a stranger.
 - **`wire`**: `StorePrefix` of a service, and the `store` request with
   its service.
+- **`cli`**: `rollout` without `--jobs` pushes 20 at a time, and
+  `GREAT_MACHINE_JOBS` still sets it.
 - **`launcher`**, on Linux as root, in a container as `test-pid1.sh`
   runs one (a new script, `scripts/test-linux.sh`, runs every test that
   needs root and the kernel): a child started through it has no
@@ -589,8 +612,8 @@ What any of these finds otherwise changes this document first.
 ## 15. What else changes
 
 The design document and the README are brought up to this at the end of
-the stage: design §1 (the picture), §3 (the flags), §4 (the table), §5.2
-(the `store` request), §7.3, §7.6 (a shell lacks `CAP_SYS_ADMIN`), §11,
+the stage: design §1 (the picture), §3 (the flags, `--jobs` among them),
+§4 (the table), §5.2 (the `store` request), §7.3, §7.6 (a shell lacks `CAP_SYS_ADMIN`), §11,
 §12 and §13, and the
 README's getting started, its tables of flags, what has to be there, the
 network, and the security notes.
