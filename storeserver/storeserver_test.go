@@ -810,9 +810,9 @@ func TestOpenRefusesWhatCannotBeAStore(t *testing.T) {
 	}
 }
 
-// The database of the store is store.sqlite in its directory, and the
-// scratch space a directory beside it unless another is named: what a
-// store was opened with, it is opened with again.
+// The database of the store is store.sqlite in its directory, and its
+// scratch directory is made there too unless another directory is named
+// to make it in: what a store was opened with, it is opened with again.
 func TestTheStoreIsKeptInItsDirectory(t *testing.T) {
 	bucket := buckettest.New(t)
 	dir, scratch := t.TempDir(), filepath.Join(t.TempDir(), "elsewhere")
@@ -828,10 +828,66 @@ func TestTheStoreIsKeptInItsDirectory(t *testing.T) {
 			t.Fatalf("Close: %v", err)
 		}
 	}
-	for _, path := range []string{filepath.Join(dir, "store.sqlite"), filepath.Join(dir, "scratch"), scratch} {
+	for _, path := range []string{filepath.Join(dir, "store.sqlite"), filepath.Join(dir, "great-machine-scratch"), filepath.Join(scratch, "great-machine-scratch")} {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("%s: %v", path, err)
 		}
+	}
+}
+
+// The store empties its scratch directory whenever it is opened. That
+// directory is one it makes for itself, by a name of its own, inside the
+// directory it was given. So nothing that was there is lost, whatever was
+// given: the directory of the store itself, where its database and
+// draal's key are, or a directory that holds other things.
+func TestTheScratchIsADirectoryOfTheStoresOwn(t *testing.T) {
+	bucket := buckettest.New(t)
+	for _, c := range []struct {
+		name    string
+		scratch func(dir string) string // what Config.Scratch is, for a store in dir
+		in      func(dir string) string // where the scratch directory then is
+	}{
+		{"none is named", func(string) string { return "" }, func(dir string) string { return dir }},
+		{"the directory of the store", func(dir string) string { return dir }, func(dir string) string { return dir }},
+		{"the directory above it", filepath.Dir, filepath.Dir},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "data")
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			key, beside := filepath.Join(dir, "draal.key"), filepath.Join(filepath.Dir(dir), "something else")
+			own := filepath.Join(c.in(dir), "great-machine-scratch")
+			left := filepath.Join(own, "of a verification that was cut short")
+			if err := os.MkdirAll(own, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{key, beside, left} {
+				if err := os.WriteFile(path, []byte("kept"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg := Config{Dir: dir, Scratch: c.scratch(dir), Objects: bucket, Authz: authz.NewAllowlist(nil), Log: quiet}
+			// Twice: the database of the first time is among what the
+			// second finds.
+			for range 2 {
+				s, err := Open(context.Background(), cfg)
+				if err != nil {
+					t.Fatalf("Open: %v", err)
+				}
+				if err := s.Close(); err != nil {
+					t.Fatalf("Close: %v", err)
+				}
+			}
+			for _, path := range []string{key, beside, filepath.Join(dir, "store.sqlite"), own} {
+				if _, err := os.Stat(path); err != nil {
+					t.Errorf("after the store was opened: %v", err)
+				}
+			}
+			if _, err := os.Stat(left); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("what a run before left in the scratch directory is still there (%v): the directory was not emptied", err)
+			}
+		})
 	}
 }
 

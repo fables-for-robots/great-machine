@@ -45,8 +45,14 @@ const ALPN = "amber/jaccard-store/1"
 
 // The store in its directory.
 const (
-	dbFile     = "store.sqlite"
-	scratchDir = "scratch"
+	dbFile = "store.sqlite"
+	// scratchDir is the directory the store makes for what it verifies,
+	// in the directory it is given for that. It is emptied whenever the
+	// store is opened, which is why it is the store's own, by a name
+	// nothing else has: what it is made in may be the directory of the
+	// store itself, with the database and draal's key in it, or any
+	// other, and loses nothing.
+	scratchDir = "great-machine-scratch"
 )
 
 // Config is what a Store is made of. The zero value of a number or of a
@@ -61,10 +67,11 @@ type Config struct {
 	// Objects is for tests: the bucket itself. When it is set, Bucket is
 	// not looked at.
 	Objects jsserver.Bucket
-	// Scratch is where packs are verified: the uncompressed data of each
-	// is written there, MaxPackBytes at most for each of VerifyJobs. It
-	// is the store's alone and is emptied when the store is opened. "":
-	// the directory scratch in Dir.
+	// Scratch is the directory in which packs are verified: the
+	// uncompressed data of each is written there, MaxPackBytes at most
+	// for each of VerifyJobs. The store makes a directory of its own in
+	// it, great-machine-scratch, and empties that one whenever it is
+	// opened: nothing else in Scratch is touched. "": Dir.
 	Scratch      string
 	VerifyJobs   int   // 0: 2 packs verified at once
 	MaxPackBytes int64 // 0: 16 GiB, the largest pack, uncompressed
@@ -85,7 +92,7 @@ type Config struct {
 // withDefaults returns cfg with every zero value replaced by its default.
 func (cfg Config) withDefaults() Config {
 	if cfg.Scratch == "" {
-		cfg.Scratch = filepath.Join(cfg.Dir, scratchDir)
+		cfg.Scratch = cfg.Dir
 	}
 	if cfg.RequestWait == 0 {
 		cfg.RequestWait = 5 * time.Second
@@ -181,7 +188,7 @@ func Open(ctx context.Context, cfg Config) (*Store, error) {
 	srv, err := jsserver.New(jsserver.Config{
 		DB:           database,
 		Bucket:       objects,
-		Scratch:      cfg.Scratch,
+		Scratch:      filepath.Join(cfg.Scratch, scratchDir),
 		VerifyJobs:   cfg.VerifyJobs,
 		MaxPackBytes: cfg.MaxPackBytes,
 		NoVerify:     cfg.NoVerify,
