@@ -53,3 +53,19 @@ func TestValidService(t *testing.T) {
 		}
 	}
 }
+
+func TestStorePrefix(t *testing.T) {
+	if got, want := StorePrefix("web"), "/services/web/nix/store/"; got != want {
+		t.Errorf("StorePrefix(%q) = %q, want %q", "web", got, want)
+	}
+	// The references of two services are never the same, and none of one
+	// service is under the prefix of another: no prefix begins another.
+	names := []string{"web", "web-2", "we", "a", "a-b", "b"}
+	for _, a := range names {
+		for _, b := range names {
+			if a != b && strings.HasPrefix(StorePrefix(a), StorePrefix(b)) {
+				t.Errorf("the prefix of %q begins with that of %q", a, b)
+			}
+		}
+	}
+}

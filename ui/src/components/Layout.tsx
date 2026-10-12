@@ -43,8 +43,9 @@ function crumbsOf(path: string): Crumb[] {
 const WORDS = { connecting: "Connecting", live: "Live", lost: "Lost" } as const;
 
 // The frame of every view: the header with the name of the program, the
-// path as breadcrumbs and the state of the connection; what there is to
-// say while the connection is lost; and the view.
+// path as breadcrumbs, the way to the page of the store and the state of
+// the connection; what there is to say while the connection is lost; and
+// the view.
 export default function Layout(props: RouteSectionProps) {
   const location = useLocation();
   const crumbs = createMemo(() => crumbsOf(location.pathname));
@@ -88,6 +89,18 @@ export default function Layout(props: RouteSectionProps) {
               </For>
             </ol>
           </nav>
+          {/* The page of the store is jaccard-store's own, which draal
+              serves under /store/: a page to load, and none of the
+              views of this one. rel="external" keeps the router from
+              taking the link for a path of its own. */}
+          <a
+            class="store"
+            href="/store/"
+            rel="external"
+            title="The store: the closures that were pushed, and what sharing and compression save"
+          >
+            Store
+          </a>
           <span class="link" data-state={connection()} role="status" title="The connection of this page to draal">
             {WORDS[connection()]}
           </span>

@@ -505,8 +505,9 @@ func (d *Demo) cycle(at time.Time, n int) {
 		begin = 9 * time.Second
 		d.after(at, 2*time.Second, func(time.Time) { d.prepared(zs[0]) })
 		d.after(at, 5*time.Second, func(at time.Time) {
-			d.finish(last(), wire.RolloutHalted, zs[2].name+": preload: the store has no "+
-				strings.TrimSuffix(strings.TrimPrefix(binaryOf("web", web.generation), "/nix/store/"), "/bin/web"), at)
+			d.finish(last(), wire.RolloutHalted, zs[2].name+": the store has no "+
+				strings.TrimSuffix(binaryOf("web", web.generation), "/bin/web")+
+				" for the service web: it holds what the rollouts of web have pushed", at)
 			for _, z := range zs {
 				z.state.Preparing = 0
 			}
@@ -729,7 +730,7 @@ func (d *Demo) connected(id wire.ID) (*zathras, error) {
 
 // Store is not of the demo: neither the page nor the terminal UI asks
 // for a store.
-func (d *Demo) Store(ctx context.Context) (wire.StoreInfo, error) {
+func (d *Demo) Store(ctx context.Context, service string) (wire.StoreInfo, error) {
 	return wire.StoreInfo{}, wire.Errorf(wire.CodeUnavailable, "the demo has no store")
 }
 

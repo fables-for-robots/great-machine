@@ -7,7 +7,8 @@
 //	go run ./web/demo [--addr 127.0.0.1:8080] [--dist DIR] [--empty]
 //
 // With --empty there is no service at all, as draal has none when it was
-// started for the first time.
+// started for the first time. There is no store either: where a draal
+// serves the page of its store, the demo serves a line that says so.
 //
 // Everything it shows is made up but the shell: THE SHELL OF THE PAGE IS A
 // REAL SHELL ON THE MACHINE THAT RUNS THE DEMO, as the user who runs it.
@@ -73,6 +74,12 @@ func run(ctx context.Context, addr, dist string, empty bool, out io.Writer, read
 	defer stopMoving()
 	go fleet.Run(moving)
 	cfg.Controller = fleet
+	// The header of the page has a link to the page of the store, which
+	// a draal has from jaccard-store, over the database of its store.
+	cfg.Store = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		fmt.Fprintln(w, "great-machine: the demo has a made-up fleet and no store. A draal serves the page of its store here: what was pushed, and what sharing and compression save.")
+	})
 
 	// The context of every request. A socket lives on when a server is
 	// shut down, and ends when this is cancelled.

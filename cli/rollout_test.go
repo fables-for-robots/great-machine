@@ -33,13 +33,13 @@ func TestReadRollout(t *testing.T) {
 	}{
 		{"arguments of the service", nil,
 			[]string{"web", "/nix/store/x/bin/web", "--", "--port", "80", "-v"},
-			rolloutConfig{service: "web", path: "/nix/store/x/bin/web", args: []string{"--port", "80", "-v"}, parallel: 1, jobs: 5}},
+			rolloutConfig{service: "web", path: "/nix/store/x/bin/web", args: []string{"--port", "80", "-v"}, parallel: 1, jobs: 20}},
 		{"no arguments of the service", nil,
 			[]string{"web", "./result/bin/web"},
-			rolloutConfig{service: "web", path: "./result/bin/web", parallel: 1, jobs: 5}},
+			rolloutConfig{service: "web", path: "./result/bin/web", parallel: 1, jobs: 20}},
 		{"nothing behind --", nil,
 			[]string{"web", "./result/bin/web", "--"},
-			rolloutConfig{service: "web", path: "./result/bin/web", args: []string{}, parallel: 1, jobs: 5}},
+			rolloutConfig{service: "web", path: "./result/bin/web", args: []string{}, parallel: 1, jobs: 20}},
 		{"flags of rollout, and the same words behind --", nil,
 			[]string{"--parallel", "0", "--detach", "--jobs", "2", "--temp-dir", "/var/tmp", "web", "/nix/store/x/bin/web", "--", "--detach", "--", "--parallel", "9"},
 			rolloutConfig{service: "web", path: "/nix/store/x/bin/web", args: []string{"--detach", "--", "--parallel", "9"},
@@ -98,7 +98,7 @@ func newFakeRollout(t *testing.T, last wire.RolloutInfo) *fakeRollout {
 		t.Fatal(err)
 	}
 	fake := &fakeDraal{
-		store:  wire.StoreInfo{Server: wire.ID(idC), Prefix: "nix/"},
+		store:  wire.StoreInfo{Server: wire.ID(idC), Prefix: "/services/web/nix/store/"},
 		answer: wire.RolloutInfo{ID: 13, Service: "web", Generation: 8, State: wire.RolloutPreparing},
 		fleets: []wire.Fleet{
 			rolloutFleet(wire.RolloutInfo{ID: 13, State: wire.RolloutPreparing, Prepared: 2}),
@@ -147,7 +147,7 @@ func (f *fakeRollout) deps() rolloutDeps {
 			f.mu.Unlock()
 			for i, c := range clients {
 				cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-				_, err := c.Store(cctx)
+				_, err := c.Store(cctx, "web")
 				cancel()
 				if err == nil {
 					f.t.Errorf("the push was called while client %d is open", i+1)
@@ -194,7 +194,7 @@ func TestRunRollout(t *testing.T) {
 	}
 
 	// The push went to the store draal named, as the operator.
-	if f.pushed.Server != wire.ID(idC) || f.pushed.Prefix != "nix/" || f.pushed.Jobs != 5 || f.pushed.TempDir != "/scratch" || f.pushed.Key.ID() != f.key.ID() {
+	if f.pushed.Server != wire.ID(idC) || f.pushed.Prefix != "/services/web/nix/store/" || f.pushed.Jobs != 5 || f.pushed.TempDir != "/scratch" || f.pushed.Key.ID() != f.key.ID() {
 		t.Errorf("the push was configured %+v", f.pushed)
 	}
 	if want := []string{"/nix/store/aaa-glibc", "/nix/store/abc-web", "/nix/store/zzz-openssl"}; !reflect.DeepEqual(f.paths, want) {
@@ -204,11 +204,15 @@ func TestRunRollout(t *testing.T) {
 		t.Errorf("the calls were %v, want %v", got, want)
 	}
 	// The store was asked of the first client, before the push, and the
-	// rollout of the second, after it.
+	// rollout of the second, after it. It was asked for the service that
+	// is rolled out, whose prefix is what the push went under.
 	var order []string
 	for _, req := range f.fake.asked() {
 		switch {
 		case req.Store != nil:
+			if req.Store.Service != "web" {
+				t.Errorf("the store was asked for the service %q, want web", req.Store.Service)
+			}
 			order = append(order, "store")
 		case req.Rollout != nil:
 			order = append(order, "rollout")

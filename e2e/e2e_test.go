@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -22,8 +23,8 @@ func TestRolloutCompletes(t *testing.T) {
 		t.Errorf("the stable generation is %d, want %d", svc.Stable, info.Generation)
 	}
 	for _, p := range h.pods {
-		if got := p.preloads(); !strings.Contains(got, "/nix/store/"+storeName) {
-			t.Errorf("the preload endpoint of %s was sent %q, want the closure", p.name, got)
+		if got := p.fetched(); !slices.Contains(got, storeName) {
+			t.Errorf("the store of %s was asked to fetch %q, want the closure, %q", p.name, got, storeName)
 		}
 		st := p.agent.State()
 		if st.Generation != info.Generation || st.Phase != wire.PhaseRunning || st.Binary != h.binary {

@@ -35,6 +35,11 @@ type Config struct {
 	Term  string   // "": xterm
 	Cols  uint16   // 0: 80
 	Rows  uint16   // 0: 24
+	// Start, if set, starts a process in the place of cmd.Start: it is
+	// given the command, which has the terminal as its standard streams
+	// already, and what starts it, and returns what that returned. It is
+	// (*launcher.Launcher).Start. nil: the process is started as it is.
+	Start func(cmd *exec.Cmd, start func() error) error
 }
 
 // Session is a shell that runs on a pseudo-terminal. Read, Write, Resize,
@@ -84,10 +89,39 @@ func Start(cfg Config) (*Session, error) {
 	cmd := exec.Command(shell)
 	cmd.Env = env
 	cmd.Dir = cfg.Dir
-	// StartWithSize makes the shell the leader of a new session (Setsid)
-	// with the terminal as its controlling terminal (Setctty).
-	started, err := pty.StartWithSize(cmd, &size)
+	// The terminal is opened here, and is the command's before anything
+	// starts it: what pty.StartWithSize does in one step is done in two.
+	// A Start that runs the shell as another user gives that user what
+	// the command is started on, and has to find the terminal there, or
+	// the shell could not open its own terminal by its name.
+	started, terminal, err := pty.Open()
 	if err != nil {
+		return nil, fmt.Errorf("ptyshell: opening a terminal for %s: %w", shell, err)
+	}
+	// The shell has the terminal as its own: this side keeps the master.
+	defer terminal.Close()
+	if err := pty.Setsize(started, &size); err != nil {
+		started.Close()
+		return nil, fmt.Errorf("ptyshell: the size of the terminal for %s: %w", shell, err)
+	}
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = terminal, terminal, terminal
+	// The shell leads a new session (Setsid), with the terminal, which is
+	// its standard input, as its controlling terminal (Setctty).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	if cfg.Start != nil {
+		// What Start starts may be another program that becomes the
+		// shell only afterwards, as a launcher has it: a shell that is
+		// not there would then be a session that says so and ends. It
+		// is to be an error here, as it is without, so it is looked at
+		// first.
+		if err = executable(cmd.Path); err == nil {
+			err = cfg.Start(cmd, cmd.Start)
+		}
+	} else {
+		err = cmd.Start()
+	}
+	if err != nil {
+		started.Close()
 		return nil, fmt.Errorf("ptyshell: starting %s: %w", shell, err)
 	}
 	master, err := pollable(started)
@@ -99,6 +133,22 @@ func Start(cfg Config) (*Session, error) {
 	s := &Session{pty: master, cmd: cmd, done: make(chan struct{})}
 	go s.wait()
 	return s, nil
+}
+
+// executable returns nil for a regular file with an execute bit, through
+// its symbolic links, and why path is none otherwise. The error of a file
+// that is not there names it and is os.ErrNotExist.
+func executable(path string) error {
+	info, err := os.Stat(path)
+	switch {
+	case err != nil:
+		return err
+	case !info.Mode().IsRegular():
+		return fmt.Errorf("%s is no regular file", path)
+	case info.Mode().Perm()&0o111 == 0:
+		return fmt.Errorf("%s has no execute bit", path)
+	}
+	return nil
 }
 
 // pollable returns the terminal that f is as a file whose Read ends when

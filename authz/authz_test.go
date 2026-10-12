@@ -20,7 +20,7 @@ var operations = []struct {
 	service string
 }{
 	{OpRegister, "web"},
-	{OpStore, ""},
+	{OpStore, "web"},
 	{OpRollout, "web"},
 	{OpRollback, "web"},
 	{OpWatch, ""},
@@ -28,6 +28,13 @@ var operations = []struct {
 	{OpHistory, "web"},
 	{OpLogs, "web"},
 	{OpShell, "web"},
+	{OpStorePull, ""},
+	{OpStoreWrite, ""},
+}
+
+// open is whether every peer may do op, an operator or not.
+func open(op Operation) bool {
+	return op == OpRegister || op == OpStorePull
 }
 
 func TestAllowlist(t *testing.T) {
@@ -49,7 +56,7 @@ func TestAllowlist(t *testing.T) {
 			var a Authorizer = NewAllowlist(tt.operators)
 			for _, o := range operations {
 				err := a.Authorize(tt.peer, o.op, o.service)
-				allowed := tt.operator || o.op == OpRegister
+				allowed := tt.operator || open(o.op)
 				if allowed {
 					if err != nil {
 						t.Errorf("%s: refused: %v", o.op, err)
@@ -88,6 +95,32 @@ func TestRegisterIsAllowedOnEveryService(t *testing.T) {
 		if err := a.Authorize(mallory, OpRegister, service); err != nil {
 			t.Errorf("register on %q: %v", service, err)
 		}
+	}
+}
+
+// What the pods run is pulled by a key that draal does not know, the one
+// the mount of a zathras makes for itself: a pull of the store is open.
+// Everything else of the store is an operator's.
+func TestTheStoreIsPulledByEveryPeerAndWrittenByOperators(t *testing.T) {
+	a := NewAllowlist([]wire.ID{alice})
+	for _, peer := range []wire.ID{alice, mallory, ""} {
+		if err := a.Authorize(peer, OpStorePull, ""); err != nil {
+			t.Errorf("a pull of the store by %q: %v", peer, err)
+		}
+	}
+	if err := a.Authorize(alice, OpStoreWrite, ""); err != nil {
+		t.Errorf("a write to the store by an operator: %v", err)
+	}
+	err := a.Authorize(mallory, OpStoreWrite, "")
+	if wire.CodeOf(err) != wire.CodeUnauthorized {
+		t.Fatalf("a write to the store by a stranger: %v, want unauthorized", err)
+	}
+	if !strings.Contains(err.Error(), "store-write") || !strings.Contains(err.Error(), string(mallory)) {
+		t.Errorf("the refusal names neither the operation nor the peer: %q", err)
+	}
+	// The store request of an operator names a service now.
+	if err := a.Authorize(mallory, OpStore, "web"); err == nil || !strings.Contains(err.Error(), "web") {
+		t.Errorf("store on web by a stranger: %v, want a refusal that names the service", err)
 	}
 }
 

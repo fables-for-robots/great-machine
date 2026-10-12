@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/amber-store/jaccard-store/bucket"
+	"github.com/fables-for-robots/great-machine/launcher"
 	"github.com/fables-for-robots/great-machine/wire"
 	"github.com/urfave/cli/v2"
 )
@@ -20,6 +22,10 @@ import (
 // message on stderr for a command line that is not valid. None of them
 // gets as far as the network.
 func TestInvalidCommandLines(t *testing.T) {
+	// A command line that is not refused starts a draal in its data
+	// directory: one of the test's, so that a refusal that is lost
+	// leaves nothing in the tree.
+	d := t.TempDir()
 	tests := []struct {
 		name string
 		env  map[string]string
@@ -69,25 +75,59 @@ func TestInvalidCommandLines(t *testing.T) {
 		{"rollout: --jobs 0", nil, []string{"rollout", "--draal", idA, "--jobs", "0", "web", "/nix/store/abc-web/bin/web"}, "--jobs: 0 is not a number of store paths"},
 		{"rollout: the variable stands in for --jobs", map[string]string{"GREAT_MACHINE_JOBS": "0"},
 			[]string{"rollout", "--draal", idA, "web", "/nix/store/abc-web/bin/web"}, "--jobs: 0 is not a number of store paths"},
+		// The store answers 64 requests of a connection at a time, and a
+		// push has two under way when it goes from one step to the next.
+		{"rollout: more --jobs than the store answers", nil, []string{"rollout", "--draal", idA, "--jobs", "33", "web", "/nix/store/abc-web/bin/web"},
+			"--jobs: 33 is more than 32 store paths at a time, which is the most"},
 		{"rollout: no --draal", nil, []string{"rollout", "web", "/nix/store/abc-web/bin/web"}, "--draal is required"},
 		{"rollout: a bad --draal", nil, []string{"rollout", "--draal", "nonsense", "web", "/nix/store/abc-web/bin/web"}, `--draal: "nonsense"`},
 		{"id: an argument", nil, []string{"id", "now"}, `id takes no argument, got "now"`},
 
 		// draal.
-		{"draal: no --data", nil, []string{"draal", "--jaccard-server", idB, "--jaccard-prefix", "nix/"}, "--data is required: give it, or set GREAT_MACHINE_DATA"},
-		{"draal: no --jaccard-server", nil, []string{"draal", "--data", "d", "--jaccard-prefix", "nix/"}, "--jaccard-server is required: give it, or set JACCARD_SERVER"},
-		{"draal: no --jaccard-prefix", nil, []string{"draal", "--data", "d", "--jaccard-server", idB}, "--jaccard-prefix is required: give it, or set JACCARD_PREFIX"},
-		{"draal: a bad --jaccard-server", nil, []string{"draal", "--data", "d", "--jaccard-server", "nonsense", "--jaccard-prefix", "nix/"}, `--jaccard-server: "nonsense" is not an endpoint ID`},
+		{"draal: no --data", nil, []string{"draal", "--s3-bucket", "packs"}, "--data is required: give it, or set GREAT_MACHINE_DATA"},
+		{"draal: no --s3-bucket", nil, []string{"draal", "--data", d}, "--s3-bucket is required: give it, or set GREAT_MACHINE_S3_BUCKET"},
+		// The flags of a draal of before, which was told where the store
+		// is: it is the store now.
+		{"draal: --jaccard-server, which is gone", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--jaccard-server", idB},
+			"flag provided but not defined: -jaccard-server"},
+		{"draal: --jaccard-prefix, which is gone", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--jaccard-prefix", "nix/"},
+			"flag provided but not defined: -jaccard-prefix"},
+		{"draal: an --s3-endpoint that is no URL", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "minio:9000"},
+			`--s3-endpoint: "minio:9000" is not the URL of an S3 service`},
+		{"draal: the variable stands in for --s3-endpoint", map[string]string{"GREAT_MACHINE_S3_ENDPOINT": "s3.example.com"},
+			[]string{"draal", "--data", d, "--s3-bucket", "packs"}, `--s3-endpoint: "s3.example.com" is not the URL of an S3 service`},
+		// The endpoint is in every URL a client is handed: it names a
+		// host, and carries nothing that is not the service's address.
+		{"draal: an --s3-endpoint without a host", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://:9000"},
+			`--s3-endpoint: "http://:9000" is not the URL of an S3 service`},
+		{"draal: an --s3-endpoint with a user in it", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://user:secret@host"},
+			`--s3-endpoint: a value with an @, a ? or a # in it, which is not repeated here, is not the URL of an S3 service`},
+		{"draal: an --s3-endpoint with a query", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://host/path?x=1"},
+			`--s3-endpoint: a value with an @, a ? or a # in it, which is not repeated here, is not the URL of an S3 service`},
+		{"draal: an --s3-endpoint with a fragment", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--s3-endpoint", "http://host#frag"},
+			`--s3-endpoint: a value with an @, a ? or a # in it, which is not repeated here, is not the URL of an S3 service`},
+		{"draal: a --store-max-pack-size that is no size", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-max-pack-size", "lots"},
+			`--store-max-pack-size: "lots" is not a size: want bytes, or a number with KiB, MiB or GiB`},
+		{"draal: a --store-max-pack-size of nothing", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-max-pack-size", "0"},
+			`--store-max-pack-size: "0" is not a size`},
+		{"draal: a --store-max-pack-size in a unit there is not", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-max-pack-size", "16GB"},
+			`--store-max-pack-size: "16GB" is not a size`},
+		{"draal: the variable stands in for --store-max-pack-size", map[string]string{"GREAT_MACHINE_STORE_MAX_PACK_SIZE": "-1"},
+			[]string{"draal", "--data", d, "--s3-bucket", "packs"}, `--store-max-pack-size: "-1" is not a size`},
+		{"draal: a --store-max-pack-size with a sign", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-max-pack-size", "+1GiB"},
+			`--store-max-pack-size: "+1GiB" is not a size`},
+		{"draal: no --store-verify-jobs at all", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--store-verify-jobs", "0"},
+			"--store-verify-jobs: 0 is not a number of packs to verify at once: want 1 or more"},
 		{"draal: an operator that is no endpoint ID", nil,
-			[]string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--operator", idA, "--operator", "alice"},
+			[]string{"draal", "--data", d, "--s3-bucket", "packs", "--operator", idA, "--operator", "alice"},
 			`--operator: "alice" is not an endpoint ID`},
 		{"draal: the variable stands in for --operator", map[string]string{"GREAT_MACHINE_OPERATORS": idA + ",bob"},
-			[]string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/"}, `--operator: "bob" is not an endpoint ID`},
-		{"draal: a bad --bind", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--bind", "4433"}, `--bind: "4433" is not an address to bind`},
-		{"draal: a bad --web-addr", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "--web-addr", "8080"}, `--web-addr: "8080" is not an address to listen on`},
+			[]string{"draal", "--data", d, "--s3-bucket", "packs"}, `--operator: "bob" is not an endpoint ID`},
+		{"draal: a bad --bind", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--bind", "4433"}, `--bind: "4433" is not an address to bind`},
+		{"draal: a bad --web-addr", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--web-addr", "8080"}, `--web-addr: "8080" is not an address to listen on`},
 		{"draal: the variable stands in for --web-addr", map[string]string{"GREAT_MACHINE_WEB_ADDR": "localhost"},
-			[]string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/"}, `--web-addr: "localhost" is not an address to listen on`},
-		{"draal: an argument", nil, []string{"draal", "--data", "d", "--jaccard-server", idB, "--jaccard-prefix", "nix/", "now"}, `draal takes no argument, got "now"`},
+			[]string{"draal", "--data", d, "--s3-bucket", "packs"}, `--web-addr: "localhost" is not an address to listen on`},
+		{"draal: an argument", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "now"}, `draal takes no argument, got "now"`},
 
 		// zathras.
 		{"zathras: no --draal", nil, []string{"zathras", "--service", "web"}, "--draal is required: give it, or set GREAT_MACHINE_DRAAL"},
@@ -99,6 +139,16 @@ func TestInvalidCommandLines(t *testing.T) {
 		{"zathras: a --stop-timeout that is no duration", nil, []string{"zathras", "--draal", idA, "--service", "web", "--stop-timeout", "soon"}, `"soon"`},
 		{"zathras: a --stop-timeout of nothing", nil, []string{"zathras", "--draal", idA, "--service", "web", "--stop-timeout", "0s"}, "--stop-timeout: 0s is not a time"},
 		{"zathras: an argument", nil, []string{"zathras", "--draal", idA, "--service", "web", "now"}, `zathras takes no argument, got "now"`},
+		{"zathras: a --user that is a name", nil, []string{"zathras", "--draal", idA, "--service", "web", "--user", "nobody"}, `--user: "nobody" is no user: want UID or UID:GID, both numbers`},
+		{"zathras: a --user below nothing", nil, []string{"zathras", "--draal", idA, "--service", "web", "--user", "-1"}, `--user: "-1" is no user`},
+		{"zathras: a --user above every ID", nil, []string{"zathras", "--draal", idA, "--service", "web", "--user", "1000:4294967296"}, `--user: "1000:4294967296" is no user`},
+		{"zathras: a --user with nothing behind the colon", nil, []string{"zathras", "--draal", idA, "--service", "web", "--user", "1000:"}, `--user: "1000:" is no user`},
+		{"zathras: a --user with nothing before the colon", nil, []string{"zathras", "--draal", idA, "--service", "web", "--user", ":100"}, `--user: ":100" is no user`},
+		{"zathras: a store and no directory for its cache", nil, []string{"zathras", "--draal", idA, "--service", "web", "--store-cache", ""}, "--store-cache: the store needs a directory for what it fetches"},
+		{"zathras: the variable stands in for --user", map[string]string{"GREAT_MACHINE_USER": "root"},
+			[]string{"zathras", "--draal", idA, "--service", "web"}, `--user: "root" is no user`},
+		{"zathras: the flag of the sidecar's endpoint, which is gone", nil,
+			[]string{"zathras", "--draal", idA, "--service", "web", "--preload-url", "http://127.0.0.1:9889/v1/preload"}, "flag provided but not defined: -preload-url"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -132,35 +182,99 @@ func TestReadDraal(t *testing.T) {
 		return err
 	}
 
+	// The least there is to say: where the data is, and the bucket. The
+	// store has its defaults.
+	read(t, draalCommand(), reader, "--data", "data", "--s3-bucket", "packs")
+	want := draalConfig{
+		data:    "data",
+		store:   storeConfig{bucket: bucket.Config{Bucket: "packs"}, verifyJobs: 2, maxPackBytes: 16 << 30},
+		webAddr: "127.0.0.1:8080",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the least: got %+v, want %+v", got, want)
+	}
+
 	// The variables alone. The operators have commas between them, and
 	// what a comma too many leaves empty is passed over.
 	t.Setenv("GREAT_MACHINE_DATA", "/var/lib/draal")
 	t.Setenv("GREAT_MACHINE_OPERATORS", idA+", "+idB+",")
-	t.Setenv("JACCARD_SERVER", idC)
-	t.Setenv("JACCARD_PREFIX", "nix/")
+	t.Setenv("GREAT_MACHINE_S3_BUCKET", "packs")
+	t.Setenv("GREAT_MACHINE_S3_PREFIX", "great-machine")
+	t.Setenv("GREAT_MACHINE_S3_ENDPOINT", "http://rustfs.storage:9000")
+	t.Setenv("GREAT_MACHINE_S3_REGION", "eu-central-1")
+	t.Setenv("GREAT_MACHINE_S3_PATH_STYLE", "true")
+	t.Setenv("GREAT_MACHINE_STORE_SCRATCH", "/scratch")
+	t.Setenv("GREAT_MACHINE_STORE_VERIFY_JOBS", "4")
+	t.Setenv("GREAT_MACHINE_STORE_MAX_PACK_SIZE", "64MiB")
+	t.Setenv("GREAT_MACHINE_STORE_NO_VERIFY", "true")
 	read(t, draalCommand(), reader)
-	want := draalConfig{
+	want = draalConfig{
 		data:      "/var/lib/draal",
 		operators: []wire.ID{wire.ID(idA), wire.ID(idB)},
-		store:     wire.StoreInfo{Server: wire.ID(idC), Prefix: "nix/"},
-		webAddr:   "127.0.0.1:8080",
+		store: storeConfig{
+			bucket:       bucket.Config{Bucket: "packs", Prefix: "great-machine", Endpoint: "http://rustfs.storage:9000", Region: "eu-central-1", PathStyle: true},
+			scratch:      "/scratch",
+			verifyJobs:   4,
+			maxPackBytes: 64 << 20,
+			noVerify:     true,
+		},
+		webAddr: "127.0.0.1:8080",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("from the variables: got %+v, want %+v", got, want)
 	}
 
+	// A scratch directory of blanks is none: the store then makes its own
+	// in the data directory.
+	read(t, draalCommand(), reader, "--data", "data", "--store-scratch", "   ")
+	if got.store.scratch != "" {
+		t.Errorf("--store-scratch of blanks is read as %q, want none", got.store.scratch)
+	}
+	// And an endpoint may have a path, which some services are under.
+	read(t, draalCommand(), reader, "--data", "data", "--s3-endpoint", "https://gateway.example.com/s3")
+	if got.store.bucket.Endpoint != "https://gateway.example.com/s3" {
+		t.Errorf("--s3-endpoint with a path is read as %q", got.store.bucket.Endpoint)
+	}
+
 	// A flag wins over its variable, and --operator may be repeated.
-	read(t, draalCommand(), reader, "--data", "data", "--operator", idC, "--operator", idA,
-		"--jaccard-server", idA, "--jaccard-prefix", "store/", "--bind", "0.0.0.0:4433")
+	read(t, draalCommand(), reader, "--data", "data", "--operator", idC, "--operator", idA, "--bind", "0.0.0.0:4433",
+		"--s3-bucket", "other", "--s3-prefix", "", "--s3-endpoint", "https://s3.example.com", "--s3-region", "auto", "--s3-path-style=false",
+		"--store-scratch", "scratch", "--store-verify-jobs", "1", "--store-max-pack-size", "1073741824", "--store-no-verify=false")
 	want = draalConfig{
 		data:      "data",
 		operators: []wire.ID{wire.ID(idC), wire.ID(idA)},
-		store:     wire.StoreInfo{Server: wire.ID(idA), Prefix: "store/"},
-		webAddr:   "127.0.0.1:8080",
-		bind:      netip.MustParseAddrPort("0.0.0.0:4433"),
+		store: storeConfig{
+			bucket:       bucket.Config{Bucket: "other", Endpoint: "https://s3.example.com", Region: "auto"},
+			scratch:      "scratch",
+			verifyJobs:   1,
+			maxPackBytes: 1 << 30,
+		},
+		webAddr: "127.0.0.1:8080",
+		bind:    netip.MustParseAddrPort("0.0.0.0:4433"),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("from the flags: got %+v, want %+v", got, want)
+	}
+}
+
+// A size is bytes, or a number with a unit of 1024.
+func TestParseSize(t *testing.T) {
+	for text, want := range map[string]int64{
+		"1":       1,
+		"4096":    4096,
+		"5KiB":    5 << 10,
+		"64MiB":   64 << 20,
+		"16GiB":   16 << 30,
+		" 2 GiB ": 2 << 30,
+	} {
+		if got, err := parseSize(text); err != nil || got != want {
+			t.Errorf("parseSize(%q) = %d, %v; want %d", text, got, err, want)
+		}
+	}
+	for _, text := range []string{"", "0", "-1", "+1", "+1GiB", "0x10", "1e3", "lots", "16GB", "1.5GiB", "GiB", "9223372036854775807GiB", "1TiB"} {
+		if got, err := parseSize(text); err == nil {
+			t.Errorf("parseSize(%q) = %d, want an error", text, got)
+		}
 	}
 }
 
@@ -173,7 +287,7 @@ func TestReadDraalWebAddr(t *testing.T) {
 		got, err = readDraal(c)
 		return err
 	}
-	args := []string{"--data", "d", "--jaccard-server", idA, "--jaccard-prefix", "nix/"}
+	args := []string{"--data", "d", "--s3-bucket", "packs"}
 	with := func(more ...string) []string { return append(append([]string{}, args...), more...) }
 
 	read(t, draalCommand(), reader, args...)
@@ -223,41 +337,54 @@ func TestReadZathras(t *testing.T) {
 		draal:       wire.ID(idA),
 		service:     "web",
 		name:        host,
-		preloadURL:  "http://127.0.0.1:9889/v1/preload",
 		shell:       "/bin/sh",
 		stopTimeout: 2 * time.Minute,
 		healthAddr:  ":9890",
+		storeCache:  "/var/cache/great-machine",
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the defaults: got %+v, want %+v", got, want)
 	}
 
-	// The variables, and two flags that win over theirs. An empty
+	// The variables, and the flags that win over theirs. An empty
 	// --health-addr is no health check.
 	t.Setenv("GREAT_MACHINE_DRAAL", idB)
 	t.Setenv("GREAT_MACHINE_SERVICE", "api")
 	t.Setenv("GREAT_MACHINE_NAME", "api-0")
-	t.Setenv("GREAT_MACHINE_PRELOAD_URL", "http://127.0.0.1:1/preload")
 	t.Setenv("GREAT_MACHINE_SHELL", "/bin/bash")
 	t.Setenv("GREAT_MACHINE_STOP_TIMEOUT", "30s")
 	t.Setenv("GREAT_MACHINE_HEALTH_ADDR", "127.0.0.1:9999")
+	t.Setenv("GREAT_MACHINE_STORE_CACHE", "/cache")
+	t.Setenv("GREAT_MACHINE_NO_STORE", "true")
+	t.Setenv("GREAT_MACHINE_USER", "1000:100")
 	read(t, zathrasCommand(), reader, "--name", "api-1", "--health-addr", "")
 	want = zathrasConfig{
 		draal:       wire.ID(idB),
 		service:     "api",
 		name:        "api-1",
-		preloadURL:  "http://127.0.0.1:1/preload",
 		shell:       "/bin/bash",
 		stopTimeout: 30 * time.Second,
 		healthAddr:  "",
+		storeCache:  "/cache",
+		noStore:     true,
+		user:        &launcher.User{UID: 1000, GID: 100},
 	}
-	if got != want {
-		t.Errorf("the variables: got %+v, want %+v", got, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the variables: got %+v (user %+v), want %+v (user %+v)", got, got.user, want, want.user)
+	}
+
+	// A user without a group has the group of the same number.
+	read(t, zathrasCommand(), reader, "--store-cache", "/var/cache/other", "--user", "65534", "--no-store=false")
+	want.name, want.healthAddr = "api-0", "127.0.0.1:9999"
+	want.storeCache, want.noStore, want.user = "/var/cache/other", false, &launcher.User{UID: 65534, GID: 65534}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the flags: got %+v (user %+v), want %+v (user %+v)", got, got.user, want, want.user)
 	}
 }
 
 // A health check that cannot listen ends zathras at once, before it has
-// made a key or dialed anyone.
+// made a key or dialed anyone. Without a store of its own, which it would
+// have mounted before.
 func TestZathrasHealthAddressTaken(t *testing.T) {
 	cleanEnvironment(t)
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
@@ -267,7 +394,7 @@ func TestZathrasHealthAddressTaken(t *testing.T) {
 	defer taken.Close()
 	var stdout, stderr bytes.Buffer
 	got := run(context.Background(), newApp(&stdout, &stderr),
-		[]string{"great-machine", "zathras", "--draal", idA, "--service", "web", "--health-addr", taken.Addr().String()})
+		[]string{"great-machine", "zathras", "--draal", idA, "--service", "web", "--no-store", "--health-addr", taken.Addr().String()})
 	if got != 1 || !strings.Contains(stderr.String(), "great-machine: the health check: listen tcp") {
 		t.Errorf("the exit status is %d and stderr %q, want 1 and the failure to listen", got, stderr.String())
 	}
@@ -380,6 +507,56 @@ func TestHelpNamesEveryCommand(t *testing.T) {
 	for _, name := range []string{"draal", "zathras", "id", "rollout", "rollback", "status", "logs", "shell", "tui", "version"} {
 		if !strings.Contains(stdout.String(), "\n   "+name+" ") {
 			t.Errorf("the help does not name %s:\n%s", name, stdout.String())
+		}
+	}
+}
+
+// A refusal goes to the log of a pod. An endpoint that is refused and has
+// an @, a ? or a # in it is not repeated there at all: a user, a query
+// and a fragment are where somebody may have put a secret, and no cut of
+// such a value is sure to leave it out.
+func TestARefusedEndpointThatMayHaveASecretInItIsNotRepeated(t *testing.T) {
+	for _, endpoint := range []string{
+		"https://key:hush@s3.example.com",
+		"https://s3.example.com/path?signature=hush",
+		"https://s3.example.com/path#hush",
+		"https://key:hu?sh@s3.example.com/path?signature=hush#hush",
+		// An @ behind a ? or a #, and one before the scheme.
+		"https://s3.example.com/path?signature=abc@hush",
+		"https://s3.example.com/path#abc@hush",
+		"https://s3.example.com?email=a@hush.example&k=hush",
+		"hush@h://a@hush",
+		// What is no URL at all.
+		"https://key:hush@s3 .example.com",
+		"key:hush@s3.example.com",
+	} {
+		for _, how := range []string{"flag", "variable"} {
+			t.Run(how+" "+endpoint, func(t *testing.T) {
+				cleanEnvironment(t)
+				args := []string{"great-machine", "draal", "--data", t.TempDir(), "--s3-bucket", "packs"}
+				if how == "flag" {
+					args = append(args, "--s3-endpoint", endpoint)
+				} else {
+					t.Setenv("GREAT_MACHINE_S3_ENDPOINT", endpoint)
+				}
+				// A command line that is not refused would start a
+				// draal: it gets a context that ends.
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				defer cancel()
+				var stdout, stderr bytes.Buffer
+				if got := run(ctx, newApp(&stdout, &stderr), args); got != 2 {
+					t.Errorf("the exit status is %d, want 2", got)
+				}
+				if !strings.Contains(stderr.String(), "--s3-endpoint: ") || !strings.Contains(stderr.String(), "is not the URL of an S3 service") {
+					t.Errorf("stderr is %q, want the refusal of the endpoint", stderr.String())
+				}
+				if strings.Contains(stderr.String(), "hush") || strings.Contains(stderr.String(), "sh@") || strings.Contains(stderr.String(), "s3.example.com") {
+					t.Errorf("stderr repeats the endpoint, which may have a secret in it: %q", stderr.String())
+				}
+				if !strings.Contains(stderr.String(), "is not repeated here") {
+					t.Errorf("stderr is %q, want it to say that the value is not repeated", stderr.String())
+				}
+			})
 		}
 	}
 }

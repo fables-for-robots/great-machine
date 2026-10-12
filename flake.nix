@@ -76,7 +76,15 @@
             nixpkgs.legacyPackages.${builtins.currentSystem}
           else
             null;
-          goEnv = gonixgo.lib.mkGoEnv { inherit pkgs evalPkgs; };
+          # Buildbarn's packages, of which the mount of a zathras is
+          # made, need Go 1.27, which is not yet the Go of this nixpkgs.
+          # The Go that resolves the packages while Nix evaluates has to
+          # be the same one.
+          goEnv = gonixgo.lib.mkGoEnv {
+            inherit pkgs evalPkgs;
+            go = pkgs.buildPackages.go_1_27;
+            evalGo = if evalPkgs != null then evalPkgs.go_1_27 else null;
+          };
 
           # The source gonixgo builds: the repository with the build of
           # the page at web/dist, where the package web embeds it.
@@ -100,7 +108,8 @@
 
           # The one program: draal, zathras and the operator's commands.
           # Without cgo it is linked statically on Linux, and runs in an
-          # image that has no libc and whose /nix/store is another one.
+          # image that has no libc and whose /nix/store is the one zathras
+          # mounts.
           great-machine = goEnv.buildGoApplication {
             pname = "great-machine";
             inherit src;
@@ -120,16 +129,30 @@
           # The image of the app container of a pod, and of draal:
           #   nix build .#image && docker load < result
           #
-          # Nothing it needs lives in /nix/store, because a pod mounts the
-          # sidecar's store there: the program, busybox and the
+          # Nothing it needs lives in /nix/store, because zathras mounts
+          # the store of its service there: the program, busybox and the
           # certificates are copied to where an image has them. That
           # works because all three are files that need no other.
+          #
+          # And nothing at all is in its /nix/store, which zathras
+          # refuses to mount over otherwise. Left to itself Nix puts
+          # there what the copies name: busybox names itself, and the
+          # Go of nixpkgs writes into every program where it would look
+          # for the time zones, the MIME types and the names of
+          # protocols and ports when the machine has none (tzdata,
+          # mailcap, iana-etc). Neither program needs what it names, so
+          # the image is made without store paths.
           image = pkgs.dockerTools.buildLayeredImage {
             name = "ghcr.io/fables-for-robots/great-machine";
             tag = "nix";
+            includeStorePaths = false;
             extraCommands = ''
               mkdir -p bin etc/ssl/certs root
               mkdir -m 1777 tmp
+
+              # What zathras mounts the store on, and where it keeps
+              # what it fetched unless a volume is put there.
+              mkdir -p nix/store var/cache/great-machine
 
               cp ${great-machine}/bin/great-machine bin/great-machine
 
@@ -164,7 +187,7 @@
           hardeningDisable = [ "all" ];
 
           packages = with pkgs; [
-            go
+            go_1_27
             sqlc
             (nodejs pkgs)
             self.packages.${system}.default
@@ -178,7 +201,7 @@
         bare = pkgs.mkShell {
           hardeningDisable = [ "all" ];
 
-          packages = with pkgs; [ go sqlc (nodejs pkgs) ];
+          packages = with pkgs; [ go_1_27 sqlc (nodejs pkgs) ];
         };
       });
     };

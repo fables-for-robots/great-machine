@@ -53,19 +53,21 @@ func until(t *testing.T, what string, cond func() bool) {
 }
 
 func TestPushJobs(t *testing.T) {
+	// paths is how many store paths are pushed: more than may be pushed
+	// at a time, so that the bound is what holds the rest back.
 	tests := []struct {
-		jobs, want int
+		jobs, want, paths int
 	}{
-		{1, 1},
-		{2, 2},
-		{0, 5}, // the default
+		{1, 1, 8},
+		{2, 2, 8},
+		{0, 20, 24}, // the default
 	}
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("jobs %d", tt.jobs), func(t *testing.T) {
 			srv := startServer(t)
 			cfg := srv.config()
 			cfg.Jobs = tt.jobs
-			paths := storePaths(t, 8)
+			paths := storePaths(t, tt.paths)
 			hold := make(chan struct{})
 			count := watch(t, hold)
 
@@ -89,8 +91,8 @@ func TestPushJobs(t *testing.T) {
 			if out.err != nil {
 				t.Fatalf("Push: %v", out.err)
 			}
-			if out.res != (Result{Pushed: 8, Present: 0}) {
-				t.Errorf("Push = %+v, want eight pushed", out.res)
+			if out.res != (Result{Pushed: tt.paths, Present: 0}) {
+				t.Errorf("Push = %+v, want %d pushed", out.res, tt.paths)
 			}
 			if _, most := count(); most != tt.want {
 				t.Errorf("%d store paths were pushed at a time, want %d", most, tt.want)
@@ -201,4 +203,14 @@ func TestPushThatFailedBeforeTheContextEnded(t *testing.T) {
 		t.Errorf("Push: %v; want no interrupt, which was not the cause", err)
 	}
 	empty(t, cfg.TempDir)
+}
+
+// More jobs than the store answers the streams of is refused before
+// anything is dialed: the store would close the streams beyond, and the
+// push would fail in its middle with nothing that says why.
+func TestPushRefusesMoreJobsThanTheStoreAnswers(t *testing.T) {
+	_, err := Push(context.Background(), Config{Server: "nobody is dialed", Prefix: "/services/web/nix/store/", Jobs: MaxJobs + 1}, []string{"/nix/store/abc-web"})
+	if err == nil || !strings.Contains(err.Error(), "33 store paths at a time") || !strings.Contains(err.Error(), "32 is the most") {
+		t.Fatalf("Push with %d jobs: %v, want it refused, with the most there is", MaxJobs+1, err)
+	}
 }

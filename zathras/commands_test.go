@@ -1,57 +1,55 @@
 package zathras
 
 import (
-	"io"
-	"net/http"
-	"net/http/httptest"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/fables-for-robots/great-machine/storemount"
 	"github.com/fables-for-robots/great-machine/testservice/build"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
-// sidecar is a preload endpoint of a test.
-type sidecar struct {
-	url     string
-	bodies  chan string   // what was posted
-	entered chan struct{} // gets a value when a request has come
-	release chan struct{} // if hang is set, a request waits for a value
-	gone    chan struct{} // gets a value when a request that waited was ended by its client
+// store is the store of a test: a Preloader that says what it was asked
+// to fetch, and answers as the test has it.
+type store struct {
+	err     error         // what Preload returns when it does not hang
+	hang    bool          // a preload waits for a value on release, or for its context
+	asked   chan []string // the names of every preload
+	entered chan struct{} // gets a value when a preload has begun
+	release chan struct{}
+	gone    chan struct{} // gets a value when a preload that waited was ended by its context
 }
 
-// newSidecar returns an endpoint that answers with status and answer. One
-// that hangs answers only when the test sends on release, or never if the
-// client goes first.
-func newSidecar(t *testing.T, status int, answer string, hang bool) *sidecar {
-	t.Helper()
-	sc := &sidecar{
-		bodies:  make(chan string, 16),
+// newStore returns a store whose preloads return err. One that hangs
+// returns only when the test sends on release, or when its context ends.
+func newStore(err error, hang bool) *store {
+	return &store{
+		err:     err,
+		hang:    hang,
+		asked:   make(chan []string, 16),
 		entered: make(chan struct{}, 16),
 		release: make(chan struct{}),
 		gone:    make(chan struct{}, 16),
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		sc.bodies <- string(body)
-		sc.entered <- struct{}{}
-		if hang {
-			select {
-			case <-sc.release:
-			case <-r.Context().Done():
-				sc.gone <- struct{}{}
-				return
-			}
+}
+
+func (s *store) Preload(ctx context.Context, names []string) error {
+	s.asked <- slices.Clone(names)
+	s.entered <- struct{}{}
+	if s.hang {
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			s.gone <- struct{}{}
+			return ctx.Err()
 		}
-		w.WriteHeader(status)
-		io.WriteString(w, answer)
-	}))
-	t.Cleanup(srv.Close)
-	sc.url = srv.URL + "/v1/preload"
-	return sc
+	}
+	return s.err
 }
 
 // notExecutable returns a file that is there and may not be executed.
@@ -73,22 +71,22 @@ func activate(generation uint64, binary string, args ...string) *wire.Request {
 }
 
 func TestPrepare(t *testing.T) {
-	sc := newSidecar(t, http.StatusOK, "fetched 2 paths\n", false)
-	w := newWorld(t, setup{preloadURL: sc.url})
+	st := newStore(nil, false)
+	w := newWorld(t, setup{store: st})
 	l := w.accept()
 	binary := build.Binary(t)
 
-	resp, err := l.call(prepare(7, binary, "6in5jlbspq9szjvlrdxq9rpmxyvca529-busybox-1.37.0", "2sm7dby7g2sfp4cjr3537zhwkgmq3f3b-nginx-1.24.0"))
+	closure := []string{"6in5jlbspq9szjvlrdxq9rpmxyvca529-busybox-1.37.0", "2sm7dby7g2sfp4cjr3537zhwkgmq3f3b-nginx-1.24.0"}
+	resp, err := l.call(prepare(7, binary, closure...))
 	if err != nil || resp.Prepared == nil {
 		t.Fatalf("prepare answered %+v, %v, want prepared", resp, err)
 	}
-	want := "/nix/store/6in5jlbspq9szjvlrdxq9rpmxyvca529-busybox-1.37.0\n/nix/store/2sm7dby7g2sfp4cjr3537zhwkgmq3f3b-nginx-1.24.0\n"
-	if got := <-sc.bodies; got != want {
-		t.Errorf("the endpoint was sent %q, want %q", got, want)
+	if got := <-st.asked; !slices.Equal(got, closure) {
+		t.Errorf("the store was asked to fetch %q, want the closure, %q", got, closure)
 	}
-	st := l.report("with generation 7 prepared", func(st wire.State) bool { return slices.Contains(st.Prepared, 7) })
-	if st.Preparing != 0 || st.Phase != wire.PhaseIdle {
-		t.Errorf("the report is %+v, want nothing preparing and the service idle: a prepare starts nothing", st)
+	state := l.report("with generation 7 prepared", func(st wire.State) bool { return slices.Contains(st.Prepared, 7) })
+	if state.Preparing != 0 || state.Phase != wire.PhaseIdle {
+		t.Errorf("the report is %+v, want nothing preparing and the service idle: a prepare starts nothing", state)
 	}
 
 	// Prepared is kept ascending, and holds a generation once.
@@ -105,8 +103,8 @@ func TestPrepare(t *testing.T) {
 }
 
 func TestPrepareIsReportedWhileItRuns(t *testing.T) {
-	sc := newSidecar(t, http.StatusOK, "fetched 1 paths\n", true)
-	w := newWorld(t, setup{preloadURL: sc.url})
+	store := newStore(nil, true)
+	w := newWorld(t, setup{store: store})
 	l := w.accept()
 
 	s := l.open(prepare(4, build.Binary(t), "a"))
@@ -115,7 +113,7 @@ func TestPrepareIsReportedWhileItRuns(t *testing.T) {
 		t.Errorf("Prepared = %v while the prepare runs, want none", st.Prepared)
 	}
 
-	sc.release <- struct{}{}
+	store.release <- struct{}{}
 	if resp, err := l.read(s); err != nil || resp.Prepared == nil {
 		t.Fatalf("prepare answered %+v, %v, want prepared", resp, err)
 	}
@@ -124,18 +122,22 @@ func TestPrepareIsReportedWhileItRuns(t *testing.T) {
 	})
 }
 
-func TestPrepareThatTheSidecarRefuses(t *testing.T) {
-	const said = "/nix/store/2sm7dby7g2sfp4cjr3537zhwkgmq3f3b-nginx-1.24.0: the server has no such path"
-	sc := newSidecar(t, http.StatusNotFound, said+"\n", false)
-	w := newWorld(t, setup{preloadURL: sc.url})
+// A store path of the closure that the store does not have for the
+// service is what the operator has to read: the reason of the failure
+// names the path and the service, as the store said it.
+func TestPrepareOfAStorePathTheStoreDoesNotHave(t *testing.T) {
+	missing := &storemount.NotFoundError{Path: "/nix/store/2sm7dby7g2sfp4cjr3537zhwkgmq3f3b-nginx-1.24.0", Service: "web"}
+	w := newWorld(t, setup{store: newStore(missing, false)})
 	l := w.accept()
 
 	resp, err := l.call(prepare(5, build.Binary(t), "2sm7dby7g2sfp4cjr3537zhwkgmq3f3b-nginx-1.24.0"))
-	if err == nil {
-		t.Fatalf("prepare answered %+v, want an error", resp)
+	if wire.CodeOf(err) != wire.CodeInternal {
+		t.Fatalf("prepare answered %+v, %v, want an internal error", resp, err)
 	}
-	if !strings.Contains(err.Error(), said) || !strings.Contains(err.Error(), "404") {
-		t.Errorf("the error is %q, want one with the status and what the sidecar said, %q", err, said)
+	for _, word := range []string{"/nix/store/2sm7dby7g2sfp4cjr3537zhwkgmq3f3b-nginx-1.24.0", "the service web", "the store has no"} {
+		if !strings.Contains(err.Error(), word) {
+			t.Errorf("the error does not say %q: %v", word, err)
+		}
 	}
 	w.idle()
 	if st := w.agent.State(); len(st.Prepared) != 0 || st.Preparing != 0 {
@@ -143,18 +145,39 @@ func TestPrepareThatTheSidecarRefuses(t *testing.T) {
 	}
 }
 
-func TestPrepareWithoutASidecar(t *testing.T) {
-	w := newWorld(t, setup{}) // nothing listens at the preload endpoint
+// And one that could not be fetched: the reason is the store's, with the
+// path and why.
+func TestPrepareOfAStorePathThatCouldNotBeFetched(t *testing.T) {
+	const said = "/nix/store/2sm7dby7g2sfp4cjr3537zhwkgmq3f3b-nginx-1.24.0 could not be fetched from the store: dialing the server: no route to host"
+	w := newWorld(t, setup{store: newStore(errors.New(said), false)})
 	l := w.accept()
-	resp, err := l.call(prepare(5, build.Binary(t), "a"))
-	if wire.CodeOf(err) != wire.CodeInternal || !strings.Contains(err.Error(), "preload") {
-		t.Fatalf("prepare answered %+v, %v, want an internal error that says preload", resp, err)
+	resp, err := l.call(prepare(5, build.Binary(t), "2sm7dby7g2sfp4cjr3537zhwkgmq3f3b-nginx-1.24.0"))
+	if wire.CodeOf(err) != wire.CodeInternal || !strings.Contains(err.Error(), said) {
+		t.Fatalf("prepare answered %+v, %v, want an internal error with what the store said, %q", resp, err, said)
+	}
+}
+
+// A zathras without a store of its own (--no-store) fetches nothing: its
+// /nix/store is what the container has, and a prepare is the check of
+// the binary alone.
+func TestPrepareWithoutAStore(t *testing.T) {
+	w := newWorld(t, setup{})
+	l := w.accept()
+	if resp, err := l.call(prepare(5, build.Binary(t), "a")); err != nil || resp.Prepared == nil {
+		t.Fatalf("prepare answered %+v, %v, want prepared", resp, err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing")
+	if resp, err := l.call(prepare(6, missing, "a")); wire.CodeOf(err) != wire.CodeBadRequest || !strings.Contains(err.Error(), missing) {
+		t.Errorf("prepare of a binary that is not there answered %+v, %v, want bad-request with the path", resp, err)
+	}
+	w.idle()
+	if got := w.agent.State().Prepared; !slices.Equal(got, []uint64{5}) {
+		t.Errorf("State().Prepared = %v, want [5]", got)
 	}
 }
 
 func TestPrepareOfABinaryThatIsNotExecutable(t *testing.T) {
-	sc := newSidecar(t, http.StatusOK, "fetched 1 paths\n", false)
-	w := newWorld(t, setup{preloadURL: sc.url})
+	w := newWorld(t, setup{store: newStore(nil, false)})
 	l := w.accept()
 
 	for _, binary := range []string{notExecutable(t), filepath.Join(t.TempDir(), "missing"), t.TempDir()} {
@@ -178,16 +201,16 @@ func TestPrepareWithoutAGeneration(t *testing.T) {
 }
 
 func TestPrepareIsWithdrawnByClosingItsStream(t *testing.T) {
-	sc := newSidecar(t, http.StatusOK, "", true)
-	w := newWorld(t, setup{preloadURL: sc.url})
+	st := newStore(nil, true)
+	w := newWorld(t, setup{store: st})
 	l := w.accept()
 
 	s := l.open(prepare(6, build.Binary(t), "a"))
-	within(t, "the request to reach the endpoint", func() struct{} { return <-sc.entered })
+	within(t, "the preload to begin", func() struct{} { return <-st.entered })
 	s.Close()
 
-	// The request to the sidecar is ended, which is how its fetches end.
-	within(t, "the endpoint to be told that the client is gone", func() struct{} { return <-sc.gone })
+	// The context of the preload ends, which is how its fetches end.
+	within(t, "the preload to be ended by its context", func() struct{} { return <-st.gone })
 	w.idle()
 	if st := w.agent.State(); len(st.Prepared) != 0 || st.Preparing != 0 {
 		t.Errorf("State() = %+v after a prepare that was withdrawn, want nothing prepared or preparing", st)
@@ -195,18 +218,32 @@ func TestPrepareIsWithdrawnByClosingItsStream(t *testing.T) {
 }
 
 func TestPrepareEndsWithTheConnection(t *testing.T) {
-	sc := newSidecar(t, http.StatusOK, "", true)
-	w := newWorld(t, setup{preloadURL: sc.url})
+	st := newStore(nil, true)
+	w := newWorld(t, setup{store: st})
 	l := w.accept()
 
 	l.open(prepare(6, build.Binary(t), "a"))
-	within(t, "the request to reach the endpoint", func() struct{} { return <-sc.entered })
+	within(t, "the preload to begin", func() struct{} { return <-st.entered })
 	l.conn.Close()
 
-	within(t, "the endpoint to be told that the client is gone", func() struct{} { return <-sc.gone })
+	within(t, "the preload to be ended by its context", func() struct{} { return <-st.gone })
 	w.idle()
 	// And the agent is back.
 	w.accept()
+}
+
+// A zathras that is told to stop while it prepares does not wait for the
+// store: the preload is ended, and Run returns.
+func TestPrepareEndsWhenTheAgentIsStopped(t *testing.T) {
+	st := newStore(nil, true)
+	w := newWorld(t, setup{store: st})
+	l := w.accept()
+
+	l.open(prepare(6, build.Binary(t), "a"))
+	within(t, "the preload to begin", func() struct{} { return <-st.entered })
+	w.stop()
+	within(t, "the preload to be ended by its context", func() struct{} { return <-st.gone })
+	w.idle()
 }
 
 func TestActivate(t *testing.T) {
@@ -273,8 +310,7 @@ func TestServiceOutlivesTheConnection(t *testing.T) {
 }
 
 func TestStateIsTheWholeState(t *testing.T) {
-	sc := newSidecar(t, http.StatusOK, "", false)
-	w := newWorld(t, setup{preloadURL: sc.url, stats: fixtureStats(t)})
+	w := newWorld(t, setup{store: newStore(nil, false), stats: fixtureStats(t)})
 	l := w.accept()
 	binary := build.Binary(t)
 

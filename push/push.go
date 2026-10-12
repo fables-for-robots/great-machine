@@ -1,9 +1,10 @@
-// Package push takes store paths to a jaccard-store server: every store
-// path becomes the reference prefix+name there, which the sidecar of a pod
-// serves as /nix/store/<name>.
+// Package push takes store paths to the store, which draal is, answering
+// jaccard-store's protocol under its own endpoint ID: every store path
+// becomes the reference prefix+name there, which a pod of the service has
+// as /nix/store/<name>.
 //
 // A store path never changes under its name, so one whose reference the
-// server has is not pushed again. Every other one is imported into a
+// store has is not pushed again. Every other one is imported into a
 // temporary store of its own, as `jaccard-store push-dir` imports a
 // directory, and pushed with jaccard-store's client.
 package push
@@ -31,10 +32,18 @@ import (
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
+// MaxJobs is the most store paths that are pushed at a time. The store
+// answers 64 requests of a connection at a time and closes the stream of
+// one more without an answer. Every job has one request under way, on a
+// stream of its own, and two for the moment in which it goes from one
+// step to the next: the store has not let go of the stream that was
+// answered when the next one arrives.
+const MaxJobs = 32
+
 const (
 	// defaultJobs is how many store paths are pushed at a time when Config
 	// does not say.
-	defaultJobs = 5
+	defaultJobs = 20
 	// lookups is how many references the server is asked about at a time.
 	lookups = 16
 	// minDedup is the share of a store path's bytes a pack on the server
@@ -46,10 +55,10 @@ const (
 // Config says where store paths are pushed to, and how.
 type Config struct {
 	Key      node.Key         // the operator's
-	Server   wire.ID          // the jaccard-store server
+	Server   wire.ID          // the store: the endpoint ID of draal
 	Addrs    []netip.AddrPort // for tests: where the server is
 	Prefix   string
-	Jobs     int      // 0: 5
+	Jobs     int      // 0: 20; MaxJobs at the most
 	TempDir  string   // "": the system's
 	Progress Progress // nil: none
 }
@@ -87,14 +96,14 @@ type item struct {
 	ref  string
 }
 
-// Push makes the server hold the reference Prefix+name for every store
+// Push makes the store hold the reference Prefix+name for every store
 // path. It ends at the first path that fails, with that path in the error.
 //
 // The name of a store path is its last element. A store path may be a
 // directory or a single regular file, which becomes a reference whose root
 // is the file. One that is a symbolic link is refused before anything is
-// pushed: the root of a reference cannot be a link, so the sidecar could
-// not serve it as one.
+// pushed: the root of a reference cannot be a link, so a pod could not
+// be given it as one.
 //
 // The Result counts what was done until Push returned, also when it
 // returns an error.
@@ -106,6 +115,9 @@ func Push(ctx context.Context, cfg Config, storePaths []string) (Result, error) 
 	jobs := cfg.Jobs
 	if jobs <= 0 {
 		jobs = defaultJobs
+	}
+	if jobs > MaxJobs {
+		return Result{}, fmt.Errorf("pushing %d store paths at a time: %d is the most, as the store answers 64 requests of a connection at a time and a push has two under way when it goes from one step to the next", jobs, MaxJobs)
 	}
 
 	// Before anything is dialed: a name the server will not take should
@@ -133,7 +145,7 @@ func Push(ctx context.Context, cfg Config, storePaths []string) (Result, error) 
 
 	server, err := irohkey.ParseEndpointID(string(cfg.Server))
 	if err != nil {
-		return Result{}, fmt.Errorf("the jaccard-store server %q: %w", cfg.Server, err)
+		return Result{}, fmt.Errorf("the store %q: %w", cfg.Server, err)
 	}
 	conn, err := jsnode.Dial(ctx, jsnode.DialConfig{
 		Key:    cfg.Key.Iroh(),
@@ -142,7 +154,7 @@ func Push(ctx context.Context, cfg Config, storePaths []string) (Result, error) 
 		Addrs:  cfg.Addrs,
 	})
 	if err != nil {
-		return Result{}, fmt.Errorf("the jaccard-store server: %w", err)
+		return Result{}, fmt.Errorf("the store: %w", err)
 	}
 	defer conn.Close()
 	c := client.New(conn, nil)
@@ -212,7 +224,7 @@ func absent(ctx context.Context, c *client.Client, items []item) ([]item, error)
 			}
 			refs, err := c.List(gctx, it.ref)
 			if err != nil {
-				return fmt.Errorf("asking the jaccard-store server for the reference %q: %w", it.ref, err)
+				return fmt.Errorf("asking the store for the reference %q: %w", it.ref, err)
 			}
 			// The listing is of every name that begins with this one.
 			for _, r := range refs {

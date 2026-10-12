@@ -13,7 +13,6 @@ import (
 	"github.com/fables-for-robots/great-machine/logring"
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/node/nodetest"
-	"github.com/fables-for-robots/great-machine/preload"
 	"github.com/fables-for-robots/great-machine/ptyshell"
 	"github.com/fables-for-robots/great-machine/stats"
 	"github.com/fables-for-robots/great-machine/supervisor"
@@ -57,10 +56,10 @@ func within[T any](t *testing.T, what string, f func() T) T {
 
 // setup is what a test wants of its world to be other than usual.
 type setup struct {
-	preloadURL string        // the preload endpoint; "": one that nothing listens at
-	stats      *stats.Reader // nil: no samples
-	shell      string        // the program of a shell; "": /bin/sh
-	deaf       bool          // nobody listens as draal until the test does
+	store Preloader     // the store of the zathras; nil: it has none of its own
+	stats *stats.Reader // nil: no samples
+	shell string        // the program of a shell; "": /bin/sh
+	deaf  bool          // nobody listens as draal until the test does
 }
 
 // world is an agent that runs, its supervisor, which runs too, and the
@@ -91,9 +90,6 @@ func newWorld(t *testing.T, s setup) *world {
 		StopTimeout: 5 * time.Second,
 		Log:         log,
 	})
-	if s.preloadURL == "" {
-		s.preloadURL = "http://127.0.0.1:1/v1/preload"
-	}
 	w.agent = New(Config{
 		Service: "web",
 		Name:    "web-0",
@@ -105,7 +101,7 @@ func newWorld(t *testing.T, s setup) *world {
 		Supervisor: w.sup,
 		Ring:       w.ring,
 		Stats:      s.stats,
-		Preload:    preload.Client{URL: s.preloadURL},
+		Preload:    s.store,
 		Shell: ptyshell.Config{
 			Shell: s.shell,
 			Env:   []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "PS1=$ "},

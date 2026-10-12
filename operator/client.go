@@ -141,9 +141,11 @@ func unexpected(what string) error {
 	return fmt.Errorf("operator: %s: draal answered with something else", what)
 }
 
-// Store asks for the jaccard-store server and the prefix to push to.
-func (c *Client) Store(ctx context.Context) (wire.StoreInfo, error) {
-	resp, err := c.call(ctx, "store", &wire.Request{Store: &wire.StoreRequest{}})
+// Store asks where the closures of a service are to be pushed: for the
+// endpoint ID of the store, which is draal's own, and the prefix of the
+// service.
+func (c *Client) Store(ctx context.Context, service string) (wire.StoreInfo, error) {
+	resp, err := c.call(ctx, "store", &wire.Request{Store: &wire.StoreRequest{Service: service}})
 	if err != nil {
 		return wire.StoreInfo{}, err
 	}

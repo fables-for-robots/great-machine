@@ -26,3 +26,13 @@ func ValidService(name string) error {
 	}
 	return nil
 }
+
+// StorePrefix returns what is put before the name of a store path to make
+// its reference in the store, for a store path of the service:
+// "/services/<service>/nix/store/". Every service has references of its
+// own, and the /nix/store of a pod is made of its service's alone. The
+// name of a service is a DNS label and needs no escaping; StorePrefix
+// does not check that service is one.
+func StorePrefix(service string) string {
+	return "/services/" + service + "/nix/store/"
+}

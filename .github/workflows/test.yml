@@ -54,6 +54,14 @@ jobs:
         run: go test -count=1 ./web/... ./cli/ ./e2e/
       - name: pid1
         run: scripts/test-pid1.sh
+      # The tests that need root and the kernel: the store of a zathras
+      # mounted with the kernel's NFS client, and what the launcher drops.
+      # They run in a container that is not privileged and has
+      # CAP_SYS_ADMIN and no AppArmor profile, which is what a pod's
+      # container has (deploy/pod.yaml): that this is enough to mount is
+      # part of what the step shows.
+      - name: linux, as root
+        run: scripts/test-linux.sh
       # Steps that test more are added above this line. The last steps
       # build the program as a release does: Nix builds the page by
       # itself and puts it into the program, whatever the steps above
@@ -67,12 +75,15 @@ jobs:
           # The program that Nix built has the page: its draal is asked for it.
           scripts/test-page.sh ./result/bin/great-machine
       # The image as a release builds it, and what a pod asks of it: that
-      # it runs with another store mounted over /nix/store.
+      # it has a /nix/store to mount the store on, and runs with a store
+      # mounted there.
       - name: image
         run: |
           nix build .#image --option allow-unsafe-native-code-during-evaluation true
           docker load < result
           docker run --rm --tmpfs /nix/store ghcr.io/fables-for-robots/great-machine:nix version
+          docker run --rm --entrypoint sh ghcr.io/fables-for-robots/great-machine:nix \
+            -c 'test -d /nix/store && test -z "$(ls -A /nix/store)" && test -d /var/cache/great-machine'
           docker run --rm --tmpfs /nix/store --entrypoint sh ghcr.io/fables-for-robots/great-machine:nix \
             -c 'test -d /tmp && test -s /etc/ssl/certs/ca-certificates.crt'
           # The draal of the image has the page.

@@ -11,12 +11,17 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/amber-store/jaccard-store/bucket/buckettest"
+	jsserver "github.com/amber-store/jaccard-store/server"
 
 	"github.com/fables-for-robots/great-machine/authz"
 	"github.com/fables-for-robots/great-machine/db"
@@ -25,8 +30,8 @@ import (
 	"github.com/fables-for-robots/great-machine/logring"
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/operator"
-	"github.com/fables-for-robots/great-machine/preload"
 	"github.com/fables-for-robots/great-machine/ptyshell"
+	"github.com/fables-for-robots/great-machine/storeserver"
 	"github.com/fables-for-robots/great-machine/supervisor"
 	"github.com/fables-for-robots/great-machine/testservice/build"
 	"github.com/fables-for-robots/great-machine/wire"
@@ -50,6 +55,11 @@ type options struct {
 	zathrases   int
 	settle      time.Duration // 0: 10 ms
 	stableAfter time.Duration // 0: 300 ms
+	// store gives draal its store, over a bucket in memory. The bucket
+	// sets the environment of the test, so a test that asks for it cannot
+	// be parallel. Without it draal answers great-machine's protocol
+	// alone, and a dial for the store's is refused.
+	store bool
 }
 
 // harness is a draal, its zathrases and an operator.
@@ -59,31 +69,39 @@ type harness struct {
 	storeDir string // what draal takes for /nix/store
 	binary   string // testservice, inside storeDir
 	dbPath   string
+	data     string          // the directory of the store's database
+	bucket   jsserver.Bucket // the bucket of the store; nil without options.store
 	draalKey node.Key
 	opKey    node.Key
 	pods     []*pod
 	op       *operator.Client
+	// podStore and podStart are what a pod that is started from now on
+	// fetches a closure with and starts its processes with. nil: the pod
+	// itself, which fetches nothing, and a start as it is. A test whose
+	// pod has a real store sets them (mount_linux_test.go).
+	podStore zathras.Preloader
+	podStart func(cmd *exec.Cmd, start func() error) error
 
 	mu        sync.Mutex
-	addr      netip.AddrPort // where draal listens now
-	draal     *draal.Draal   // the draal that runs now
+	addr      netip.AddrPort     // where draal listens now
+	draal     *draal.Draal       // the draal that runs now
+	store     *storeserver.Store // its store; nil without options.store
 	stopDraal func()
 }
 
 // pod is a zathras with all that belongs to it.
 type pod struct {
-	name    string
-	id      wire.ID
-	sup     *supervisor.Supervisor
-	ring    *logring.Ring
-	agent   *zathras.Agent
-	health  *httptest.Server
-	preload *httptest.Server
+	name   string
+	id     wire.ID
+	sup    *supervisor.Supervisor
+	ring   *logring.Ring
+	agent  *zathras.Agent
+	health *httptest.Server
 
-	mu        sync.Mutex
-	conn      node.Conn // the latest connection to draal
-	away      bool      // it does not dial draal: see keepAway
-	preloaded []string  // the bodies the preload endpoint was sent
+	mu    sync.Mutex
+	conn  node.Conn // the latest connection to draal
+	away  bool      // it does not dial draal: see keepAway
+	asked []string  // the store paths the store was asked to fetch
 }
 
 // start builds testservice into a store of the test, starts a draal, the
@@ -103,6 +121,10 @@ func start(t *testing.T, opts options) *harness {
 		opts:     opts,
 		storeDir: filepath.Join(dir, "store"),
 		dbPath:   filepath.Join(dir, "draal.sqlite"),
+		data:     filepath.Join(dir, "data"),
+	}
+	if opts.store {
+		h.bucket = buckettest.New(t)
 	}
 	h.binary = filepath.Join(h.storeDir, storeName, "bin", "testservice")
 	if err := os.MkdirAll(filepath.Dir(h.binary), 0o755); err != nil {
@@ -142,17 +164,44 @@ func (h *harness) startDraal() {
 	if err != nil {
 		h.t.Fatalf("db.Open: %v", err)
 	}
+	allow := authz.NewAllowlist([]wire.ID{h.opKey.ID()})
+	// The store is draal's own, answered on draal's endpoint, as the
+	// command puts the two together.
+	var store *storeserver.Store
+	var handlers map[string]func(node.Conn)
+	if h.opts.store {
+		store, err = storeserver.Open(context.Background(), storeserver.Config{Dir: h.data, Objects: h.bucket, Authz: allow, Log: quiet})
+		if err != nil {
+			database.Close()
+			h.t.Fatalf("storeserver.Open: %v", err)
+		}
+		handlers = map[string]func(node.Conn){storeserver.ALPN: store.ServeConn}
+	}
+	// What was opened is closed again, in the order of the command: the
+	// store is stopped, the endpoint closed, and then the databases.
+	closeAll := func(l node.Listener) {
+		if store != nil {
+			store.Stop()
+		}
+		if l != nil {
+			l.Close()
+		}
+		if store != nil {
+			store.Close()
+		}
+		database.Close()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	l, err := node.Listen(ctx, node.ListenConfig{Key: h.draalKey, Local: true, Log: quiet})
+	l, err := node.Listen(ctx, node.ListenConfig{Key: h.draalKey, Local: true, Handlers: handlers, Log: quiet})
 	if err != nil {
 		cancel()
-		database.Close()
+		closeAll(nil)
 		h.t.Fatalf("node.Listen: %v", err)
 	}
 	d := draal.New(draal.Config{
 		DB:             database,
-		Authz:          authz.NewAllowlist([]wire.ID{h.opKey.ID()}),
-		Store:          wire.StoreInfo{Server: h.draalKey.ID(), Prefix: "test/"},
+		Authz:          allow,
+		ID:             h.draalKey.ID(),
 		StoreDir:       h.storeDir,
 		Settle:         h.opts.settle,
 		StableAfter:    h.opts.stableAfter,
@@ -170,14 +219,14 @@ func (h *harness) startDraal() {
 	h.mu.Lock()
 	h.addr = l.LocalAddr()
 	h.draal = d
+	h.store = store
 	h.stopDraal = func() {
 		once.Do(func() {
 			cancel()
 			if err := <-served; err != nil {
 				h.t.Errorf("Serve: %v", err)
 			}
-			l.Close()
-			database.Close()
+			closeAll(l)
 		})
 	}
 	h.mu.Unlock()
@@ -222,8 +271,18 @@ func (h *harness) operator(key node.Key) *operator.Client {
 	return c
 }
 
+// Preload is the pod as the store of its zathras: it fetches nothing, and
+// notes what it was asked to fetch. The store of the tests is a directory
+// that is there from the start.
+func (p *pod) Preload(ctx context.Context, names []string) error {
+	p.mu.Lock()
+	p.asked = append(p.asked, names...)
+	p.mu.Unlock()
+	return nil
+}
+
 // startPod starts a zathras: its supervisor, its agent with a key of its
-// own, its health check and its preload endpoint.
+// own, its health check and its store.
 func (h *harness) startPod(name string) *pod {
 	h.t.Helper()
 	key, err := node.NewKey()
@@ -231,14 +290,13 @@ func (h *harness) startPod(name string) *pod {
 		h.t.Fatalf("NewKey: %v", err)
 	}
 	p := &pod{name: name, id: key.ID(), ring: logring.New(400, 16<<10)}
-	p.preload = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		p.mu.Lock()
-		p.preloaded = append(p.preloaded, string(body))
-		p.mu.Unlock()
-	}))
+	var store zathras.Preloader = p
+	if h.podStore != nil {
+		store = h.podStore
+	}
 	p.sup = supervisor.New(supervisor.Config{
 		Ring:        p.ring,
+		Start:       h.podStart,
 		StopTimeout: 5 * time.Second,
 		// A service of these tests that ends has ended quickly, however
 		// long the machine took to start it.
@@ -269,8 +327,8 @@ func (h *harness) startPod(name string) *pod {
 		},
 		Supervisor:  p.sup,
 		Ring:        p.ring,
-		Preload:     preload.Client{URL: p.preload.URL},
-		Shell:       ptyshell.Config{},
+		Preload:     store,
+		Shell:       ptyshell.Config{Start: h.podStart},
 		ReportEvery: 50 * time.Millisecond,
 		RedialMin:   50 * time.Millisecond,
 		RedialMax:   200 * time.Millisecond,
@@ -287,7 +345,6 @@ func (h *harness) startPod(name string) *pod {
 		cancel()
 		running.Wait()
 		p.health.Close()
-		p.preload.Close()
 	})
 	return p
 }
@@ -318,11 +375,12 @@ func (p *pod) comeBack() {
 	p.mu.Unlock()
 }
 
-// preloads returns everything the preload endpoint was sent.
-func (p *pod) preloads() string {
+// fetched returns the store paths the store of the zathras was asked to
+// fetch, by their names.
+func (p *pod) fetched() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return strings.Join(p.preloaded, "\n")
+	return slices.Clone(p.asked)
 }
 
 // healthz asks the health check, and returns the status and the body.

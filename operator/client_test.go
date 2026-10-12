@@ -108,15 +108,15 @@ func refuse(s node.Stream, code wire.Code, message string) {
 }
 
 func TestStore(t *testing.T) {
-	want := wire.StoreInfo{Server: nodetest.ID(9), Prefix: "nix/"}
+	want := wire.StoreInfo{Server: nodetest.ID(9), Prefix: "/services/web/nix/store/"}
 	_, c := connect(t, func(req *wire.Request, s node.Stream) {
-		if req.Store == nil {
-			refuse(s, wire.CodeBadRequest, "not a store request")
+		if req.Store == nil || req.Store.Service != "web" {
+			refuse(s, wire.CodeBadRequest, "not a store request for the service web")
 			return
 		}
 		answer(s, &wire.Response{Store: &want})
 	})
-	got, err := c.Store(t.Context())
+	got, err := c.Store(t.Context(), "web")
 	if err != nil || got != want {
 		t.Fatalf("Store = %+v, %v; want %+v", got, err, want)
 	}
@@ -190,7 +190,7 @@ func TestAnErrorOfDraalIsAWireError(t *testing.T) {
 			t.Errorf("%s = %v, want a *wire.Error with the code %s", what, err, code)
 		}
 	}
-	_, err := c.Store(ctx)
+	_, err := c.Store(ctx, "web")
 	check("Store", err, wire.CodeUnauthorized)
 	_, err = c.Rollout(ctx, wire.RolloutRequest{Service: "web"})
 	check("Rollout", err, wire.CodeUnauthorized)
@@ -215,7 +215,7 @@ func TestAnAnswerOfAnotherKindIsAnError(t *testing.T) {
 	_, c := connect(t, func(req *wire.Request, s node.Stream) {
 		answer(s, &wire.Response{Registered: &wire.Registered{}})
 	})
-	if _, err := c.Store(t.Context()); err == nil {
+	if _, err := c.Store(t.Context(), "web"); err == nil {
 		t.Error("Store took an answer that is no store")
 	}
 	if _, err := c.Watch(t.Context()); err == nil {
@@ -498,7 +498,7 @@ func TestARequestEndsWithItsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	failed := make(chan error, 1)
 	go func() {
-		_, err := c.Store(ctx)
+		_, err := c.Store(ctx, "web")
 		failed <- err
 	}()
 	cancel()
@@ -513,7 +513,7 @@ func TestCloseClosesTheConnection(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	wait(t, "the connection to end at draal", wait(t, "the connection", d.conns).Done())
-	if _, err := c.Store(t.Context()); err == nil {
+	if _, err := c.Store(t.Context(), "web"); err == nil {
 		t.Error("Store on a closed client returned no error")
 	}
 	if err := c.Close(); err != nil {

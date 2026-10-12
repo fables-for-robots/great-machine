@@ -1,9 +1,14 @@
-# draal, the controller: one of it, with a volume for its key and its
-# database.
+# draal, the controller, which is also the store of the fleet: one of it,
+# with a volume for its key and its databases, and an S3 bucket for the
+# packs of the store.
 #
 # What to change: the endpoint IDs of the operators (`great-machine id`
-# prints one), the jaccard-store server's endpoint ID and the prefix,
-# which the sidecars of the pods are given too.
+# prints one) and the bucket. The credentials of the bucket come from a
+# Secret that is made first:
+#
+#   kubectl create secret generic draal-s3 \
+#     --from-literal=AWS_ACCESS_KEY_ID=... \
+#     --from-literal=AWS_SECRET_ACCESS_KEY=...
 #
 # The endpoint ID of draal is what the pods and the operators need. draal
 # logs it when it starts:
@@ -11,9 +16,13 @@
 #   kubectl logs deployment/draal | grep -i 'endpoint'
 #
 # It is that of the key in the volume, and stays as long as the volume.
+# It is the endpoint ID of the store as well: a rollout pushes to it, and
+# the pods fetch from it.
 #
 # draal needs no Service: zathrases and operators reach it over iroh by
-# its endpoint ID.
+# its endpoint ID. The packs themselves travel between them and the
+# bucket, by URLs that draal signs: the laptop and the pods have to reach
+# the bucket under the name draal has for it.
 #
 # The web page of draal listens on the loopback address of the pod, port
 # 8080, where no other pod and no Service reaches it. A forward brings it
@@ -34,7 +43,9 @@ spec:
   accessModes: ["ReadWriteOnce"]
   resources:
     requests:
-      # A key and a database of rollouts: megabytes.
+      # A key, the database of rollouts and that of the store: megabytes.
+      # The database of the store is the only record of what the bucket
+      # holds: back the volume up.
       storage: 1Gi
 ---
 apiVersion: apps/v1
@@ -46,7 +57,9 @@ spec:
   replicas: 1
   # The old draal is gone before the new one starts: two would open the
   # same database, and evict each other at the relay, having one key.
-  # While there is none, every service goes on running.
+  # While there is none, every service goes on running, and a pod serves
+  # what it has fetched; what it has not, it can fetch when draal is
+  # back.
   strategy:
     type: Recreate
   selector:
@@ -57,30 +70,57 @@ spec:
       labels:
         app: draal
     spec:
+      # draal ends in its own time when it is told to: the web page has 5
+      # seconds for its connections, and the requests of the store that
+      # are under way have 10, and 10 more if one of them does not end.
+      # The kubelet waits longer than that before it kills draal.
+      terminationGracePeriodSeconds: 60
       containers:
         - name: draal
           # The same tag as the pods' app containers: draal and every
           # zathras are kept on one tag, because a draal and a zathras of
-          # different versions may not speak the same protocol. v0.1.0 is
-          # the first release, which exists once it has been tagged.
-          image: ghcr.io/fables-for-robots/great-machine:v0.1.0
+          # different versions may not speak the same protocol. v0.2.0 is
+          # the first release that keeps the store in draal, which exists
+          # once it has been tagged.
+          image: ghcr.io/fables-for-robots/great-machine:v0.2.0
           # The image's entrypoint is great-machine.
           args: ["draal"]
           env:
-            # Holds draal.key, created on first run, and draal.sqlite.
+            # Holds draal.key, created on first run, draal.sqlite and the
+            # database of the store, store.sqlite.
             - name: GREAT_MACHINE_DATA
               value: /data
             # Who may roll out, read logs and open shells: endpoint IDs
             # with commas between them. Without any, nobody can.
             - name: GREAT_MACHINE_OPERATORS
               value: "2222222222222222222222222222222222222222222222222222222222222222"
-            # Where `great-machine rollout` pushes closures to.
-            - name: JACCARD_SERVER
-              value: "0000000000000000000000000000000000000000000000000000000000000000"
-            # Put before the name of a store path as it is, to make its
-            # reference. The same value the sidecars have.
-            - name: JACCARD_PREFIX
-              value: /great-machine/nix/store/
+            # The bucket the packs of the store are kept in. The service
+            # that has it must honor conditional writes (If-None-Match on
+            # PUT), as AWS S3 does.
+            - name: GREAT_MACHINE_S3_BUCKET
+              value: my-packs
+            # The region of the bucket, which the URLs of the store are
+            # signed for. draal ends at its start without one, unless the
+            # Secret below has AWS_REGION.
+            - name: GREAT_MACHINE_S3_REGION
+              value: eu-central-1
+            # For an S3 service other than AWS: its URL, which the laptop
+            # and the pods are handed too and so have to reach under this
+            # name, and whether the bucket is named in the path of a URL
+            # and not in its host name. Such a service takes any region,
+            # or says which it wants.
+            # - name: GREAT_MACHINE_S3_ENDPOINT
+            #   value: https://s3.example.com
+            # - name: GREAT_MACHINE_S3_PATH_STYLE
+            #   value: "true"
+            # Where a pack is unpacked to be verified before the store
+            # takes it: a volume of its own, as it needs room for two
+            # packs of 16 GiB at the most (--store-verify-jobs times
+            # --store-max-pack-size), which is not the volume of the
+            # databases. The store makes a directory of its own in it,
+            # great-machine-scratch, and empties that one at every start.
+            - name: GREAT_MACHINE_STORE_SCRATCH
+              value: /scratch
             # Where the web page listens. This is the default, written
             # out: loopback, reached with `kubectl port-forward` (see the
             # top of this file). An empty value is no web page. Any
@@ -88,10 +128,21 @@ spec:
             # shell in every container, to whatever can reach the pod.
             - name: GREAT_MACHINE_WEB_ADDR
               value: "127.0.0.1:8080"
+          # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, and whatever else
+          # of the AWS SDK's settings the Secret holds.
+          envFrom:
+            - secretRef:
+                name: draal-s3
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: scratch
+              mountPath: /scratch
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: draal-data
+        # Of the node's own disk, and gone with the pod: nothing in it is
+        # kept from one run of draal to the next.
+        - name: scratch
+          emptyDir: {}

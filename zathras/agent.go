@@ -21,12 +21,21 @@ import (
 
 	"github.com/fables-for-robots/great-machine/logring"
 	"github.com/fables-for-robots/great-machine/node"
-	"github.com/fables-for-robots/great-machine/preload"
 	"github.com/fables-for-robots/great-machine/ptyshell"
 	"github.com/fables-for-robots/great-machine/stats"
 	"github.com/fables-for-robots/great-machine/supervisor"
 	"github.com/fables-for-robots/great-machine/wire"
 )
+
+// Preloader fetches the store paths of a closure before anything of it is
+// used: *storemount.Mount, the store of the zathras.
+type Preloader interface {
+	// Preload fetches the store paths of names, each the name of a store
+	// path without /nix/store/. Its error is the reason a prepare fails
+	// with: it names the store path that could not be fetched, and says
+	// why. It ends with ctx.
+	Preload(ctx context.Context, names []string) error
+}
 
 // Config is what an agent is made of.
 type Config struct {
@@ -42,8 +51,10 @@ type Config struct {
 	Ring *logring.Ring
 	// Stats reads the samples. nil: no samples.
 	Stats *stats.Reader
-	// Preload is the client of the sidecar, for prepare.
-	Preload preload.Client
+	// Preload is the store of the zathras, which a prepare has fetch the
+	// closure. nil: the zathras has no store of its own (--no-store);
+	// nothing is fetched, and a prepare is the check of the binary alone.
+	Preload Preloader
 	// Shell is what a shell session is started with. Term, Cols and Rows
 	// come with the request.
 	Shell ptyshell.Config

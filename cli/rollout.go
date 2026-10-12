@@ -30,7 +30,7 @@ func rolloutCommand() *cli.Command {
 			"with 1 when it halted or was superseded. An interrupt ends the following\n" +
 			"and not the rollout.",
 		Flags: operatorFlags(parallelFlag(), detachFlag(),
-			&cli.IntFlag{Name: "jobs", EnvVars: []string{"GREAT_MACHINE_JOBS"}, Value: 5,
+			&cli.IntFlag{Name: "jobs", EnvVars: []string{"GREAT_MACHINE_JOBS"}, Value: 20,
 				Usage: "store paths pushed at a time"},
 			&cli.StringFlag{Name: "temp-dir", EnvVars: []string{"GREAT_MACHINE_TEMP_DIR"},
 				Usage: "`DIR` in which the temporary stores of a push are made (default: the system's)"},
@@ -120,6 +120,9 @@ func readRollout(c *cli.Context) (rolloutConfig, error) {
 	if cfg.jobs < 1 {
 		return rolloutConfig{}, usageError("--jobs: %d is not a number of store paths to push at a time: want 1 or more", cfg.jobs)
 	}
+	if cfg.jobs > push.MaxJobs {
+		return rolloutConfig{}, usageError("--jobs: %d is more than %d store paths at a time, which is the most: the store answers 64 requests of a connection at a time, and a push has two under way when it goes from one step to the next", cfg.jobs, push.MaxJobs)
+	}
 	return cfg, nil
 }
 
@@ -164,7 +167,7 @@ func runRollout(ctx context.Context, cfg rolloutConfig, deps rolloutDeps, stdout
 	// The step lasts until the push says what the server has: asking
 	// draal where the store is, and the store what it holds.
 	p.begin("asking the store")
-	store, err := client.Store(ctx)
+	store, err := client.Store(ctx, cfg.service)
 	if err != nil {
 		return fmt.Errorf("asking draal for the store: %w", err)
 	}

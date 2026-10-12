@@ -179,11 +179,15 @@ type ShellOutput struct {
 
 // An operator and draal.
 
-// StoreRequest asks where closures are to be pushed.
-type StoreRequest struct{}
+// StoreRequest asks where the closures of a service are to be pushed.
+type StoreRequest struct {
+	Service string `json:"service"`
+}
 
-// StoreInfo is the jaccard-store server of the fleet and the prefix of the
-// references a push makes there.
+// StoreInfo is where the closures of a service are pushed to: the server,
+// which is draal itself, answering jaccard-store's protocol under its own
+// endpoint ID, and the prefix of the references a push makes there, which
+// is the service's own (StorePrefix).
 type StoreInfo struct {
 	Server ID     `json:"server"`
 	Prefix string `json:"prefix"`

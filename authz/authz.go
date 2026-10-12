@@ -9,8 +9,9 @@ import (
 // Operation is what a peer asks to do.
 type Operation string
 
-// The operations. OpRegister is what a zathras does; the others are an
-// operator's.
+// The operations. OpRegister is what a zathras does, and OpStorePull what
+// the mount of a zathras does, with a key of its own that draal does not
+// know; the others are an operator's.
 const (
 	OpRegister Operation = "register"
 	OpStore    Operation = "store"
@@ -21,15 +22,24 @@ const (
 	OpHistory  Operation = "history"
 	OpLogs     Operation = "logs"
 	OpShell    Operation = "shell"
+
+	// The two operations of the store, which draal answers on
+	// jaccard-store's protocol. OpStorePull is a pull of a reference.
+	// OpStoreWrite is everything else of that protocol: the three steps
+	// of a push, a list and a delete.
+	OpStorePull  Operation = "store-pull"
+	OpStoreWrite Operation = "store-write"
 )
 
 // Authorizer decides whether peer may do op on service. service is ""
-// for store and watch. A refusal is a *wire.Error with CodeUnauthorized.
+// for watch and for the two operations of the store. A refusal is a
+// *wire.Error with CodeUnauthorized.
 type Authorizer interface {
 	Authorize(peer wire.ID, op Operation, service string) error
 }
 
-// Allowlist lets every peer register and its operators do everything else.
+// Allowlist lets every peer register and pull from the store, and its
+// operators do everything else.
 type Allowlist struct {
 	operators map[wire.ID]struct{}
 }
@@ -49,10 +59,10 @@ func NewAllowlist(operators []wire.ID) Allowlist {
 }
 
 // Authorize returns nil when peer may do op on service: for OpRegister
-// always, and for every other operation when peer is an operator. The
-// refusal names the operation and the peer.
+// and OpStorePull always, and for every other operation when peer is an
+// operator. The refusal names the operation and the peer.
 func (a Allowlist) Authorize(peer wire.ID, op Operation, service string) error {
-	if op == OpRegister {
+	if op == OpRegister || op == OpStorePull {
 		return nil
 	}
 	if _, ok := a.operators[peer]; ok {

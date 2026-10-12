@@ -16,7 +16,7 @@ import (
 // draal serves conn: a request was asked on it and its stream is closed.
 func goroutines(t *testing.T, conn node.Conn) int {
 	t.Helper()
-	s, _, _ := ask(t, conn, &wire.Request{Store: &wire.StoreRequest{}})
+	s, _, _ := ask(t, conn, &wire.Request{Store: &wire.StoreRequest{Service: "web"}})
 	s.Close()
 	return runtime.NumGoroutine()
 }
@@ -142,7 +142,7 @@ func TestARefusedStreamIsClosedWithinRefuseWait(t *testing.T) {
 	before := goroutines(t, stranger)
 
 	cases := map[string]*wire.Request{
-		"store of a stranger":        {Store: &wire.StoreRequest{}},
+		"store of a stranger":        {Store: &wire.StoreRequest{Service: "web"}},
 		"shell of a stranger":        {Shell: &wire.ShellRequest{Zathras: operatorID}},
 		"a register with a bad name": {Register: &wire.Register{Service: "web", Name: "a b", State: idle()}},
 	}
