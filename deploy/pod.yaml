@@ -26,23 +26,37 @@ spec:
       image: ghcr.io/fables-for-robots/great-machine:v0.2.0
       command: ["great-machine", "zathras"]
       securityContext:
-        # zathras mounts the store. That takes CAP_SYS_ADMIN, and the
-        # runtime's AppArmor profile denies it to a container, so the
-        # container has no profile. It is not privileged: it has the
-        # /proc, the /sys and the devices of any container. The service
-        # and the shells are started without the capability, and without
-        # a way to gain it.
+        # zathras mounts the store. That takes CAP_SYS_ADMIN; and the
+        # runtime's AppArmor profile denies a container every mount,
+        # whatever its capabilities, so the container has no profile. It
+        # is not privileged: it is started with the /proc, the /sys and
+        # the devices of any container. The service and the shells are
+        # started without the capability, and without a way to gain it
+        # in the container. What they can do that they could not in a
+        # container without the capability is make a user namespace of
+        # their own: see "Pod" in the README.
         #
-        # appArmorProfile is a field of Kubernetes 1.30. Before it, this
-        # annotation on the pod says the same:
+        # appArmorProfile is a field of Kubernetes 1.30. On a cluster
+        # before it, take the field out, and put this annotation into
+        # the metadata of the pod (of the template, in a Deployment):
         #   container.apparmor.security.beta.kubernetes.io/app: unconfined
+        #
+        # A namespace that enforces the Pod Security Standards has to be
+        # at the level `privileged` for this pod: the capability and the
+        # absent profile are beyond `baseline`.
         capabilities:
           add: ["SYS_ADMIN"]
         appArmorProfile:
           type: Unconfined
+        # The runtime's seccomp profile, written out because a pod that
+        # says nothing has none at all on most clusters. It lets a
+        # container that has CAP_SYS_ADMIN mount; the tests of this
+        # repository mount under Docker's.
+        seccompProfile:
+          type: RuntimeDefault
         # Where that is not enough, as on nodes with SELinux, which lets
         # no container that is not privileged mount NFS, the container is
-        # privileged instead of the two above:
+        # privileged instead of the capability and the AppArmor profile:
         #   privileged: true
         # and the service is given a user that is not root, with
         # GREAT_MACHINE_USER below: in a privileged container root can
