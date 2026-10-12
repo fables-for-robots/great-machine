@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 
 	"github.com/amber-store/jaccard-nfs-nix-store/preload"
 	"github.com/amber-store/jaccard-nfs-nix-store/refs"
@@ -27,6 +28,9 @@ var connect = refs.Connect
 type Mount struct {
 	service string
 	sidecar *sidecar.Sidecar
+
+	stop    sync.Once
+	stopErr error
 }
 
 // Start makes a key, opens the cache, serves it over NFS on a loopback
@@ -122,11 +126,20 @@ func (m *Mount) Preload(ctx context.Context, names []string) error {
 
 // Stop takes the mount away and stops the server, in the order that
 // jaccard-nfs-nix-store's Sidecar.Stop keeps: the mount goes while the
-// server still answers, and the server goes on until the kernel has let
-// go of it.
+// server still answers. A mount that is in use is detached all the same,
+// and the server waits a few seconds for the kernel to let go of it and
+// then ends. So Stop does not wait for a program that still runs from
+// the store: such a program gets an error, or SIGBUS, when it next needs
+// a part of a file that it has not read. Whoever has the mount stops
+// what runs from it first.
+//
+// Stop stops once: a second call returns what the first did, and takes
+// no mount away that was made on the directory since.
 func (m *Mount) Stop() error {
-	if err := m.sidecar.Stop(); err != nil {
-		return fmt.Errorf("storemount: %w", err)
-	}
-	return nil
+	m.stop.Do(func() {
+		if err := m.sidecar.Stop(); err != nil {
+			m.stopErr = fmt.Errorf("storemount: %w", err)
+		}
+	})
+	return m.stopErr
 }

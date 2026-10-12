@@ -370,6 +370,35 @@ func TestStopAndACacheOfAnotherService(t *testing.T) {
 	}
 }
 
+// Stop stops once: a second call of a mount that is stopped returns what
+// the first did, and takes no mount away that was made on the directory
+// since.
+func TestStopOfAStoppedMountLeavesALaterMount(t *testing.T) {
+	needsRoot(t)
+	s := newStore(t)
+	s.push("web", storePath(t, t.TempDir(), "aaa-one-1.0"))
+	dir, cache := t.TempDir(), t.TempDir()
+	first := s.mount("web", dir, cache)
+	if err := first.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	second := s.mount("web", dir, cache)
+	if err := first.Stop(); err != nil {
+		t.Errorf("Stop of a mount that is stopped = %v, want what the first Stop returned", err)
+	}
+	if !mounted(t, dir) {
+		t.Fatal("the Stop of a mount that was stopped took the mount made since away")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := second.Preload(ctx, []string{"aaa-one-1.0"}); err != nil {
+		t.Errorf("Preload through the later mount: %v", err)
+	}
+	if content, err := os.ReadFile(filepath.Join(dir, "aaa-one-1.0", "share", "name")); err != nil || string(content) != "aaa-one-1.0\n" {
+		t.Errorf("the file of a store path through the later mount: %q, %v", content, err)
+	}
+}
+
 // The process that serves the store starts programs from it, through a
 // launcher: the service, of all things, is one. The process that is
 // started stands for a moment between the two, and the collector of this
