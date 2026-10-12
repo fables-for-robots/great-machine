@@ -693,6 +693,10 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
 - **The cache** is a volume of the pod, so that a container that was
   restarted finds what was fetched. It holds every store path the pod
   has fetched, twice, and grows until the pod is gone.
+  zathras makes the directory its own to write when it starts,
+  whatever the volume came as: a service of `GREAT_MACHINE_USER` cannot
+  put files of its own in the place of the store's, as a service that is
+  root can.
 - **The node** needs the kernel's NFSv4.1 client.
 - **The environment of the service is that of the container.** What the
   program needs of settings and secrets is put on the app container.
