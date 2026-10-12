@@ -604,13 +604,14 @@ every address: the kubelet asks at the address of the pod, not on loopback.
 - **The launcher** is one thread of zathras, which has dropped
   `CAP_SYS_ADMIN` from its bounding set and set `no_new_privs`. The
   service and every shell are started from it, and so inherit both; with
-  `--user` they are that user, without any capability, and are given the
-  pipes and the terminal they are started on, so that they can open
-  `/dev/stdout` or their terminal anew.
+  `--user` they are that user, without any capability in the container,
+  and are given the pipes and the terminal they are started on, so that
+  they can open `/dev/stdout` or their terminal anew.
 - **What the launcher does not take away** is user namespaces. A
-  runtime's seccomp profile lets `unshare`, `mount` and `setns` through
-  for every process of a container that was given `CAP_SYS_ADMIN`, and
-  refuses them in a container without it. The service and the shells
+  runtime's seccomp profile keeps some system calls for containers that
+  were given `CAP_SYS_ADMIN`, `unshare`, `setns`, `clone` for a new
+  namespace and the calls that mount among them, and lets them through
+  for every process of such a container. The service and the shells
   cannot mount in the container, but they can make a user namespace of
   their own, as root or as another user, and are root in it: over what
   that namespace holds, and over nothing of the container. Nothing

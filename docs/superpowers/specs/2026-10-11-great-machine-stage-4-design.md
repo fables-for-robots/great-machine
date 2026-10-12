@@ -56,7 +56,8 @@ It is done when:
   app container has `CAP_SYS_ADMIN` and AppArmor `Unconfined` and nothing
   else beyond a container's defaults;
 - the service and a shell of a zathras have neither `CAP_SYS_ADMIN` nor a
-  way to gain it, which `/proc/self/status` in a shell shows;
+  way to gain it in the container, which `/proc/self/status` in a shell
+  shows;
 - nothing listens in the pod for a list of store paths to fetch;
 - every service has its own references in the store, and the `/nix/store`
   of a pod is made of its service's alone;
@@ -145,8 +146,10 @@ A refusal is the store's answer with an error of jaccard-store's protocol,
 code `bad_request` (it has no code for a refusal) and the message
 `unauthorized: <operation> is for operators`, and is logged with the peer
 and the operation, as a refusal of draal's own protocol is. A push begins
-by asking what the store has, so the refusal that `great-machine rollout`
-prints for a key that is no operator's names `list`.
+by asking what the store has, so the refusal that a push ends with, for
+a key that is no operator's, names `list`. `great-machine rollout` does
+not get that far with such a key: it first asks draal where the store
+is, which is an operator's to ask, and prints draal's own refusal.
 
 ### 3.4 What draal accepts on the store's protocol
 
@@ -370,19 +373,22 @@ What `CAP_SYS_ADMIN` adds is taken away from the service and the shells
 by the launcher.
 
 Not all of it, as the execution of this stage found. A runtime's default
-seccomp profile lets `unshare`, `mount` and `setns` through for every
-process of a container that was given `CAP_SYS_ADMIN`, and refuses them
-in a container without it. The service and the shells, started without
-the capability, cannot mount in the container; but they can make a user
-namespace of their own, as root or as another user, and are root in it,
-over what that namespace holds and over nothing of the container
-(`unshare -Urm` and a `tmpfs` mounted there, seen in a container of this
-stage; `Operation not permitted` in one of Docker's defaults). That is a
-part of the kernel a container without the capability does not reach.
-Nothing in this stage closes it. A seccomp filter set by the launcher's
-thread, which `no_new_privs` allows it to set, would; so should a
-profile of the pod's own that lets `mount` through and not the other
-two.
+seccomp profile keeps some system calls for containers that were given
+`CAP_SYS_ADMIN`: `unshare`, `setns`, `clone` for a new namespace and the
+calls that mount among them, with `bpf`, `perf_event_open` and others.
+It lets them through for every process of such a container, and most of
+them the kernel then refuses a process that has not the capability
+itself; making a user namespace it does not. The service and the shells,
+started without the capability, cannot mount in the container; but they
+can make a user namespace of their own, as root or as another user, and
+are root in it, over what that namespace holds and over nothing of the
+container (`unshare -Urm` and a `tmpfs` mounted there, seen in a
+container of this stage; `Operation not permitted` in one of Docker's
+defaults). That is a part of the kernel a container without the
+capability does not reach. Nothing in this stage closes it. A seccomp
+filter set by the launcher's thread, which `no_new_privs` allows it to
+set, would; so should a profile of the pod's own that lets the calls
+that mount through and none of the others.
 
 `appArmorProfile` is a field of Kubernetes 1.30; before it, the
 annotation `container.apparmor.security.beta.kubernetes.io/app:
@@ -403,9 +409,10 @@ before anything else does three things to its thread alone:
 
 A program root executes gets the bounding set and the inheritable set as
 its capabilities, so the service and the shells have what the container
-has, but `CAP_SYS_ADMIN`, and cannot gain it: not by a setuid program nor
-by file capabilities, and the mount is `nosuid` besides. The other
-threads of zathras keep `CAP_SYS_ADMIN`, and mount and unmount with it.
+has, but `CAP_SYS_ADMIN`, and cannot gain it in the container: not by a
+setuid program nor by file capabilities, and the mount is `nosuid`
+besides. The other threads of zathras keep `CAP_SYS_ADMIN`, and mount
+and unmount with it.
 
 - **The thread stays the launcher's.** The Go runtime makes no new thread
   from a locked one, and ends a locked thread whose goroutine returns, so

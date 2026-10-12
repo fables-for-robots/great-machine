@@ -282,18 +282,21 @@ with its own environment and working directory, and:
 
 - **It mounts the store of its service on `/nix/store`** when it starts,
   and ends at once, saying what the container lacks, when it cannot (see
-  [Pod](#pod)). The store is an NFS server inside zathras, on a loopback
-  port, that only zathras mounts; a store path is fetched from draal the
-  first time it is needed, and every path of a rollout before the
-  rollout touches the service. What was fetched is kept in
-  `--store-cache`, twice: as it came, and as plain files. Nothing is
-  removed from it. A cache is of one draal and one service.
+  [Pod](#pod)). It ends as well where `/nix/store` is there and holds
+  something, which the mount would hide from every process of the
+  machine: `--no-store` is for such a machine. The store is an NFS
+  server inside zathras, on a loopback port, that only zathras mounts; a
+  store path is fetched from draal the first time it is needed, and
+  every path of a rollout before the rollout touches the service. What
+  was fetched is kept in `--store-cache`, twice: as it came, and as
+  plain files. Nothing is removed from it. A cache is of one draal and
+  one service.
 - **The service and the shells run without `CAP_SYS_ADMIN`**, which
   zathras itself needs to mount, and cannot gain it in the container
   ([Pod](#pod) says what that leaves them). With `--user` they run as
-  that user and group, with no capability at all; their standard output
-  and standard error, and the terminal of a shell, are theirs, so a
-  program that opens `/dev/stdout` anew can.
+  that user and group, with no capability at all in the container; their
+  standard output and standard error, and the terminal of a shell, are
+  theirs, so a program that opens `/dev/stdout` anew can.
 - **A service that ends is started again**, whatever its exit status: at
   once if it ran for 30 seconds or longer, and otherwise after a delay of
   1 second, then twice as long each time, up to 2 minutes.
@@ -668,18 +671,22 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
   cannot mount there, nor undo what zathras mounted. With
   `GREAT_MACHINE_USER` they are not root either.
 - **What the service has that it would not have in an ordinary
-  container** is user namespaces. A runtime's seccomp profile lets
-  `unshare`, `mount` and `setns` through for every process of a
-  container that was given `CAP_SYS_ADMIN`, the service among them, and
-  refuses them in a container without it. So the service and the shells,
-  as root or as another user, can make a user namespace of their own and
-  are root in it, with every capability over what that namespace holds:
-  they can mount a `tmpfs` there. That gives them nothing over the
-  container, the store or zathras; it is a part of the kernel that a
-  container otherwise does not reach. Nothing in this release closes it.
-  A seccomp profile of the node's (`type: Localhost`) that is the
-  runtime's for a container without the capability, with `mount` and
-  `umount2` let through, should; this repository has not tried one.
+  container** is user namespaces. A runtime's seccomp profile keeps some
+  system calls for containers that were given `CAP_SYS_ADMIN`:
+  `unshare`, `setns`, `clone` for a new namespace and the calls that
+  mount among them, with `bpf`, `perf_event_open` and others. It lets
+  them through for every process of such a container, the service among
+  them. Most of them the kernel itself then refuses a process that has
+  not the capability; making a user namespace it does not. So the
+  service and the shells, as root or as another user, can make a user
+  namespace of their own and are root in it, with every capability over
+  what that namespace holds: they can mount a `tmpfs` there. That gives
+  them nothing over the container, the store or zathras; it is a part of
+  the kernel that a container otherwise does not reach. Nothing in this
+  release closes it. A seccomp profile of the node's (`type: Localhost`)
+  that is the runtime's for a container without the capability, with
+  `mount` and `umount2` let through, should; this repository has not
+  tried one.
 - **Where that is not enough**, as on nodes with SELinux, which lets no
   container that is not privileged mount NFS: `privileged: true` in the
   place of the capability and the AppArmor profile, **and**
@@ -692,11 +699,11 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
   is gone with the container.
 - **The cache** is a volume of the pod, so that a container that was
   restarted finds what was fetched. It holds every store path the pod
-  has fetched, twice, and grows until the pod is gone.
-  zathras makes the directory its own to write when it starts,
-  whatever the volume came as: a service of `GREAT_MACHINE_USER` cannot
-  put files of its own in the place of the store's, as a service that is
-  root can.
+  has fetched, twice, and grows until the pod is gone. zathras makes the
+  directory its own to write when it starts, whatever the volume came
+  as, and leaves what is in it as it was: in a volume that is the pod's
+  own and new, a service of `GREAT_MACHINE_USER` cannot put files of its
+  own in the place of the store's, as a service that is root can.
 - **The node** needs the kernel's NFSv4.1 client.
 - **The environment of the service is that of the container.** What the
   program needs of settings and secrets is put on the app container.
@@ -798,8 +805,10 @@ it, so:
    services, their generations and their rollouts are kept.
 2. **Every pod becomes one container**, as in
    [`deploy/pod.yaml`](deploy/pod.yaml): no sidecar, no `store` volume,
-   the `securityContext`, the `cache` volume. draal and the pods change
-   together, as with any release.
+   the `securityContext`, the `cache` volume. draal, the pods and the
+   operator's own program change together, as with any release: a
+   `great-machine rollout` of v0.1.0 is refused by a draal of v0.2.0,
+   which wants to be told the service when it is asked for the store.
 3. **Every service is rolled out once more**, with the binary it runs if
    nothing else is to change. draal's store begins empty: what the old
    server holds is not taken over, and the stable generation of a

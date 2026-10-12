@@ -438,9 +438,11 @@ func TestAStrangerMayNotWrite(t *testing.T) {
 	}
 }
 
-// What great-machine rollout prints when the key it runs with is no
-// operator's: the push of this module asks the store what it has before
-// it pushes, and that is refused in words a person understands.
+// What a push prints when the key it runs with is no operator's: the push
+// of this module asks the store what it has before it pushes, and that
+// is refused in words a person understands. great-machine rollout does
+// not get this far with such a key: it asks draal for the store first,
+// and is refused there.
 func TestAPushByNoOperatorSaysSo(t *testing.T) {
 	w := start(t, nil)
 	dir := storePath(t, "abc-web", "the program of web")
