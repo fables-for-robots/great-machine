@@ -7,8 +7,10 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/fables-for-robots/great-machine/launcher"
@@ -53,6 +55,24 @@ func mountedAs(t *testing.T, dir string) string {
 	return fstype
 }
 
+// asked is the store of a pod that notes what it is asked to fetch before
+// it fetches it. The mount fetches a store path when it is first looked
+// up as well, so a prepare that asked for nothing would not show in what
+// the mount holds afterwards.
+type asked struct {
+	*storemount.Mount
+
+	mu    sync.Mutex
+	names [][]string
+}
+
+func (a *asked) Preload(ctx context.Context, names []string) error {
+	a.mu.Lock()
+	a.names = append(a.names, slices.Clone(names))
+	a.mu.Unlock()
+	return a.Mount.Preload(ctx, names)
+}
+
 // The whole of a rollout as a pod has it, without a stand-in between the
 // laptop and the service: the closure is pushed to draal's own endpoint
 // ID under the prefix of the service; a zathras whose store is a real
@@ -83,9 +103,18 @@ func TestARolloutIntoAMountedStore(t *testing.T) {
 		t.Fatalf("pushing the store path: %+v, %v", res, err)
 	}
 
+	// The launcher first, as the command has it: a zathras that could
+	// not keep its capability from what it starts would not mount.
+	l, err := launcher.New(launcher.Config{Log: quiet})
+	if err != nil {
+		t.Fatalf("launcher.New: %v", err)
+	}
+	t.Cleanup(l.Close)
+
 	// The pod: its store is mounted over that same directory, which is
 	// where draal takes the binary of a rollout to be. From here on
 	// nothing is in it but what the mount has fetched.
+	var pid int
 	mount, err := storemount.Start(storemount.Config{
 		Server:  h.draalKey.ID(),
 		Addrs:   []netip.AddrPort{h.addr},
@@ -100,6 +129,11 @@ func TestARolloutIntoAMountedStore(t *testing.T) {
 	// Registered before the pod is started, so that it happens after the
 	// pod has stopped its service: the cleanups run last one first.
 	t.Cleanup(func() {
+		// The pod has stopped its service by now: the store is stopped
+		// when what ran from it has ended.
+		if pid != 0 && alive(pid) {
+			t.Errorf("process %d, the service, still runs when the store is to be stopped", pid)
+		}
 		if err := mount.Stop(); err != nil {
 			t.Errorf("stopping the mount: %v", err)
 		}
@@ -113,13 +147,8 @@ func TestARolloutIntoAMountedStore(t *testing.T) {
 	if entries, err := os.ReadDir(h.storeDir); err != nil || len(entries) != 0 {
 		t.Fatalf("the store of the pod lists %d entries (%v) before anything was fetched, want none", len(entries), err)
 	}
-
-	l, err := launcher.New(launcher.Config{Log: quiet})
-	if err != nil {
-		t.Fatalf("launcher.New: %v", err)
-	}
-	t.Cleanup(l.Close)
-	h.podStore, h.podStart = mount, l.Start
+	store := &asked{Mount: mount}
+	h.podStore, h.podStart = store, l.Start
 	p := h.startPod("web-0")
 	h.pods = append(h.pods, p)
 	h.fleetWhere("the zathras to register", func(f wire.Fleet) bool { return len(zathrasesOf(f)) == 1 })
@@ -132,7 +161,22 @@ func TestARolloutIntoAMountedStore(t *testing.T) {
 	if !ok || z.State.Phase != wire.PhaseRunning || z.State.PID == 0 {
 		t.Fatalf("the zathras is %+v after the rollout completed, want its service running", z)
 	}
-	pid := z.State.PID
+	pid = z.State.PID
+
+	// The prepare asked the store for the closure of the rollout, by
+	// name. The mount would have fetched the store path in any case, when
+	// the binary was first looked at.
+	store.mu.Lock()
+	fetched := slices.Clone(store.names)
+	store.mu.Unlock()
+	if len(fetched) == 0 {
+		t.Errorf("the prepare did not ask the store of the pod to fetch anything")
+	}
+	for _, names := range fetched {
+		if !slices.Equal(names, []string{storeName}) {
+			t.Errorf("the store of the pod was asked to fetch %q, want the closure of the rollout, %q", names, storeName)
+		}
+	}
 
 	// What runs is the binary of the mount, and no copy of it.
 	if exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err != nil || exe != h.binary {
@@ -143,6 +187,13 @@ func TestARolloutIntoAMountedStore(t *testing.T) {
 	}
 	// It was started without the capability this process mounted with,
 	// and cannot gain it.
+	//
+	// This process has the capability, or it had not mounted: what is
+	// read of the service below is read of a process that could have it.
+	mine := statusOf(t, os.Getpid())
+	if bits, err := strconv.ParseUint(mine["CapEff"], 16, 64); err != nil || bits&(1<<capSysAdmin) == 0 {
+		t.Fatalf("CapEff of this process is %q (%v), want CAP_SYS_ADMIN in it", mine["CapEff"], err)
+	}
 	status := statusOf(t, pid)
 	for _, set := range []string{"CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"} {
 		bits, err := strconv.ParseUint(status[set], 16, 64)
