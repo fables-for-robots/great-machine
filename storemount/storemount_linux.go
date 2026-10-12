@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/amber-store/jaccard-nfs-nix-store/preload"
 	"github.com/amber-store/jaccard-nfs-nix-store/refs"
@@ -20,13 +19,9 @@ import (
 )
 
 // connect dials the store for jaccard-store's protocol. The tests replace
-// it.
+// it. It is no field of Config, whose file is built for every system:
+// its type is of jaccard-nfs-nix-store, which is for Linux alone here.
 var connect = refs.Connect
-
-// pullTimeout is how long a fetch that fails is tried again for. 0: what
-// jaccard-nfs-nix-store has, 2 minutes. A variable, so that the tests
-// make it short.
-var pullTimeout time.Duration
 
 // Mount is the store of a zathras, served and mounted.
 type Mount struct {
@@ -83,7 +78,8 @@ func Start(cfg Config) (*Mount, error) {
 		Listen:       "127.0.0.1:0",
 		Mount:        dir,
 		MountOptions: sidecar.DefaultMountOptions,
-		PullTimeout:  pullTimeout,
+		PullTimeout:  cfg.PullTimeout,
+		AdoptTimeout: cfg.AdoptTimeout,
 		// No preload endpoint: Preload is called.
 		Log: log,
 	})

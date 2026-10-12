@@ -224,16 +224,16 @@ func TestPreload(t *testing.T) {
 // does not have: the error says which, and why.
 func TestAStorePathThatCouldNotBeFetched(t *testing.T) {
 	needsRoot(t)
-	reach, wait := connect, pullTimeout
+	reach := connect
 	connect = func(context.Context, jnode.DialConfig) (refs.Conn, error) {
 		return nil, errors.New("no way to the store")
 	}
-	pullTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { connect, pullTimeout = reach, wait })
+	t.Cleanup(func() { connect = reach })
 
 	dir := t.TempDir()
 	t.Cleanup(func() { jmount.Detach(dir) })
-	m, err := Start(Config{Server: anID(t), Service: "web", Cache: t.TempDir(), Dir: dir, Log: quiet})
+	m, err := Start(Config{Server: anID(t), Service: "web", Cache: t.TempDir(), Dir: dir,
+		PullTimeout: 300 * time.Millisecond, Log: quiet})
 	if err != nil {
 		t.Fatalf("Start without a store that can be reached: %v: the store is needed when a path is named, and not before", err)
 	}

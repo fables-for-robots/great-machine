@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"time"
 
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/wire"
@@ -40,6 +41,15 @@ type Config struct {
 	// Dir is the directory the store is mounted on, which is made if it
 	// is not there. "": DefaultDir.
 	Dir string
+	// PullTimeout is how long a fetch that fails is tried again for. 0:
+	// what jaccard-nfs-nix-store has, 2 minutes.
+	PullTimeout time.Duration
+	// AdoptTimeout is how long a mount that an earlier run left on Dir
+	// is waited for before it is detached and the store mounted anew.
+	// Such a mount is of a server that is gone, on another port: it is
+	// never reached, and the time is only waited out. 0: what
+	// jaccard-nfs-nix-store has, 10 seconds.
+	AdoptTimeout time.Duration
 	// Log is where the mount logs. nil: slog.Default().
 	Log *slog.Logger
 }
