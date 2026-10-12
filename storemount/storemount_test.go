@@ -4,14 +4,24 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
-const draal = wire.ID("d5aa1000000000000000000000000000000000000000000000000000000000d5")
+// anID returns the endpoint ID of a key that is made for the test: one a
+// store could have.
+func anID(t *testing.T) wire.ID {
+	t.Helper()
+	key, err := node.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key.ID()
+}
 
 // What a mount cannot be made of is said before anything is opened.
 func TestWhatAMountIsMadeOf(t *testing.T) {
-	good := Config{Server: draal, Service: "web", Cache: "/var/cache/great-machine"}
+	good := Config{Server: anID(t), Service: "web", Cache: "/var/cache/great-machine"}
 	if err := good.check(); err != nil {
 		t.Errorf("a config with a server, a service and a cache: %v", err)
 	}
@@ -19,10 +29,11 @@ func TestWhatAMountIsMadeOf(t *testing.T) {
 		change func(*Config)
 		says   string
 	}{
-		"no server":                 {func(c *Config) { c.Server = "" }, "server"},
-		"no service":                {func(c *Config) { c.Service = "" }, "service"},
-		"a service that is no name": {func(c *Config) { c.Service = "Web/1" }, `"Web/1"`},
-		"no cache":                  {func(c *Config) { c.Cache = "" }, "cache"},
+		"no server":                       {func(c *Config) { c.Server = "" }, "server"},
+		"a server that is no endpoint ID": {func(c *Config) { c.Server = "d5aa1" }, `"d5aa1"`},
+		"no service":                      {func(c *Config) { c.Service = "" }, "service"},
+		"a service that is no name":       {func(c *Config) { c.Service = "Web/1" }, `"Web/1"`},
+		"no cache":                        {func(c *Config) { c.Cache = "" }, "cache"},
 	} {
 		cfg := good
 		c.change(&cfg)

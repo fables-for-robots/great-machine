@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net/netip"
 
+	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
@@ -47,6 +48,9 @@ type Config struct {
 func (cfg Config) check() error {
 	if cfg.Server == "" {
 		return errors.New("storemount: no server: the endpoint ID of draal is needed")
+	}
+	if _, err := node.ParseID(string(cfg.Server)); err != nil {
+		return fmt.Errorf("storemount: the server is no endpoint ID: %w", err)
 	}
 	if cfg.Service == "" {
 		return errors.New("storemount: no service")
