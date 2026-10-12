@@ -392,7 +392,8 @@ file by file, as the tree this plan was checked in.
 | Task 13, the README, the design, the spec | **what the launcher does not take away**: a process it starts cannot mount in the container, and can make a user namespace of its own; with it "in the container" where the documents said that the service cannot gain the capability; whose the cache is; a `/nix/store` that holds something; the operator's program at an upgrade; what draal answers to the flags that are gone | The reviews of Tasks 8, 11 and 13 and the final review. The first is the first of what stays open, below. |
 | The spec's §3.3, Review Focus 4 and Decision 6 above | `great-machine rollout` does not print the store's refusal for a key that is no operator's: draal refuses it first | The final review. |
 | Task 6, Step 40, and Tasks 10 and 13, the builds | the page was not looked at in a browser again; the build for Linux by Nix and the image were not made | No browser and no Linux builder in the execution. The page's files are those that were looked at when the plan was written. |
-| Task 14 | not carried out | It needs a cluster. |
+| Task 13, `flake.nix` | the image is made without store paths (`includeStorePaths = false`) | The first run of `test.yml`: the image's `/nix/store` held `tzdata`, `mailcap` and `iana-etc`, which the Go of nixpkgs names in every program it builds, and busybox, which names itself; Nix put into the image what the copied files name, and a zathras does not mount over a directory that holds something. The plan's own check of the image found it, the first time it was run. |
+| Task 14 | not carried out; the release was asked for without it | It needs a cluster. |
 | Commits | each ends with the attribution of the agent that made it; the first eight were rewritten for that line before anything was pushed | The agents' sessions say so. |
 
 What stays open, each with its reason in the ledger:
@@ -406,10 +407,16 @@ What stays open, each with its reason in the ledger:
   and is root in it, which a container without the capability is refused.
   The documents say so. What would close it, a seccomp filter set by the
   launcher's thread, is no part of this stage.
-- **No run on a kernel with AppArmor, on x86_64, of the Linux build by
-  Nix, or of the image.** The first run of `test.yml` on GitHub is all
-  four, and the merge waits for it.
-- **Task 14**, the cluster, before the release is tagged.
+- **The first run of `test.yml` on GitHub** (pull request 4) was the
+  first on a kernel with AppArmor, on x86_64, of the Linux build by Nix
+  and of the image. Every step passed but the last: the image's
+  `/nix/store` was not empty (the table above has why), and a zathras of
+  that image would have ended at its start. The image is mended, and the
+  merge waits for the run of the mended one.
+- **Task 14**, the cluster, was not carried out: the human partner asked
+  for the merge and the release without it. What only a cluster shows
+  (the kubelet's own AppArmor and seccomp, a pod's volumes, a rollout
+  into pods) is first seen with v0.2.0 itself.
 - **What a review asked for and the controller did not do**: no `recover`
   around a handler of a connection of the store (a panic there ends
   draal, as one in draal's own protocol does); `--jaccard-server` and
