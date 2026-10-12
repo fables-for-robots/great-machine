@@ -289,10 +289,11 @@ with its own environment and working directory, and:
   `--store-cache`, twice: as it came, and as plain files. Nothing is
   removed from it. A cache is of one draal and one service.
 - **The service and the shells run without `CAP_SYS_ADMIN`**, which
-  zathras itself needs to mount, and cannot gain it. With `--user` they
-  run as that user and group, with no capability at all; their standard
-  output and standard error, and the terminal of a shell, are theirs, so
-  a program that opens `/dev/stdout` anew can.
+  zathras itself needs to mount, and cannot gain it in the container
+  ([Pod](#pod) says what that leaves them). With `--user` they run as
+  that user and group, with no capability at all; their standard output
+  and standard error, and the terminal of a shell, are theirs, so a
+  program that opens `/dev/stdout` anew can.
 - **A service that ends is started again**, whatever its exit status: at
   once if it ran for 30 seconds or longer, and otherwise after a delay of
   1 second, then twice as long each time, up to 2 minutes.
@@ -631,6 +632,7 @@ containers:
     securityContext:
       capabilities: { add: ["SYS_ADMIN"] }
       appArmorProfile: { type: Unconfined }
+      seccompProfile: { type: RuntimeDefault }
     env:
       - { name: GREAT_MACHINE_DRAAL, value: <endpoint id of draal> }
       - { name: GREAT_MACHINE_SERVICE, value: web }
@@ -644,24 +646,47 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
 ```
 
 - **The container can mount, and is not privileged.** zathras mounts the
-  store on `/nix/store`, which takes `CAP_SYS_ADMIN`, and which the
-  runtime's AppArmor profile denies, so the container has none. It keeps
-  what the runtime does for every container: a masked `/proc`, a `/sys`
-  that cannot be written, the devices of a container. `appArmorProfile`
-  is a field of Kubernetes 1.30; before it, the annotation
-  `container.apparmor.security.beta.kubernetes.io/app: unconfined` on the
-  pod says the same. A zathras that cannot mount ends at once and says
-  that this is what it lacks.
+  store on `/nix/store`. That takes `CAP_SYS_ADMIN`; and the runtime's
+  AppArmor profile denies a container every mount, whatever its
+  capabilities, so the container has no profile. It is started with what
+  the runtime gives every container: a masked `/proc`, a `/sys` that
+  cannot be written, the devices of a container, and the runtime's
+  seccomp profile, which is written out because a pod that says nothing
+  has none on most clusters. A zathras that cannot mount ends at once
+  and says that this is what it lacks.
+- **Two things a cluster may want changed.** `appArmorProfile` is a
+  field of Kubernetes 1.30: on a cluster before it the field is taken
+  out, and the annotation
+  `container.apparmor.security.beta.kubernetes.io/app: unconfined` in the
+  metadata of the pod (of the template, in a Deployment) says the same.
+  And a namespace that enforces the Pod Security Standards has to be at
+  the level `privileged` for such a pod: the capability and the absent
+  profile are beyond `baseline`.
 - **The service does not have the capability.** zathras starts the
   service and the shells without `CAP_SYS_ADMIN` and without a way to
-  gain it, by a setuid program or otherwise: they have what an ordinary
-  container has. With `GREAT_MACHINE_USER` they are not root either.
+  gain it in the container, by a setuid program or otherwise: they
+  cannot mount there, nor undo what zathras mounted. With
+  `GREAT_MACHINE_USER` they are not root either.
+- **What the service has that it would not have in an ordinary
+  container** is user namespaces. A runtime's seccomp profile lets
+  `unshare`, `mount` and `setns` through for every process of a
+  container that was given `CAP_SYS_ADMIN`, the service among them, and
+  refuses them in a container without it. So the service and the shells,
+  as root or as another user, can make a user namespace of their own and
+  are root in it, with every capability over what that namespace holds:
+  they can mount a `tmpfs` there. That gives them nothing over the
+  container, the store or zathras; it is a part of the kernel that a
+  container otherwise does not reach. Nothing in this release closes it.
+  A seccomp profile of the node's (`type: Localhost`) that is the
+  runtime's for a container without the capability, with `mount` and
+  `umount2` let through, should; this repository has not tried one.
 - **Where that is not enough**, as on nodes with SELinux, which lets no
   container that is not privileged mount NFS: `privileged: true` in the
-  place of the two settings, **and** `GREAT_MACHINE_USER`. Root in a
-  privileged container reaches the node without any capability (the
-  node's disks, `/proc/sysrq-trigger`), so there the service should not
-  be root. zathras warns at its start when it is.
+  place of the capability and the AppArmor profile, **and**
+  `GREAT_MACHINE_USER`. Root in a privileged container reaches the node
+  without any capability (the node's disks, `/proc/sysrq-trigger`), so
+  there the service should not be root. zathras warns at its start when
+  it is.
 - **The mount is the container's own.** It is made inside the container,
   on no volume, so it reaches no other container and not the node, and it
   is gone with the container.
@@ -725,7 +750,9 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
   the shells are started without the capability and with `no_new_privs`,
   and cannot trace zathras, which has more than they do. As root they
   can still do what root in an ordinary container can, in their own
-  container, the cache of the store included. `--user` makes them
+  container, the cache of the store included; and, as root or not, one
+  thing that a container without the capability is refused: make a user
+  namespace of their own (see [Pod](#pod)). `--user` makes them
   another user. In a container that has to be privileged, give `--user`:
   see [Pod](#pod).
 - **The store of a pod listens on loopback**, on a port the system
@@ -760,10 +787,11 @@ it, so:
 
 1. **draal gets a bucket**, with `--s3-bucket`, a region and
    credentials. `--jaccard-server` and `--jaccard-prefix` are gone: a
-   draal that is still given the flags ends and names them, and the
-   variables `JACCARD_SERVER` and `JACCARD_PREFIX` are read no more. Its
-   data directory stays: the services, their generations and their
-   rollouts are kept.
+   draal that is still given one of them ends and names it (`flag
+   provided but not defined`), and the variables `JACCARD_SERVER` and
+   `JACCARD_PREFIX` are read no more, so a draal that has those alone
+   ends for want of `--s3-bucket`. Its data directory stays: the
+   services, their generations and their rollouts are kept.
 2. **Every pod becomes one container**, as in
    [`deploy/pod.yaml`](deploy/pod.yaml): no sidecar, no `store` volume,
    the `securityContext`, the `cache` volume. draal and the pods change
