@@ -506,6 +506,66 @@ func TestAProgramIsStartedFromTheMountByTheProcessThatServesIt(t *testing.T) {
 	}
 }
 
+// A program is started from the mount as another user too: the files of
+// the store are everybody's to read and to execute, also through the
+// server of the mount and the kernel's client.
+func TestAProgramOfAnotherUserIsStartedFromTheMount(t *testing.T) {
+	needsRoot(t)
+	s := newStore(t)
+	src := t.TempDir()
+	const name = "ppp-testservice-1.0"
+	bin := filepath.Join(src, name, "bin", "testservice")
+	if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	program, err := os.ReadFile(build.Binary(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, program, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.push("web", filepath.Join(src, name))
+
+	dir := t.TempDir()
+	// t.TempDir makes directories that their owner alone may enter: the
+	// one the store is mounted in is made everybody's to pass through, as
+	// /nix is.
+	if err := os.Chmod(filepath.Dir(dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := s.mount("web", dir, t.TempDir())
+	l, err := launcher.New(launcher.Config{User: &launcher.User{UID: 65534, GID: 65534}, Log: quiet})
+	if err != nil {
+		t.Fatalf("launcher.New: %v", err)
+	}
+	defer l.Close()
+	const text = "as another user"
+	cmd := exec.Command(filepath.Join(dir, name, "bin", "testservice"), "--stdout", text, "--exit-after", "0")
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	began := time.Now()
+	if err := l.Start(cmd, cmd.Start); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- cmd.Wait() }()
+	select {
+	case err := <-waited:
+		if err != nil || out.String() != text+"\n" {
+			t.Fatalf("started as another user, the program wrote %q, %v", out.String(), err)
+		}
+	case <-time.After(30 * time.Second):
+		cmd.Process.Kill()
+		<-waited
+		t.Fatalf("the program started as another user has not ended after %s: it wrote %q", time.Since(began), out.String())
+	}
+	t.Logf("the start as another user took %s", time.Since(began))
+	if err := m.Stop(); err != nil {
+		t.Errorf("Stop: %v", err)
+	}
+}
+
 // Unless it is told otherwise the store is mounted on /nix/store, which
 // Start makes if it is not there.
 //
