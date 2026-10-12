@@ -108,7 +108,8 @@
 
           # The one program: draal, zathras and the operator's commands.
           # Without cgo it is linked statically on Linux, and runs in an
-          # image that has no libc and whose /nix/store is another one.
+          # image that has no libc and whose /nix/store is the one zathras
+          # mounts.
           great-machine = goEnv.buildGoApplication {
             pname = "great-machine";
             inherit src;
@@ -128,8 +129,8 @@
           # The image of the app container of a pod, and of draal:
           #   nix build .#image && docker load < result
           #
-          # Nothing it needs lives in /nix/store, because a pod mounts the
-          # sidecar's store there: the program, busybox and the
+          # Nothing it needs lives in /nix/store, because zathras mounts
+          # the store of its service there: the program, busybox and the
           # certificates are copied to where an image has them. That
           # works because all three are files that need no other.
           image = pkgs.dockerTools.buildLayeredImage {
@@ -138,6 +139,10 @@
             extraCommands = ''
               mkdir -p bin etc/ssl/certs root
               mkdir -m 1777 tmp
+
+              # What zathras mounts the store on, and where it keeps
+              # what it fetched unless a volume is put there.
+              mkdir -p nix/store var/cache/great-machine
 
               cp ${great-machine}/bin/great-machine bin/great-machine
 

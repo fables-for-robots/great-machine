@@ -1,9 +1,9 @@
-# A pod of the service `web`: its app container runs zathras, which runs
-# whatever draal rolls out, out of a Nix store the pod does not hold. The
-# sidecar fetches every store path from a jaccard-store server.
+# A pod of the service `web`: one container, which runs zathras. zathras
+# mounts a Nix store of its own on /nix/store, fetches into it whatever
+# draal rolls out, from the store draal keeps, and runs it. The pod holds
+# no image of the service, and has no sidecar.
 #
-# What to change: the server's endpoint ID and the prefix, which are those
-# draal was given; draal's endpoint ID; and the name of the service. In a
+# What to change: draal's endpoint ID, and the name of the service. In a
 # Deployment or a StatefulSet the `spec` below is the template's, and
 # every pod is a zathras under its own name.
 apiVersion: v1
@@ -15,66 +15,57 @@ spec:
   # (--stop-timeout) before it kills it. The kubelet has to wait longer
   # than that, or it kills zathras first.
   terminationGracePeriodSeconds: 150
-  initContainers:
-    # An init container that restarts is a sidecar: it is started before
-    # the app containers and stopped after them.
-    - name: nix-store
-      # The tag its own repository documents. Pin it to a release of that
-      # project in production: its versions are that project's to choose.
-      image: ghcr.io/amber-store/jaccard-nfs-nix-store:latest
-      restartPolicy: Always
-      securityContext:
-        # It mounts, and a mount that is to reach the other containers
-        # (Bidirectional) is allowed to privileged containers alone.
-        privileged: true
-      env:
-        - name: JACCARD_SERVER
-          value: "0000000000000000000000000000000000000000000000000000000000000000"
-        # Put before a name as it is. `great-machine rollout` pushes a
-        # store path under the prefix draal has, so the two are the same.
-        - name: JACCARD_PREFIX
-          value: /great-machine/nix/store/
-        - name: JACCARD_NFS_CACHE
-          value: /cache
-        - name: JACCARD_NFS_MOUNT
-          value: /export
-      volumeMounts:
-        - name: store
-          mountPath: /export
-          mountPropagation: Bidirectional
-        - name: cache
-          mountPath: /cache
-      # The app container starts when the store is mounted, not before.
-      # The directory is a mount point from the start, the volume's, so
-      # what is looked for is the NFS mount on it.
-      startupProbe:
-        exec:
-          command: ["grep", "-q", " /export nfs4 ", "/proc/mounts"]
-        periodSeconds: 1
-        failureThreshold: 60
   containers:
     - name: app
       # The image has zathras, a shell and its tools, and nothing of the
       # service: that comes from the store.
       # The same tag as draal: draal and every zathras are kept on one tag,
       # because a draal and a zathras of different versions may not speak
-      # the same protocol. v0.1.0 is the first release, which exists once
-      # it has been tagged.
-      image: ghcr.io/fables-for-robots/great-machine:v0.1.0
+      # the same protocol. v0.2.0 is the first release without a sidecar,
+      # which exists once it has been tagged.
+      image: ghcr.io/fables-for-robots/great-machine:v0.2.0
       command: ["great-machine", "zathras"]
+      securityContext:
+        # zathras mounts the store. That takes CAP_SYS_ADMIN, and the
+        # runtime's AppArmor profile denies it to a container, so the
+        # container has no profile. It is not privileged: it has the
+        # /proc, the /sys and the devices of any container. The service
+        # and the shells are started without the capability, and without
+        # a way to gain it.
+        #
+        # appArmorProfile is a field of Kubernetes 1.30. Before it, this
+        # annotation on the pod says the same:
+        #   container.apparmor.security.beta.kubernetes.io/app: unconfined
+        capabilities:
+          add: ["SYS_ADMIN"]
+        appArmorProfile:
+          type: Unconfined
+        # Where that is not enough, as on nodes with SELinux, which lets
+        # no container that is not privileged mount NFS, the container is
+        # privileged instead of the two above:
+        #   privileged: true
+        # and the service is given a user that is not root, with
+        # GREAT_MACHINE_USER below: in a privileged container root can
+        # reach the node without any capability.
       env:
         - name: GREAT_MACHINE_DRAAL
           value: "1111111111111111111111111111111111111111111111111111111111111111"
         - name: GREAT_MACHINE_SERVICE
           value: web
         # The name the operator sees is the host name, which is the pod's
-        # name. zathras reaches the sidecar's preload endpoint at
-        # 127.0.0.1:9889, which the containers of a pod share.
+        # name.
+        #
+        # The user and the group the service and the shells run as. Not
+        # set: those of zathras, which is root.
+        # - name: GREAT_MACHINE_USER
+        #   value: "1000:1000"
       volumeMounts:
-        - name: store
-          mountPath: /nix/store
-          # It receives the sidecar's mount and can make none of its own.
-          mountPropagation: HostToContainer
+        - name: cache
+          mountPath: /var/cache/great-machine
+      # What the container needs of memory and CPU is what the service
+      # needs and what the store needs to fetch and to serve: the two
+      # count together.
+      #
       # Ready while the service runs, and at no other time: not before
       # the first rollout, not while the service waits to be started
       # again. Not a liveness probe: that would have the kubelet restart
@@ -87,10 +78,8 @@ spec:
         periodSeconds: 2
         failureThreshold: 1
   volumes:
-    # What the sidecar mounts its server on, and the app sees as the store.
-    - name: store
-      emptyDir: {}
-    # What was fetched. It lives as long as the pod, across restarts of
-    # the sidecar.
+    # What zathras has fetched: every store path once as it came and once
+    # as files. It lives as long as the pod, across restarts of the
+    # container, and nothing is ever removed from it.
     - name: cache
       emptyDir: {}
