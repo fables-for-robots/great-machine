@@ -10,10 +10,10 @@ import (
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
-// prepare has the sidecar fetch the closure and then checks the binary.
-// ctx is done when draal has withdrawn the prepare, which ends the request
-// to the sidecar. The generation is in Preparing while this runs, and in
-// Prepared when it has worked.
+// prepare has the store fetch the closure and then checks the binary. ctx
+// is done when draal has withdrawn the prepare, or the zathras is told to
+// stop, which ends the fetching. The generation is in Preparing while this
+// runs, and in Prepared when it has worked.
 func (a *Agent) prepare(ctx context.Context, req *wire.Prepare) error {
 	if req.Generation == 0 {
 		return wire.Errorf(wire.CodeBadRequest, "a prepare needs a generation")
@@ -46,11 +46,14 @@ func (a *Agent) prepare(ctx context.Context, req *wire.Prepare) error {
 }
 
 // fetch is the work of a prepare. Its errors are as they travel: the
-// message is the reason, which for an answer of the sidecar that is not
-// 200 holds what the sidecar said.
+// message is the reason, which for a store path that could not be fetched
+// is what the store said: the path, and whether the store has none of it
+// for the service or why it could not be fetched.
 func (a *Agent) fetch(ctx context.Context, req *wire.Prepare) error {
-	if err := a.cfg.Preload.Preload(ctx, req.Closure); err != nil {
-		return wire.Errorf(wire.CodeInternal, "%s", reason(err))
+	if a.cfg.Preload != nil {
+		if err := a.cfg.Preload.Preload(ctx, req.Closure); err != nil {
+			return wire.Errorf(wire.CodeInternal, "%s", reason(err))
+		}
 	}
 	if err := supervisor.CheckExecutable(req.Binary); err != nil {
 		return wire.Errorf(wire.CodeBadRequest, "%s", reason(err))
