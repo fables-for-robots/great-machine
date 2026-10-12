@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"sync"
 
@@ -98,7 +99,7 @@ func Listen(ctx context.Context, cfg ListenConfig) (Listener, error) {
 		ep.Shutdown(context.Background())
 		return nil, fmt.Errorf("listen: %w", context.Cause(ctx))
 	}
-	return &listener{ep: ep, stop: stop, log: logger(cfg.Log), handlers: cfg.Handlers, turn: make(chan struct{}, 1), conns: make(map[*conn]struct{})}, nil
+	return &listener{ep: ep, stop: stop, log: logger(cfg.Log), handlers: maps.Clone(cfg.Handlers), turn: make(chan struct{}, 1), conns: make(map[*conn]struct{})}, nil
 }
 
 // listener is a Listener over an endpoint of go-iroh.

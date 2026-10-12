@@ -420,6 +420,10 @@ func TestAStrangerMayNotWrite(t *testing.T) {
 		if logged := strings.Count(w.log.String(), line) - before; logged != 1 {
 			t.Errorf("the refusal of %s left %d lines with the peer and the operation, want one:\n%s", op, logged, w.log.String())
 		}
+		// The line says that it was the store that refused.
+		if !strings.Contains(w.log.String(), line+" protocol=amber/jaccard-store/1") {
+			t.Errorf("the line of the refusal of %s does not say protocol=amber/jaccard-store/1:\n%s", op, w.log.String())
+		}
 	}
 
 	// Nothing came of any of it: the operator finds what it pushed, and

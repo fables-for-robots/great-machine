@@ -364,7 +364,8 @@ func (s *Store) answer(peer wire.ID, req jswire.Request) jswire.Response {
 		return jswire.Errorf(jswire.CodeBadRequest, "the store answers no such request")
 	}
 	if err := s.cfg.Authz.Authorize(peer, op, ""); err != nil {
-		s.log.Warn("refused", "peer", peer, "operation", string(req.Op))
+		// The line has the shape of draal's own for a refusal; the protocol says that it was the store.
+		s.log.Warn("refused", "peer", peer, "operation", string(req.Op), "protocol", ALPN)
 		return jswire.Errorf(jswire.CodeBadRequest, "unauthorized: %s is for operators", req.Op)
 	}
 	started := time.Now()

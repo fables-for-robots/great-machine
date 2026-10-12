@@ -5,11 +5,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 )
 
 // another is a user that is not root, and has no name anywhere.
@@ -86,7 +88,13 @@ func TestWhatIsNoPipeAndNoTerminalKeepsItsOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	// A device of the test's own, which is /dev/null by its numbers: were
+	// it given away, the machine's /dev/null would not be.
+	path := filepath.Join(t.TempDir(), "null")
+	if err := unix.Mknod(path, unix.S_IFCHR|0o666, int(unix.Mkdev(1, 3))); err != nil {
+		t.Fatalf("making a device for the test: %v", err)
+	}
+	null, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -266,3 +266,32 @@ func TestListenRefusesHandlersThatCannotBe(t *testing.T) {
 		})
 	}
 }
+
+// The handlers are what Listen was given: a map that is changed
+// afterwards changes nothing.
+func TestTheHandlersAreThoseOfTheTimeOfListen(t *testing.T) {
+	handed := make(chan node.Conn, 1)
+	handlers := map[string]func(node.Conn){
+		jswire.ALPN: func(c node.Conn) {
+			handed <- c
+			<-c.Done()
+		},
+	}
+	l, own := listenWith(t, newKey(t), handlers)
+	delete(handlers, jswire.ALPN)
+
+	client := newKey(t)
+	if _, err := dialFor(t, jswire.ALPN, client, l); err != nil {
+		t.Fatalf("dialing for %s: %v", jswire.ALPN, err)
+	}
+	select {
+	case server := <-handed:
+		if got := server.RemoteID(); got != client.ID() {
+			t.Errorf("the handler's connection is of %s, want the client, %s", got, client.ID())
+		}
+	case got := <-own:
+		t.Fatalf("Accept returned the connection of %s, which is the handler's", got.RemoteID())
+	case <-time.After(patience):
+		t.Fatal("timed out waiting for the handler to be given the connection: the entry that was deleted from the map took it away")
+	}
+}
