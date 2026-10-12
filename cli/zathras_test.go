@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,6 +27,9 @@ type fakeStore struct {
 	started chan storemount.Config // gets what the store was started with
 	stops   atomic.Int64
 	onStop  func() // called by Stop, if set
+
+	mu    sync.Mutex
+	asked []string // the names it was asked to fetch
 }
 
 func newFakeStore() *fakeStore {
@@ -39,7 +44,19 @@ func (f *fakeStore) start(cfg storemount.Config) (zathrasStore, error) {
 	return f, nil
 }
 
-func (f *fakeStore) Preload(context.Context, []string) error { return nil }
+func (f *fakeStore) Preload(ctx context.Context, names []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.asked = append(f.asked, names...)
+	return nil
+}
+
+// fetched returns the names the store was asked to fetch.
+func (f *fakeStore) fetched() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.asked)
+}
 
 func (f *fakeStore) Stop() error {
 	f.stops.Add(1)
