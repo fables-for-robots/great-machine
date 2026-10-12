@@ -7,23 +7,36 @@
 great-machine rolls a program that was built with Nix on a laptop out to a
 group of pods, and shows what those pods are doing.
 
-A pod holds no image of the program. It mounts a Nix store that the
-[jaccard-nfs-nix-store](https://github.com/amber-store/jaccard-nfs-nix-store)
-sidecar serves out of a [jaccard-store](https://github.com/amber-store/jaccard-store)
-server, and its app container runs **zathras**, an init that starts the
-program it is told to run. Every zathras reports to **draal**, the
-controller. The operator talks to draal: from the command line to roll out,
-and through a web page or a terminal UI to look.
+A pod holds no image of the program. Its one container runs **zathras**,
+an init that mounts a Nix store on `/nix/store`, fetches into it what it
+is told to run, and starts it. Every zathras reports to **draal**, the
+controller, which is also the store they fetch from. The operator talks
+to draal: from the command line to roll out, and through a web page or a
+terminal UI to look.
+
+The store is a [jaccard-store](https://github.com/amber-store/jaccard-store)
+server over an S3 bucket, and the mount is
+[jaccard-nfs-nix-store](https://github.com/amber-store/jaccard-nfs-nix-store);
+both are inside the program. Up to stage 3 the store was a server of its
+own, and the mount a sidecar of every pod. [The design of stage 4](2026-10-11-great-machine-stage-4-design.md)
+is how both came into the program, and has what this document only names
+of them.
 
 ```
  laptop                                   cluster
- ┌──────────────────────┐                 ┌───────────────────────────────────┐
- │ great-machine rollout│── push ──────▶  │ jaccard-store server and bucket   │
- │   nix-store -qR      │                 └──────────────▲────────────────────┘
- │                      │                                │ fetch
- │ great-machine tui    │── iroh ──▶ draal ◀── iroh ── zathras ─ sidecar (/nix/store)
- └──────────────────────┘             │                  │
-        browser ── HTTP, loopback ────┘                  └─ the service
+ ┌──────────────────────┐                 ┌──────────────────────────────┐
+ │ great-machine rollout│── iroh ───────▶ │ draal, one endpoint ID:      │
+ │   nix-store -qR      │  both protocols │   great-machine/1            │
+ │ great-machine tui    │                 │   amber/jaccard-store/1      │
+ └──────────┬───────────┘                 └───▲──────────▲───────────────┘
+            │                 browser ── HTTP ┘          │ iroh: great-machine/1,
+            │ packs up              (loopback)           │ and pulls of the mount
+            ▼                                            │
+      ┌───────────┐                       ┌──────────────┴───────────────┐
+      │ S3 bucket │ ◀──── packs down ──── │ pod, one container: zathras  │
+      └───────────┘                       │   NFS on 127.0.0.1 ─▶ /nix/store
+                                          │   └─ the service             │
+                                          └──────────────────────────────┘
 ```
 
 It is done when:
@@ -84,10 +97,9 @@ Every flag has an environment variable, and a flag wins over its variable.
 
 | Flag | Variable | Default | Meaning |
 |---|---|---|---|
-| `--data DIR` | `GREAT_MACHINE_DATA` | required | holds `draal.key` (created on first run) and `draal.sqlite` |
+| `--data DIR` | `GREAT_MACHINE_DATA` | required | holds `draal.key` (created on first run), `draal.sqlite` and the store's `store.sqlite` |
 | `--operator ID` | `GREAT_MACHINE_OPERATORS` | none | an endpoint ID that may act as an operator; may be repeated, and the variable takes several with commas between them |
-| `--jaccard-server ID` | `JACCARD_SERVER` | required | the jaccard-store server that closures are pushed to |
-| `--jaccard-prefix P` | `JACCARD_PREFIX` | required | what is put before the name of a store path to make its reference; the same value the sidecars are given |
+| `--s3-bucket NAME` | `GREAT_MACHINE_S3_BUCKET` | required | the bucket of the store; with it `--s3-prefix`, `--s3-endpoint`, `--s3-region`, `--s3-path-style`, and `--store-scratch`, `--store-verify-jobs`, `--store-max-pack-size`, `--store-no-verify` ([stage 4](2026-10-11-great-machine-stage-4-design.md), §3.6) |
 | `--web-addr ADDR` | `GREAT_MACHINE_WEB_ADDR` | `127.0.0.1:8080` | where the web page listens; empty for no web page |
 | `--bind IP:PORT` | `GREAT_MACHINE_BIND` | every address, a port the system picks | the UDP address of the iroh endpoint |
 
@@ -102,7 +114,9 @@ act as an operator over iroh.
 | `--draal ID` | `GREAT_MACHINE_DRAAL` | required | the endpoint ID of draal |
 | `--service NAME` | `GREAT_MACHINE_SERVICE` | required | the service this zathras belongs to |
 | `--name NAME` | `GREAT_MACHINE_NAME` | the host name, which in a pod is the pod's name | what the operator sees |
-| `--preload-url URL` | `GREAT_MACHINE_PRELOAD_URL` | `http://127.0.0.1:9889/v1/preload` | the preload endpoint of the sidecar |
+| `--store-cache DIR` | `GREAT_MACHINE_STORE_CACHE` | `/var/cache/great-machine` | what the mount has fetched |
+| `--no-store` | `GREAT_MACHINE_NO_STORE` | off | mount nothing: `/nix/store` is whatever the container has |
+| `--user UID[:GID]` | `GREAT_MACHINE_USER` | zathras's own | the user and the group the service and the shells run as |
 | `--shell PATH` | `GREAT_MACHINE_SHELL` | `/bin/sh` | the program of a shell session |
 | `--stop-timeout D` | `GREAT_MACHINE_STOP_TIMEOUT` | `2m` | how long a service has to end after SIGTERM |
 | `--health-addr ADDR` | `GREAT_MACHINE_HEALTH_ADDR` | `:9890` | where the health check listens; empty for none |
@@ -114,24 +128,29 @@ act as an operator over iroh.
 | `--draal ID` | `GREAT_MACHINE_DRAAL` | required | the endpoint ID of draal |
 | `--key FILE` | `GREAT_MACHINE_KEY` | `great-machine/operator.key` in the user's configuration directory | the operator's key, created on first use |
 
-`rollout` also takes `--jobs N` (`GREAT_MACHINE_JOBS`, default 5), the
+`rollout` also takes `--jobs N` (`GREAT_MACHINE_JOBS`, default 20), the
 number of store paths pushed at a time, and `--temp-dir DIR`
 (`GREAT_MACHINE_TEMP_DIR`), where the temporary stores of a push are made.
 
 ## 4. Identity and authorization
 
-Everything but the web page travels over iroh
-([go-iroh](https://github.com/tmc/go-iroh) v0.3.0), on one ALPN,
-`great-machine/1`. A peer is known by its endpoint ID, which is the public
-half of its key and which the handshake proves.
+Everything but the web page, and the packs of the store, travels over
+iroh ([go-iroh](https://github.com/tmc/go-iroh) v0.3.0). The endpoint of
+draal accepts two ALPNs: `great-machine/1`, which is the protocol of
+section 5, and `amber/jaccard-store/1`, jaccard-store's own, for the
+store. A peer is known by its endpoint ID, which is the public half of
+its key and which the handshake proves.
 
-- **draal** has a key in its data directory. Its endpoint ID is its address.
+- **draal** has a key in its data directory. Its endpoint ID is its
+  address, and that of the store.
 - **An operator** has a key file. `great-machine id` prints its endpoint ID,
   which draal is given with `--operator`.
 - **A zathras** makes a new key every time it starts and keeps it in
   memory. Its endpoint ID is its identity for as long as the process lives,
   across reconnections. Pods cannot share a key: two endpoints with one key
   evict each other at the relay, and draal could not tell them apart.
+  The mount of a zathras pulls from the store with a second key, made
+  the same way, for connections that come and go at other times.
 
 Every request passes one function of draal before anything is done:
 
@@ -143,7 +162,8 @@ Authorize(peer EndpointID, op Operation, service string) error
 | Operation | Allowed to |
 |---|---|
 | register as a zathras of a service | every peer |
-| everything else | the endpoint IDs given with `--operator` |
+| pull a reference from the store | every peer |
+| everything else, the store's push, list and delete among it | the endpoint IDs given with `--operator` |
 
 Endpoint IDs are compared exactly, and an empty one among the operators
 is ignored.
@@ -180,6 +200,11 @@ trusted to be small, well-formed or harmless to show:
   than one of its fields set is refused.
 - An answer that cannot be written, for another reason than the peer
   having gone, is logged by draal with the peer and the request.
+- **The store's protocol** has the same bounds for its streams: a request
+  within 5 seconds, 64 streams of a connection at a time. What a request
+  holds is jaccard-store's server's to check. A refusal there is an error
+  of that protocol whose message begins with `unauthorized`
+  ([stage 4](2026-10-11-great-machine-stage-4-design.md), §3.3 and §3.4).
 
 What is not bounded is the number of peers that register. The fleet is
 sent whole, and enough registrants that each report as much as they may
@@ -247,7 +272,7 @@ The operator dials draal and opens:
 
 | Request | Answer |
 |---|---|
-| `store` | the jaccard-store server and the prefix |
+| `store`: service | the endpoint ID of the store, which is draal's own, and the prefix of the service's references, `/services/SERVICE/nix/store/` |
 | `rollout`: service, binary, arguments, closure, parallel | the rollout (its number, the generation) |
 | `rollback`: service, parallel | the rollout |
 | `watch` | the fleet (5.3): at once, and again whenever something changed, at most once a second |
@@ -297,15 +322,20 @@ ID, name, the time it connected and its state.
    there. A Mach-O binary is refused: the pods run Linux.
 2. **The closure.** `nix-store --query --requisites` of the store path the
    binary is in.
-3. **The store.** draal is asked for the jaccard-store server and the
-   prefix, and the connection to draal is closed. The push dials with
-   the operator's key as well, and two endpoints with one key put each
-   other out at the relay: the key has one endpoint at a time.
-4. **The push.** The server is asked which of the references
+3. **The store.** draal is asked for the store of the service, which is
+   draal's own endpoint ID and the prefix of the service, and the
+   connection to draal is closed. The push dials draal again, for the
+   store's protocol and with the operator's key as well, and two
+   endpoints with one key put each other out at the relay: the key has
+   one endpoint at a time.
+4. **The push.** The store is asked which of the references
    `prefix + name` it has. A store path never changes under its name, so
    one that is there is not pushed again. Every other path is imported into
    a temporary store, as `jaccard-store push-dir` imports a directory, and
-   pushed with the `client` package of jaccard-store, `--jobs` at a time. A
+   pushed with the `client` package of jaccard-store, `--jobs` at a time,
+   20 unless told otherwise. One that another service has pushed is
+   imported and not uploaded: the store has a pack of that content and
+   points the new reference at it. A
    store path that is a single file is pushed as a reference whose root is
    the file. A store path that is itself a symbolic link cannot be a
    reference (a link exists only as an entry of a directory), so a closure
@@ -364,13 +394,13 @@ anything, so that the zathrases are back before it decides: a zathras
 dials again after 30 seconds at most.
 
 **Preparing.** Every connected zathras that has not prepared the target is
-sent `prepare`. The zathras posts the closure to the preload endpoint of
-the sidecar and then checks that the binary is a file it may execute.
+sent `prepare`. The zathras fetches the closure into its store (7.3) and
+then checks that the binary is a file it may execute.
 
 - When every connected zathras has prepared the target, the rollout is
   `activating`. With no zathras connected that is at once.
 - A `prepare` that fails halts the rollout, with the name of the zathras
-  and what the sidecar said.
+  and which store path it could not fetch, and why.
 - A rollout that is still `preparing` 30 minutes after it was made is
   halted, and the reason names the zathrases that had not prepared.
 
@@ -438,13 +468,17 @@ the generation and the reason.
 
 ## 7. zathras
 
-zathras is the first process of the app container. It runs the service,
-keeps it running, and tells draal.
+zathras is the first process of the pod's container. It mounts the store
+of its service (7.8), runs the service, keeps it running, and tells
+draal.
 
 ### 7.1 Running the service
 
 - The service is started with the environment and the working directory of
-  zathras, no standard input, and a process group of its own.
+  zathras, no standard input, and a process group of its own. It is
+  started by the launcher (7.8): without `CAP_SYS_ADMIN` and a way to gain
+  it, as the user of `--user`, and through the program's own
+  `exec-in-place`, never straight from the mount.
 - **`activate`**: zathras checks that the binary is a file it may execute,
   and refuses otherwise, leaving what runs alone. Then it takes the
   generation as its own, stops the service if one runs, forgets any backoff
@@ -457,7 +491,9 @@ keeps it running, and tells draal.
   ran for 30 seconds or longer, at once. If it ended sooner, after a delay:
   1 second the first time, then twice as long each time, up to 2 minutes. A
   run of 30 seconds or longer makes the next delay 1 second again.
-- A binary that cannot be started counts as a service that ended at once.
+- A binary that cannot be started counts as a service that ended at once:
+  `exec-in-place` says why on the service's standard error and ends with
+  127 or 126.
 
 ### 7.2 As the first process
 
@@ -467,16 +503,20 @@ keeps it running, and tells draal.
   SIGTERM, SIGINT and SIGHUP on to it and wait for every child there is.
   The zathras that does the work is that child, and the container ends
   with its exit status.
-- On SIGTERM, SIGINT or SIGHUP it stops the service as in 7.1, ends the shells and
-  exits with 0. It starts nothing while it does. The pod's
-  `terminationGracePeriodSeconds` has to be longer than `--stop-timeout`.
+- On SIGTERM, SIGINT or SIGHUP it stops the service as in 7.1, ends the shells,
+  unmounts the store and exits with 0. It starts nothing while it does.
+  The pod's `terminationGracePeriodSeconds` has to be longer than
+  `--stop-timeout`.
 
 ### 7.3 Preparing
 
-`prepare` posts the store paths of the closure, one on a line, to the
-preload endpoint. An answer of 200 is followed by the check of the binary;
-any other answer is the error, with its body. draal ends a `prepare` that
-has outlived the rollout by closing its stream, which ends the request.
+`prepare` has the mount fetch the store paths of the closure, in the
+process. The first that cannot be fetched ends the others and is the
+error, which names the path and says whether the store has none of that
+name for the service or it could not be fetched. All of them fetched is
+followed by the check of the binary. draal ends a `prepare` that has
+outlived the rollout by closing its stream, which ends the fetching.
+With `--no-store` nothing is fetched and the binary alone is checked.
 
 ### 7.4 Logs
 
@@ -506,15 +546,16 @@ Every 2 seconds zathras reads, on Linux with cgroup v2:
 | disk read and written, in bytes per second | `rbytes` and `wbytes` of `io.stat`, over all devices |
 | network received and sent, in bytes per second | `/proc/net/dev`, over all interfaces but the loopback |
 
-The figures are those of the container, which is the service, zathras and
-the shells. A sample goes out with the next report. draal keeps the last 15
+The figures are those of the container, which is the service, zathras
+with the store it serves, and the shells. A sample goes out with the next report. draal keeps the last 15
 minutes of every connected zathras in memory. Where a file is missing
 (cgroup v1, another system) there are no samples, and the UIs say so.
 
 ### 7.6 Shell
 
 `shell` starts `--shell` on a pseudo-terminal, in a session of its own, with
-the environment of zathras and the `TERM` of the request. On its stream the
+the environment of zathras and the `TERM` of the request, by the launcher
+as the service is started (7.1). On its stream the
 asking side sends input and changes of size, and zathras sends output and,
 when the shell has ended, its exit status. A stream that ends ends the
 shell: SIGHUP to its process group, then SIGKILL. That holds whatever
@@ -523,7 +564,8 @@ input, with more typed than the stream holds, ends like any other when
 the asking side closes, on draal and in the container.
 
 A shell is in the container of zathras: it sees the store, the files and
-the processes the service sees.
+the processes the service sees, as the user of the service and with the
+capabilities of the service, `CAP_SYS_ADMIN` not among them.
 
 ### 7.7 Health check
 
@@ -547,6 +589,33 @@ every address: the kubelet asks at the address of the pod, not on loopback.
   kubelet restart the container of a service that stays down, and with the
   container go the backoff of zathras, its ring of lines and its identity.
 
+### 7.8 The store and the launcher
+
+[The design of stage 4](2026-10-11-great-machine-stage-4-design.md) has both in full (§4 and §5). In short:
+
+- **The mount.** zathras runs jaccard-nfs-nix-store's NFS server in its
+  own process, on a loopback port the system picks, and mounts it on
+  `/nix/store` of its own container, with the prefix of its service. A
+  store path is pulled from draal's store the first time it is named, by
+  a key of the mount's own, and kept in `--store-cache`. A zathras that
+  cannot mount ends at start. On its way out it unmounts.
+- **The container** has `CAP_SYS_ADMIN` and no AppArmor profile, and is
+  not privileged.
+- **The launcher** is one thread of zathras, which has dropped
+  `CAP_SYS_ADMIN` from its bounding set and set `no_new_privs`. The
+  service and every shell are started from it, and so inherit both; with
+  `--user` they are that user, without any capability, and are given the
+  pipes and the terminal they are started on, so that they can open
+  `/dev/stdout` or their terminal anew.
+- **Nothing is executed from the mount by zathras itself.** A program
+  on the mount is read through the NFS server of zathras, and Go's way to
+  start a process holds the whole of zathras until the program is read:
+  the two would wait for each other. What the launcher starts is the
+  program itself, `great-machine exec-in-place DIR PATH ARGV0 [ARG...]`,
+  which changes to `DIR`, if there is one, and then replaces itself with
+  the program at `PATH`. The working directory is that process's to
+  change to for the same reason: it may be in the store.
+
 ## 8. draal
 
 ### 8.1 What it keeps
@@ -563,6 +632,11 @@ as jaccard-store does:
 A service gets its row with its first rollout. In memory only: the
 zathrases that are connected, the last report of each and 15 minutes of
 its samples. A zathras that has gone is forgotten.
+
+Beside it, in `store.sqlite`, is what jaccard-store's server keeps of the
+store: the references, the packs and which pack leans on which, and the
+uploads under way. The packs are in the bucket. That database is the only
+record of the store ([stage 4](2026-10-11-great-machine-stage-4-design.md), §3.2).
 
 draal is meant for a fleet of some hundreds of zathrases: the fleet is sent
 whole to everyone who watches.
@@ -583,6 +657,7 @@ so the TUI and the web page cannot differ in what they are able to show.
 | `/api/zathras/{id}/history` | the samples |
 | `/api/zathras/{id}/logs` | WebSocket: the ring, then what follows |
 | `/api/zathras/{id}/shell?cols=&rows=&term=` | WebSocket: binary messages are input and output, text messages are JSON (a change of size one way, the exit status the other) |
+| `/store/` and what is under it | jaccard-store's admin page over the store's database: read-only |
 | everything else | the web page; a path that is no file is answered with `index.html`, but for one under `/assets/`, which is not found |
 
 The HTTP API can roll nothing out and nothing back. A rollout needs the Nix
@@ -608,6 +683,8 @@ It follows the Fables for Robots design system.
 
 The page holds one WebSocket to `/api/watch` and draws from what it
 receives. It says so when the connection is lost, and connects again.
+Its header has a link to the store's page, `/store/`, which is
+jaccard-store's own and not part of this application.
 
 The sources are in `ui/`, a project of its own that a `go.mod` of its own
 keeps out of the Go module. Its build is written to `web/dist`, which the
@@ -707,17 +784,19 @@ Every package is at the top level of the module; there is no `internal/`.
 | Package | Purpose | Depends on |
 |---|---|---|
 | `wire` | messages, framing, error codes | |
-| `node` | keys, the endpoint of draal, dialing draal; over the `node` package of jaccard-store where that fits | go-iroh |
+| `node` | keys, the endpoint of draal with the protocols it accepts, dialing draal; over the `node` package of jaccard-store where that fits | go-iroh |
 | `node/nodetest` | a network in memory, for tests without iroh | `node` |
 | `logring` | the ring of lines and its followers | `wire` |
 | `stats` | samples from cgroup v2 and `/proc/net/dev` | `wire` |
 | `reaper` | as process 1: runs the program as its child and waits for every child | |
 | `supervisor` | starts, stops and restarts the service; backoff | `logring`, `wire` |
 | `testservice` | a program for the tests: exits, hangs or ignores SIGTERM on request | |
-| `preload` | the client of the sidecar's preload endpoint | |
+| `launcher` | the thread that starts the service and the shells, and the program replacing itself with another | |
+| `storemount` | the store of a zathras: jaccard-nfs-nix-store's NFS server in the process, mounted on `/nix/store` | jaccard-nfs-nix-store, `node`, `wire` |
 | `ptyshell` | shell sessions on a pseudo-terminal | |
 | `health` | the HTTP health check | |
 | `zathras` | the init: the above, and the connection to draal | `wire`, `node` |
+| `storeserver` | the store in draal: jaccard-store's server, its database and bucket, answered on draal's endpoint with authorization; its admin page | jaccard-store, `authz`, `node` |
 | `db`, `db/dbq` | migrations, queries, what sqlc makes of them | |
 | `fleet` | the connected zathrases, their reports and samples | `wire` |
 | `rollout` | the reconciler | `db`, `fleet` |
@@ -725,7 +804,7 @@ Every package is at the top level of the module; there is no `internal/`.
 | `draal` | `Controller` and its implementation, the handler of the protocol | `db`, `fleet`, `rollout`, `authz`, `wire`, `node` |
 | `operator` | the client of draal for commands and TUI | `wire`, `node` |
 | `closure` | the closure of a store path, by `nix-store` | |
-| `push` | store paths to jaccard-store | jaccard-store, amber-store core |
+| `push` | store paths to the store | jaccard-store, amber-store core |
 | `web` | the HTTP API and the embedded page | `draal` |
 | `tui` | the terminal UI, over an interface that the client of `operator` satisfies | `wire`, `term`, `human` |
 | `tui/tuitest` | a pseudo-terminal for the tests that run the terminal UI as a whole; part of no program | |
@@ -745,7 +824,8 @@ zathrases report, and answers what is to be done.
 ## 12. Build and delivery
 
 - **Flake.** `flake.nix` with `.envrc` (`use flake`), as the sibling
-  repositories have. The shell has Go, sqlc and Node.
+  repositories have. The shell has Go, sqlc and Node. The Go is 1.27,
+  which the packages of the mount's NFS server (Buildbarn's) need.
 - **The Go build** is [gonixgo](https://github.com/draganm/gonixgo)'s
   `buildGoApplication`, with `CGO_ENABLED = 0`. It needs
   `--option allow-unsafe-native-code-during-evaluation true`.
@@ -757,19 +837,24 @@ zathrases report, and answers what is to be done.
 - **The image**, `ghcr.io/fables-for-robots/great-machine`, for amd64 and
   arm64, is made by Nix of the same derivation: the program, a static
   busybox for `/bin/sh` and the shell's tools, and CA certificates. Its
-  entrypoint is `great-machine`. It is the image of the app container of a
-  pod, and of draal. The pod mounts the sidecar's store over `/nix/store`,
-  so nothing in the image may be a link into its own store: the program,
-  busybox and the certificates are copied in as files. gonixgo does not
+  entrypoint is `great-machine`. It is the image of the container of a
+  pod, and of draal. zathras mounts the store over `/nix/store`, which the
+  image has empty, so nothing in the image may be a link into its own
+  store: the program, busybox and the certificates are copied in as
+  files. gonixgo does not
   cross-compile, so each architecture is built on a runner of its own and
   the two are joined under one tag.
-- **`deploy/pod.yaml`** is a whole pod: the sidecar as jaccard-nfs-nix-store
-  documents it, and the app container with `great-machine zathras`,
-  `/nix/store` mounted with `HostToContainer` propagation, and a readiness
-  probe on the health check of zathras.
-  **`deploy/draal.yaml`** runs draal with a volume for its data.
+- **`deploy/pod.yaml`** is a whole pod: one container with
+  `great-machine zathras`, `CAP_SYS_ADMIN` and no AppArmor profile, a
+  volume for the cache of the store, and a readiness probe on the health
+  check of zathras.
+  **`deploy/draal.yaml`** runs draal with a volume for its data, the
+  bucket with its credentials from a Secret, and a volume for the
+  scratch space of the store.
 - **CI.** `test.yml` runs vet, the tests, `sqlc diff` and the type check,
-  the unit tests and the build of the page. `release.yml`, on a tag `v*`,
+  the unit tests and the build of the page, and the tests that need root
+  and the kernel in a container that has what a pod's container has
+  (`scripts/test-linux.sh`). `release.yml`, on a tag `v*`,
   builds and pushes the image as `:<tag>` and `:latest` and makes a
   GitHub release.
 
@@ -782,8 +867,14 @@ zathrases report, and answers what is to be done.
 - **draal restarts during a rollout**: 6.2. The rollout goes on.
 - **A zathras restarts** (the container was restarted): it comes back
   `idle` with a new endpoint ID and is sent a generation as 6.2 says.
-- **The sidecar cannot fetch a path**: the `prepare` fails and the rollout
+- **A zathras cannot fetch a path**, or the store has none of that name
+  for the service: the `prepare` fails with the path and the rollout
   halts before anything was restarted.
+- **The mount cannot be made**: zathras ends at start and says what the
+  container needs.
+- **draal is down**: a pod serves what it has fetched, and a path it has
+  not is an I/O error for whoever names it, after the mount's own
+  timeout.
 - **The new binary crashes**: the rollout halts at the first zathras, which
   goes on restarting it with backoff until the operator rolls out or back.
 - **A shell or a log is asked of a zathras that is gone**: `unavailable`.
@@ -809,9 +900,17 @@ Tests use the package `testing` of the standard library.
   fake S3 bucket, as jaccard-nfs-nix-store's tests have it, with a store
   path that is a directory, one that is a file, and one that is there
   already.
-- **`e2e`**: draal and several zathrases in one process over go-iroh on the
-  loopback interface, with a fake preload endpoint and real child
-  processes: a rollout from the operator client to `completed`; one that
+- **`storeserver`, `launcher`, `storemount`** as [stage 4](2026-10-11-great-machine-stage-4-design.md) has them
+  (§12): the store over a bucket in memory and real endpoints; the
+  launcher and the mount on Linux as root, in a container that is not
+  privileged (`scripts/test-linux.sh`), a program started from the mount
+  300 times while the garbage collector runs among them.
+- **`e2e`**: draal, with its store over a bucket in memory, and several
+  zathrases in one process over go-iroh on the loopback interface, with a
+  fake in the place of the mount and real child processes: closures of
+  two services pushed through draal's endpoint ID and pulled again by a
+  stranger; on Linux as root, one rollout with no fake at all, into a
+  store that is mounted and fetched from draal's, started by a launcher; a rollout from the operator client to `completed`; one that
   halts on a binary that exits; logs, a shell and the fleet through the
   operator client and through HTTP; a peer that is no operator, refused;
   the health check of a zathras, which fails before the rollout, passes
@@ -869,18 +968,22 @@ The plan begins with these, as each can change something above:
    written, against jaccard-store v0.7.0: a single file is imported and
    pushed by the same calls as a directory, and comes back identical. A
    symbolic link cannot be pushed as a link, since the import follows it,
-   so `rollout` refuses a closure that has one (6.1). That the sidecar
-   serves a single-file reference was read in its design and its code,
-   and is still to be seen running on Linux.
+   so `rollout` refuses a closure that has one (6.1). That the mount
+   serves a single-file reference was seen running on Linux in stage 4:
+   as a regular file with its content, and with an execute bit whether or
+   not the file had one, since a root that is a file has no entry of a
+   directory to keep a mode in.
 
 ## 16. Order of work
 
-Three stages, each of which ends with something that works by itself:
+Four stages, each of which ends with something that works by itself:
 
 1. zathras, draal and the operator commands: a rollout from the laptop to
    pods, with `status`, `logs` and `shell` on the command line.
 2. The web page.
 3. The terminal UI.
+4. The store in draal and the mount in zathras: one endpoint ID, and a
+   pod of one container ([its design](2026-10-11-great-machine-stage-4-design.md)).
 
 ## 17. Not in this design
 
@@ -890,5 +993,6 @@ Three stages, each of which ends with something that works by itself:
   by whether its process runs, and for how long.
 - Environment and secrets of a service: they are those of the pod.
 - Rollouts and rollbacks from the web page or the TUI.
-- Removing a service from draal.
+- Removing a service from draal, and removing anything from the store.
+- Limiting who may pull from the store.
 - More than one draal for a fleet.
