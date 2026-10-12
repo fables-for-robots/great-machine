@@ -339,7 +339,7 @@ Each of these the spec left open or got wrong, and each is in the spec now where
 3. **A shell that is not there stays an error of its start.** Through a launcher it would be a session that says one line and ends; `ptyshell` looks at the file first.
 4. **A stream of the store that was answered is kept until its peer ends it**, 2 seconds at most, and **a request that does not end with its context has the grace twice and is left behind**: both so that draal's end is neither early for a client nor held by one. (The spec's §3.4.)
 5. **draal asks its bucket nothing when it starts**, as jaccard-store's own server does not: a bucket that is not there shows in the first push. A region it does need at once, and says which flag gives one. (The spec's §11.)
-6. **The refusal a rollout prints for a key that is no operator's names `list`**, since a push begins by asking what the store has. (The spec's §3.3.)
+6. **The refusal a push ends with for a key that is no operator's names `list`**, since a push begins by asking what the store has. (The spec's §3.3. This read "the refusal a rollout prints" until the plan was carried out: `great-machine rollout` is refused before that, by draal, which it asks for the store first.)
 7. **A handler's connection is closed by `node` when the handler returns**, and connections of the store's protocol are taken only while draal accepts. The second is harmless: between the end of `Serve` and the stop of the store nobody is let in.
 8. **The store of the harness of `e2e` is on request**, because the bucket in memory sets the environment of its test and ten tests of `e2e` are parallel.
 9. **One test has no stand-in** (Task 12), which the spec did not ask for: the mount, pulling from draal's own store with a key draal does not know, and a service started from it by a launcher. Without it no test would have the two sides of the stage meet.
@@ -354,6 +354,76 @@ And what two reviews found (below), each mended and in the spec:
 15. **The working directory of what a launcher starts is changed to by `exec-in-place`**, whose arguments are therefore `DIR PATH ARGV0 [ARG...]`: a working directory in the store stood the process still as an execution from it did. No zathras gives its service a working directory today; the supervisor and the shells can be given one. (The spec's §5.2.)
 16. **A launcher with a user gives the user what a process is started on**, the pipes and the terminal, and a shell's terminal is opened before the shell is started so that the launcher sees it: a service of `--user` could not open `/dev/stdout`, nor a shell its terminal. (The spec's §5.3.)
 17. **An endpoint has a host and nothing that is no address; a size is digits; a scratch directory of blanks is none.**
+
+## Departures made while the plan was carried out
+
+The plan was carried out on 2026-10-11 and 2026-10-12, task by task, each
+by one agent from its task file and each reviewed by another, and the
+whole then reviewed once more. Every review finding, every ruling and what
+was deferred is in [the ledger](2026-10-11-great-machine-stage-4/ledger.md).
+The task files are left as they were when the tasks were done from them
+(but for the one step of Task 6 that the first row is about); where the
+code now differs from them, this table says so. The spec and the README
+say what the code does now.
+
+Before any mend, the code of every task as it was committed was the same,
+file by file, as the tree this plan was checked in.
+
+| Where | What differs from the task file | Why |
+|---|---|---|
+| Task 6, Step 35, `cli/d/draal.key` | not made: the step is gone from the task file, and the run that is meant to fail says to remove `cli/d` | It was the key of a draal that a test had started in the tree when the plan was written, committed with a mend and turned into a step by the program that wrote the task files. Its text is still in the first commit of the plan; no draal outside that test ever had it. |
+| Task 1, its last step, and Task 10 | the release was made during the execution: jaccard-nfs-nix-store's pull request 1, merged by rebase, and the tag v0.3.0; Task 10 required the tag from its first commit | The human partner's word, given when the execution had come to Task 10. |
+| Task 13 | Steps 1 to 7, the files, were carried out before Tasks 10 to 12, and Steps 8 to 10 behind Task 12 | Tasks 10 to 12 waited for the release. |
+| Task 4, `node/handlers_test.go` | `ended` takes a connection for ended only when a stream is refused at once, not when an open runs out of its time | Task 4's review: a connection that is left open stops taking streams at its peer's limit, so the test of a handler's return passed without the line that closes the connection. |
+| Task 4, `node/listen.go` | the comment of `Handlers` says that `Close` does not wait for the handlers; `Listen` copies the map it is given, with a test | Task 4's review, and the final review. |
+| Task 6, `cli/commands_test.go` | the command lines that are refused name a data directory of the test's, not `d` in the tree; a test of what a refusal repeats | Task 6's review: a refusal that is lost starts a draal where the command line says, which is how the key above came to be. |
+| Task 6, `cli/draal.go` | a refused `--s3-endpoint` with an `@`, a `?` or a `#` in it is not repeated in the refusal | Task 6's review: `http://user:secret@host` was quoted whole, and a refusal of draal goes to the log of a pod. A first mend that cut the value still let the end of a query through. |
+| Task 6, `cli/draal_test.go` | one test more, `TestRunDraalLetsARequestOfTheStoreEndWhenItIsToldToEnd`: a pull under way when draal is told to end is answered within its grace, and the answer reaches the client | Task 6's review: no test failed when the store was stopped behind the endpoint and not before it. |
+| Task 6, `web/store_test.go` | the stand-in for the store's page sets a policy of its own, and the test wants the store's answer and that policy alone | Task 6's review: the test passed with the two `/store` routes taken out. |
+| Task 5, `storeserver/storeserver.go` | the line of the log for a refusal has `protocol=amber/jaccard-store/1` at its end | The final review: the line had the shape of draal's own. |
+| Task 8, `launcher/launcher.go` | a command that has a working directory and no environment of its own is given `PWD`, as os/exec gives it; a stream that could not be given to the user is a warning | Task 8's review: the working directory is no longer the command's when os/exec starts it. |
+| Task 8, the tests of `launcher` | three tests more: `PWD`; what is started has no `CAP_SYS_ADMIN` though the capability was inheritable where the launcher was made; what is no pipe and no terminal keeps its owner (on a device of the test's own) | Task 8's review: the lines that lower the inheritable set, and the rule for what is given away, could be taken out without a test failing. |
+| Task 8, `scripts/test-linux.sh` | without a package among its arguments it tests every package | The final review: given a flag alone it tested nothing and was green, and Step 10 of Task 13 is written so. |
+| Task 10, `storemount` | `Config.PullTimeout` and `Config.AdoptTimeout` in the place of a package variable; `Stop` stops once; the cache is made the zathras's alone to write before the store is started; a directory that holds something is not mounted over (`Config.Over` is for tests); four tests more, a program of another user started from the mount among them | The reviews of Tasks 10 and 11 and the final review. The Global Constraint on waiting times; a second `Stop` took a later mount away; an `emptyDir` comes writable by everybody, so a service of `--user` could put files of its own in the cache; outside a container the mount would hide a machine's own `/nix/store`. |
+| Task 11, the tests of the command | the logs a test reads while the command runs are behind a lock; three refusals more in the table | Task 11's review. |
+| Task 12, `e2e/mount_linux_test.go` | the store of the pod notes what it is asked to fetch, and the test wants the closure asked for; the launcher is made before the store; the service has ended when the store is stopped; the test first sees that it has the capability itself; `Over: true` | Task 12's review: the mount fetches a store path when it is first looked up as well, so the test passed with a prepare that fetched nothing. |
+| Task 13, `deploy/pod.yaml` | `seccompProfile: RuntimeDefault`; the comment says what a cluster before Kubernetes 1.30 does with `appArmorProfile`, and that a namespace under the Pod Security Standards has to be `privileged` | Task 13's review: a pod that says nothing has no seccomp profile on most clusters, and the file could not be applied before 1.30 as it stood. |
+| Task 13, `deploy/draal.yaml` | `terminationGracePeriodSeconds: 60` | Task 6's review: draal's end can take the page's 5 seconds and the store's two graces of 10. |
+| Task 13, the README, the design, the spec | **what the launcher does not take away**: a process it starts cannot mount in the container, and can make a user namespace of its own; with it "in the container" where the documents said that the service cannot gain the capability; whose the cache is; a `/nix/store` that holds something; the operator's program at an upgrade; what draal answers to the flags that are gone | The reviews of Tasks 8, 11 and 13 and the final review. The first is the first of what stays open, below. |
+| The spec's §3.3, Review Focus 4 and Decision 6 above | `great-machine rollout` does not print the store's refusal for a key that is no operator's: draal refuses it first | The final review. |
+| Task 6, Step 40, and Tasks 10 and 13, the builds | the page was not looked at in a browser again; the build for Linux by Nix and the image were not made | No browser and no Linux builder in the execution. The page's files are those that were looked at when the plan was written. |
+| Task 14 | not carried out | It needs a cluster. |
+| Commits | each ends with the attribution of the agent that made it; the first eight were rewritten for that line before anything was pushed | The agents' sessions say so. |
+
+What stays open, each with its reason in the ledger:
+
+- **The service can make a user namespace of its own.** A runtime's
+  seccomp profile lets the calls it keeps for `CAP_SYS_ADMIN` through for
+  every process of a container that was given the capability. What the
+  launcher starts has not the capability and cannot mount in the
+  container, nor undo what zathras mounted, nor read zathras's memory
+  (each was seen in a container); but it can `unshare` a user namespace
+  and is root in it, which a container without the capability is refused.
+  The documents say so. What would close it, a seccomp filter set by the
+  launcher's thread, is no part of this stage.
+- **No run on a kernel with AppArmor, on x86_64, of the Linux build by
+  Nix, or of the image.** The first run of `test.yml` on GitHub is all
+  four, and the merge waits for it.
+- **Task 14**, the cluster, before the release is tagged.
+- **What a review asked for and the controller did not do**: no `recover`
+  around a handler of a connection of the store (a panic there ends
+  draal, as one in draal's own protocol does); `--jaccard-server` and
+  `--jaccard-prefix` are refused with the sentence of any flag that does
+  not exist. The ledger has both sides of each.
+- **The minor findings that were deferred**, in the ledger with the final
+  review's word on each: among them the helpers of tests that are written
+  four times over, `deploy/` naming what a container needs of memory and
+  of scratch space without setting either, and the script's container
+  writing to the module cache of the machine as root.
+- **Three tests of earlier stages fail now and then on a loaded
+  machine**, each on a bound of time: `TestAZathrasThatStaysAwayIsWaitedForForTheGrace`
+  (`draal`), `TestShell` (`zathras`),
+  `TestLongRunMakesTheNextDelayTheFirstAgain` (`supervisor`).
 
 ## What was run while this plan was written
 
