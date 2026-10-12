@@ -70,6 +70,11 @@ spec:
       labels:
         app: draal
     spec:
+      # draal ends in its own time when it is told to: the web page has 5
+      # seconds for its connections, and the requests of the store that
+      # are under way have 10, and 10 more if one of them does not end.
+      # The kubelet waits longer than that before it kills draal.
+      terminationGracePeriodSeconds: 60
       containers:
         - name: draal
           # The same tag as the pods' app containers: draal and every
