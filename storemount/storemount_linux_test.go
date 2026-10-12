@@ -97,7 +97,11 @@ func (s *store) mount(service, dir, cache string) *Mount {
 	s.t.Helper()
 	// Whatever becomes of the test, no mount is left for the removal of
 	// the directory to walk into.
-	s.t.Cleanup(func() { jmount.Detach(dir) })
+	on := dir
+	if on == "" {
+		on = DefaultDir
+	}
+	s.t.Cleanup(func() { jmount.Detach(on) })
 	m, err := Start(Config{Server: s.id, Addrs: s.addrs, Service: service, Cache: cache, Dir: dir, Log: quiet})
 	if err != nil {
 		s.t.Fatalf("Start: %v", err)
@@ -374,9 +378,6 @@ func TestStopAndACacheOfAnotherService(t *testing.T) {
 // collector runs without pause.
 func TestAProgramIsStartedFromTheMountByTheProcessThatServesIt(t *testing.T) {
 	needsRoot(t)
-	if mounted(t, DefaultDir) {
-		t.Skipf("something is mounted on %s already", DefaultDir)
-	}
 	s := newStore(t)
 	src := t.TempDir()
 	const name = "ppp-testservice-1.0"
@@ -393,14 +394,14 @@ func TestAProgramIsStartedFromTheMountByTheProcessThatServesIt(t *testing.T) {
 	}
 	s.push("web", filepath.Join(src, name))
 
-	// On /nix/store itself, with the directory made by Start.
-	m := s.mount("web", "", t.TempDir())
+	dir := t.TempDir()
+	m := s.mount("web", dir, t.TempDir())
 	l, err := launcher.New(launcher.Config{Log: quiet})
 	if err != nil {
 		t.Fatalf("launcher.New: %v", err)
 	}
 	defer l.Close()
-	inStore := filepath.Join(DefaultDir, name, "bin", "testservice")
+	inStore := filepath.Join(dir, name, "bin", "testservice")
 	start := func(text string) (string, error) {
 		cmd := exec.Command(inStore, "--stdout", text, "--exit-after", "0")
 		var out bytes.Buffer
@@ -449,6 +450,39 @@ func TestAProgramIsStartedFromTheMountByTheProcessThatServesIt(t *testing.T) {
 	// A start that is held is held until the mount gives up, minutes on.
 	if longest > 30*time.Second {
 		t.Errorf("the longest start took %s: the process stood still", longest)
+	}
+	if err := m.Stop(); err != nil {
+		t.Errorf("Stop: %v", err)
+	}
+	if mounted(t, dir) {
+		t.Error("after Stop the store is still mounted")
+	}
+}
+
+// Unless it is told otherwise the store is mounted on /nix/store, which
+// Start makes if it is not there.
+//
+// On a machine that has a /nix the test would cover its store with one of
+// its own, for every process of the machine. It runs where there is none:
+// in the container of scripts/test-linux.sh. No other test of any package
+// mounts there, since the tests of the packages run at the same time.
+func TestTheStoreIsMountedOnNixStore(t *testing.T) {
+	needsRoot(t)
+	if _, err := os.Lstat("/nix"); err == nil {
+		t.Skip("this machine has a /nix, which the test would mount over: scripts/test-linux.sh runs it in a container that has none")
+	}
+	t.Cleanup(func() {
+		os.Remove(DefaultDir)
+		os.Remove("/nix")
+	})
+	s := newStore(t)
+	s.push("web", storePath(t, t.TempDir(), "aaa-one-1.0"))
+	m := s.mount("web", "", t.TempDir())
+	if !mounted(t, DefaultDir) {
+		t.Fatalf("nothing is mounted on %s", DefaultDir)
+	}
+	if content, err := os.ReadFile(filepath.Join(DefaultDir, "aaa-one-1.0", "share", "name")); err != nil || string(content) != "aaa-one-1.0\n" {
+		t.Errorf("the file of a store path under %s: %q, %v", DefaultDir, content, err)
 	}
 	if err := m.Stop(); err != nil {
 		t.Errorf("Stop: %v", err)
