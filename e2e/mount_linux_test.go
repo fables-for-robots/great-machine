@@ -121,7 +121,9 @@ func TestARolloutIntoAMountedStore(t *testing.T) {
 		Service: service,
 		Cache:   t.TempDir(),
 		Dir:     h.storeDir,
-		Log:     quiet,
+		// The directory holds the store path that was pushed from it: the path of the binary is to be the same on the laptop and in the pod.
+		Over: true,
+		Log:  quiet,
 	})
 	if err != nil {
 		t.Fatalf("storemount.Start: %v", err)

@@ -653,3 +653,61 @@ func TestTheCacheIsMadeTheZathrassOwnToWrite(t *testing.T) {
 			st.Uid, st.Gid, info.Mode().Perm(), os.Geteuid(), os.Getegid(), 0o755)
 	}
 }
+
+// A directory that holds something is not mounted over: outside a
+// container the mount would hide a store of the machine's own from every
+// process, the one that could unmount it among them.
+func TestADirectoryThatHoldsSomethingIsNotMountedOver(t *testing.T) {
+	needsRoot(t)
+	s := newStore(t)
+	dir := t.TempDir()
+	file := filepath.Join(dir, "aaa-of-the-machine-1.0")
+	if err := os.WriteFile(file, []byte("of the machine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(t.TempDir(), "cache")
+	// Whatever becomes of the test, no mount is left for the removal of
+	// the directory to walk into.
+	t.Cleanup(func() { jmount.Detach(dir) })
+	cfg := Config{Server: s.id, Addrs: s.addrs, Service: "web", Cache: cache, Dir: dir, Log: quiet}
+
+	m, err := Start(cfg)
+	if err == nil {
+		m.Stop()
+		t.Fatal("the store was mounted over a directory that holds something")
+	}
+	for _, word := range []string{"is not empty", dir, "--no-store"} {
+		if !strings.Contains(err.Error(), word) {
+			t.Errorf("the refusal does not say %q: %v", word, err)
+		}
+	}
+	if mounted(t, dir) {
+		t.Error("the mount that was refused left something mounted")
+	}
+	if content, err := os.ReadFile(file); err != nil || string(content) != "of the machine\n" {
+		t.Errorf("the file in the directory after the refusal: %q, %v", content, err)
+	}
+	if _, err := os.Stat(cache); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the cache after the refusal: %v, want it not to be there", err)
+	}
+
+	// Over, for tests, mounts over what is there.
+	cfg.Over = true
+	m, err = Start(cfg)
+	if err != nil {
+		t.Fatalf("Start with Over: %v", err)
+	}
+	defer m.Stop()
+	if !mounted(t, dir) {
+		t.Fatal("with Over nothing is mounted on the directory")
+	}
+	if got := names(t, dir); len(got) != 0 {
+		t.Errorf("with the store mounted over it the directory lists %q, want nothing: the file is under the mount", got)
+	}
+	if err := m.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if content, err := os.ReadFile(file); err != nil || string(content) != "of the machine\n" {
+		t.Errorf("the file in the directory after Stop: %q, %v", content, err)
+	}
+}

@@ -40,8 +40,12 @@ type Config struct {
 	// it a directory that the user of the zathras alone may write to.
 	Cache string
 	// Dir is the directory the store is mounted on, which is made if it
-	// is not there. "": DefaultDir.
+	// is not there. "": DefaultDir. A directory that holds something is
+	// refused: the mount would hide it.
 	Dir string
+	// Over is for tests: the store is mounted on Dir though the directory
+	// holds something, over what is there. A zathras never sets it.
+	Over bool
 	// PullTimeout is how long a fetch that fails is tried again for. 0:
 	// what jaccard-nfs-nix-store has, 2 minutes.
 	PullTimeout time.Duration

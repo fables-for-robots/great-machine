@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"syscall"
 
+	"github.com/amber-store/jaccard-nfs-nix-store/mount"
 	"github.com/amber-store/jaccard-nfs-nix-store/preload"
 	"github.com/amber-store/jaccard-nfs-nix-store/refs"
 	"github.com/amber-store/jaccard-nfs-nix-store/sidecar"
@@ -61,6 +65,35 @@ func own(dir string) error {
 	return nil
 }
 
+// empty returns nil for a directory that is not there, for one that holds
+// nothing, and for one that an NFS mount of an earlier run lies on, which
+// the sidecar takes over; and otherwise why the store is not mounted on
+// dir.
+func empty(dir string) error {
+	if fstype, mounted, err := mount.Mounted(dir); err != nil {
+		return fmt.Errorf("storemount: looking at what is mounted on %s: %w", dir, err)
+	} else if mounted && strings.HasPrefix(fstype, "nfs") {
+		return nil
+	}
+	f, err := os.Open(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("storemount: the directory of the store: %w", err)
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("storemount: the directory of the store: %w", err)
+	}
+	if len(names) > 0 {
+		return fmt.Errorf("storemount: %s is not empty (it holds %s): the store of the zathras would be mounted over what is there, and hide it from every process; "+
+			"--no-store runs a zathras without a store of its own, which leaves the directory as it is", dir, names[0])
+	}
+	return nil
+}
+
 // Start makes a key, opens the cache, serves it over NFS on a loopback
 // port the system picks, and mounts that on cfg.Dir, which it makes if it
 // is not there. When it returns, the directory is the store.
@@ -71,6 +104,8 @@ func own(dir string) error {
 // A container that does not let the process mount makes Start fail with
 // what the container needs. Whatever Start fails with, nothing is left
 // mounted and nothing is left listening.
+//
+// A directory that holds something is refused, unless Over says otherwise.
 func Start(cfg Config) (*Mount, error) {
 	if err := cfg.check(); err != nil {
 		return nil, err
@@ -94,6 +129,14 @@ func Start(cfg Config) (*Mount, error) {
 	key, err := node.NewKey()
 	if err != nil {
 		return nil, fmt.Errorf("storemount: making a key: %w", err)
+	}
+	// A directory that holds something is not mounted over: outside a
+	// container the mount would hide a store of the machine's own from
+	// every process, the one that could unmount it among them.
+	if !cfg.Over {
+		if err := empty(dir); err != nil {
+			return nil, err
+		}
 	}
 	if err := own(cfg.Cache); err != nil {
 		return nil, fmt.Errorf("storemount: the cache %s has to be the zathras's alone to write, and cannot be made so: %w", cfg.Cache, err)
