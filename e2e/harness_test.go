@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -74,6 +75,12 @@ type harness struct {
 	opKey    node.Key
 	pods     []*pod
 	op       *operator.Client
+	// podStore and podStart are what a pod that is started from now on
+	// fetches a closure with and starts its processes with. nil: the pod
+	// itself, which fetches nothing, and a start as it is. A test whose
+	// pod has a real store sets them (mount_linux_test.go).
+	podStore zathras.Preloader
+	podStart func(cmd *exec.Cmd, start func() error) error
 
 	mu        sync.Mutex
 	addr      netip.AddrPort     // where draal listens now
@@ -283,8 +290,13 @@ func (h *harness) startPod(name string) *pod {
 		h.t.Fatalf("NewKey: %v", err)
 	}
 	p := &pod{name: name, id: key.ID(), ring: logring.New(400, 16<<10)}
+	var store zathras.Preloader = p
+	if h.podStore != nil {
+		store = h.podStore
+	}
 	p.sup = supervisor.New(supervisor.Config{
 		Ring:        p.ring,
+		Start:       h.podStart,
 		StopTimeout: 5 * time.Second,
 		// A service of these tests that ends has ended quickly, however
 		// long the machine took to start it.
@@ -315,8 +327,8 @@ func (h *harness) startPod(name string) *pod {
 		},
 		Supervisor:  p.sup,
 		Ring:        p.ring,
-		Preload:     p,
-		Shell:       ptyshell.Config{},
+		Preload:     store,
+		Shell:       ptyshell.Config{Start: h.podStart},
 		ReportEvery: 50 * time.Millisecond,
 		RedialMin:   50 * time.Millisecond,
 		RedialMax:   200 * time.Millisecond,
