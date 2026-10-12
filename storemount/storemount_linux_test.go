@@ -375,7 +375,12 @@ func TestStopAndACacheOfAnotherService(t *testing.T) {
 // started stands for a moment between the two, and the collector of this
 // process must not be held by it. With an empty cache, where the start is
 // what fetches the store path, and three hundred times more while the
-// collector runs without pause.
+// collector runs without pause, every other time with a working directory
+// that is in the store as well, and one that nothing has looked at yet, so
+// that the kernel has to ask for it: os/exec changes to a working
+// directory between the fork and the execution, which is where nothing may
+// wait for the store, so the launcher has the started process change to
+// it.
 func TestAProgramIsStartedFromTheMountByTheProcessThatServesIt(t *testing.T) {
 	needsRoot(t)
 	s := newStore(t)
@@ -392,6 +397,13 @@ func TestAProgramIsStartedFromTheMountByTheProcessThatServesIt(t *testing.T) {
 	if err := os.WriteFile(bin, program, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A directory for every start that has its working directory in the
+	// store: the kernel remembers a directory it was told of.
+	for i := range 150 {
+		if err := os.MkdirAll(filepath.Join(src, name, "in", strconv.Itoa(i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	s.push("web", filepath.Join(src, name))
 
 	dir := t.TempDir()
@@ -402,8 +414,9 @@ func TestAProgramIsStartedFromTheMountByTheProcessThatServesIt(t *testing.T) {
 	}
 	defer l.Close()
 	inStore := filepath.Join(dir, name, "bin", "testservice")
-	start := func(text string) (string, error) {
+	start := func(text, in string) (string, error) {
 		cmd := exec.Command(inStore, "--stdout", text, "--exit-after", "0")
+		cmd.Dir = in
 		var out bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &out
 		if err := l.Start(cmd, cmd.Start); err != nil {
@@ -414,7 +427,7 @@ func TestAProgramIsStartedFromTheMountByTheProcessThatServesIt(t *testing.T) {
 	}
 
 	began := time.Now()
-	out, err := start("from an empty cache")
+	out, err := start("from an empty cache", "")
 	if err != nil || out != "from an empty cache\n" {
 		t.Fatalf("started with an empty cache, the program wrote %q, %v", out, err)
 	}
@@ -438,7 +451,11 @@ func TestAProgramIsStartedFromTheMountByTheProcessThatServesIt(t *testing.T) {
 	for i := range 300 {
 		began := time.Now()
 		text := "start " + strconv.Itoa(i)
-		out, err := start(text)
+		in := ""
+		if i%2 == 1 {
+			in = filepath.Join(dir, name, "in", strconv.Itoa(i/2))
+		}
+		out, err := start(text, in)
 		if err != nil || out != text+"\n" {
 			t.Fatalf("start %d wrote %q, %v", i, out, err)
 		}
