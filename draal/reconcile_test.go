@@ -165,13 +165,13 @@ func TestAPrepareThatFailsHaltsTheRollout(t *testing.T) {
 	w.stableWeb()
 	a := w.newFake(10, "web", "web-a", running(1))
 	a.onPrepare = func(wire.Prepare, node.Stream) error {
-		return wire.Errorf(wire.CodeInternal, "the sidecar said no")
+		return wire.Errorf(wire.CodeInternal, "the store said no")
 	}
 	a.connect()
 	b := w.zathras(11, "web", "web-b", running(1))
 
 	halted := w.awaitRollout(w.rollout(newWeb(1)), wire.RolloutHalted)
-	if !strings.Contains(halted.Reason, "web-a") || !strings.Contains(halted.Reason, "the sidecar said no") {
+	if !strings.Contains(halted.Reason, "web-a") || !strings.Contains(halted.Reason, "the store said no") {
 		t.Errorf("the reason is %q, want the name of the zathras and what it answered", halted.Reason)
 	}
 	if halted.Finished.IsZero() {
@@ -559,7 +559,7 @@ func TestAFailedCommandIsLogged(t *testing.T) {
 	cfg := testConfig(t)
 	log := logTo(&cfg)
 	w := startWorld(t, cfg)
-	no := func(wire.Prepare, node.Stream) error { return wire.Errorf(wire.CodeInternal, "the sidecar said no") }
+	no := func(wire.Prepare, node.Stream) error { return wire.Errorf(wire.CodeInternal, "the store said no") }
 
 	// Outside a rollout: a new zathras is sent the stable generation.
 	first := w.stableWeb()
@@ -574,7 +574,7 @@ func TestAFailedCommandIsLogged(t *testing.T) {
 	a.connect()
 	outside := map[string]string{
 		"zathras": string(a.id), "name": "web-a", "service": "web",
-		"command": "prepare", "generation": fmt.Sprint(first.Generation), "reason": "the sidecar said no",
+		"command": "prepare", "generation": fmt.Sprint(first.Generation), "reason": "the store said no",
 	}
 	eventually(t, "the failure outside a rollout to be logged", func() bool {
 		_, ok := log.find(slog.LevelWarn, outside)
@@ -588,7 +588,7 @@ func TestAFailedCommandIsLogged(t *testing.T) {
 	info := w.awaitRollout(w.rollout(newWeb(1)), wire.RolloutHalted)
 	inside := map[string]string{
 		"zathras": string(b.id), "name": "web-b", "service": "web",
-		"command": "prepare", "generation": fmt.Sprint(info.Generation), "reason": "the sidecar said no",
+		"command": "prepare", "generation": fmt.Sprint(info.Generation), "reason": "the store said no",
 	}
 	if _, ok := log.find(slog.LevelWarn, inside); !ok {
 		t.Error("the failure in a rollout was not logged")

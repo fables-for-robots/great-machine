@@ -117,12 +117,12 @@ func TestPreparing(t *testing.T) {
 		in := input(newRollout(wire.RolloutPreparing, 2, 1), 1, old()...)
 		in.Failed[id("web-b")] = Failure{
 			Generation: 2,
-			Reason:     "preload: 502 Bad Gateway: fetch abc-web: no such reference",
+			Reason:     "the store has no /nix/store/abc-web for the service web",
 			At:         now,
 		}
 		check(t, Decide(in), Decision{
 			State:   wire.RolloutHalted,
-			Reason:  "web-b: preload: 502 Bad Gateway: fetch abc-web: no such reference",
+			Reason:  "web-b: the store has no /nix/store/abc-web for the service web",
 			Awaited: 3,
 		})
 	})
@@ -426,8 +426,8 @@ func TestActivatingFailures(t *testing.T) {
 		m := ready()
 		m[0] = member("web-a", running(1, hour))
 		in := input(newRollout(wire.RolloutActivating, 2, 1), 1, m...)
-		in.Failed[id("web-a")] = Failure{Generation: 2, Reason: "preload: 503 Service Unavailable", At: now}
-		d := halted("web-a: preload: 503 Service Unavailable")
+		in.Failed[id("web-a")] = Failure{Generation: 2, Reason: "/nix/store/abc-web could not be fetched from the store: no answer", At: now}
+		d := halted("web-a: /nix/store/abc-web could not be fetched from the store: no answer")
 		d.Prepared = 2
 		check(t, Decide(in), d)
 	})
@@ -767,7 +767,7 @@ func TestCompleted(t *testing.T) {
 			member("web-a", running(2, hour)),
 			member("web-n"),
 		)
-		in.Failed[id("web-n")] = Failure{Generation: 2, Reason: "preload: 503 Service Unavailable", At: failedAt}
+		in.Failed[id("web-n")] = Failure{Generation: 2, Reason: "/nix/store/abc-web could not be fetched from the store: no answer", At: failedAt}
 		check(t, Decide(in), Decision{
 			Prepared:  1,
 			Activated: 1,
@@ -790,7 +790,7 @@ func TestCompleted(t *testing.T) {
 			member("web-a", running(2, hour)),
 			member("web-n"),
 		)
-		in.Failed[id("web-n")] = Failure{Generation: 2, Reason: "preload: 503 Service Unavailable", At: failedAt}
+		in.Failed[id("web-n")] = Failure{Generation: 2, Reason: "/nix/store/abc-web could not be fetched from the store: no answer", At: failedAt}
 		check(t, Decide(in), Decision{
 			Commands:  []Command{prepare("web-n", 2)},
 			Prepared:  1,
@@ -818,7 +818,7 @@ func TestCompleted(t *testing.T) {
 			case len(d.Commands) == 1 && d.Commands[0] == prepare("web-n", 2):
 				// The prepare fails at once.
 				sentAt = append(sentAt, in.Now.Sub(start))
-				in.Failed[id("web-n")] = Failure{Generation: 2, Reason: "preload: 503", At: in.Now}
+				in.Failed[id("web-n")] = Failure{Generation: 2, Reason: "/nix/store/abc-web could not be fetched", At: in.Now}
 			case len(d.Commands) == 0 && d.Recheck.After(in.Now):
 				in.Now = d.Recheck
 			default:
@@ -857,7 +857,7 @@ func TestCompleted(t *testing.T) {
 
 	t.Run("Review Focus 3: a failure of another generation holds nothing back", func(t *testing.T) {
 		in := input(newRollout(wire.RolloutCompleted, 2, 1), 2, member("web-n"))
-		in.Failed[id("web-n")] = Failure{Generation: 1, Reason: "preload: 503", At: now}
+		in.Failed[id("web-n")] = Failure{Generation: 1, Reason: "/nix/store/abc-web could not be fetched", At: now}
 		check(t, Decide(in), Decision{
 			Commands: []Command{prepare("web-n", 2)},
 			Awaited:  1,
@@ -868,8 +868,8 @@ func TestCompleted(t *testing.T) {
 		in := input(newRollout(wire.RolloutCompleted, 2, 1), 2,
 			member("web-m"), member("web-n"), member("web-o"),
 		)
-		in.Failed[id("web-m")] = Failure{Generation: 2, Reason: "preload: 503", At: now.Add(-5 * time.Second)}
-		in.Failed[id("web-n")] = Failure{Generation: 2, Reason: "preload: 503", At: now.Add(-20 * time.Second)}
+		in.Failed[id("web-m")] = Failure{Generation: 2, Reason: "/nix/store/abc-web could not be fetched", At: now.Add(-5 * time.Second)}
+		in.Failed[id("web-n")] = Failure{Generation: 2, Reason: "/nix/store/abc-web could not be fetched", At: now.Add(-20 * time.Second)}
 		check(t, Decide(in), Decision{
 			Commands: []Command{prepare("web-o", 2)},
 			Awaited:  3,
@@ -925,7 +925,7 @@ func TestHalted(t *testing.T) {
 
 	t.Run("and tried again after a failure like any other", func(t *testing.T) {
 		in := input(halted(), 2, member("web-n"))
-		in.Failed[id("web-n")] = Failure{Generation: 2, Reason: "preload: 503", At: now}
+		in.Failed[id("web-n")] = Failure{Generation: 2, Reason: "/nix/store/abc-web could not be fetched", At: now}
 		check(t, Decide(in), Decision{Awaited: 1, Recheck: now.Add(retryAfter)})
 		in.Now = now.Add(retryAfter)
 		check(t, Decide(in), Decision{
@@ -1162,7 +1162,7 @@ func scenarios() map[string]Input {
 	held.Absent[id("web-b")] = now.Add(-30 * time.Second)
 	held.Absent[id("web-d")] = now.Add(-time.Minute)
 	held.Absent[id("web-f")] = now.Add(-hour)
-	completed.Failed[id("web-c")] = Failure{Generation: 2, Reason: "preload: 503", At: now.Add(-time.Second)}
+	completed.Failed[id("web-c")] = Failure{Generation: 2, Reason: "/nix/store/abc-web could not be fetched", At: now.Add(-time.Second)}
 	halted := input(newRollout(wire.RolloutHalted, 3, 1), 2,
 		sample(member("web-a", running(3, hour))),
 		sample(member("web-b", backoff(3))),
