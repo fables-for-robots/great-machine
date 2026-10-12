@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/amber-store/jaccard-store/bucket"
+	"github.com/fables-for-robots/great-machine/launcher"
 	"github.com/fables-for-robots/great-machine/wire"
 	"github.com/urfave/cli/v2"
 )
@@ -138,6 +139,13 @@ func TestInvalidCommandLines(t *testing.T) {
 		{"zathras: a --stop-timeout that is no duration", nil, []string{"zathras", "--draal", idA, "--service", "web", "--stop-timeout", "soon"}, `"soon"`},
 		{"zathras: a --stop-timeout of nothing", nil, []string{"zathras", "--draal", idA, "--service", "web", "--stop-timeout", "0s"}, "--stop-timeout: 0s is not a time"},
 		{"zathras: an argument", nil, []string{"zathras", "--draal", idA, "--service", "web", "now"}, `zathras takes no argument, got "now"`},
+		{"zathras: a --user that is a name", nil, []string{"zathras", "--draal", idA, "--service", "web", "--user", "nobody"}, `--user: "nobody" is no user: want UID or UID:GID, both numbers`},
+		{"zathras: a --user below nothing", nil, []string{"zathras", "--draal", idA, "--service", "web", "--user", "-1"}, `--user: "-1" is no user`},
+		{"zathras: a --user above every ID", nil, []string{"zathras", "--draal", idA, "--service", "web", "--user", "1000:4294967296"}, `--user: "1000:4294967296" is no user`},
+		{"zathras: the variable stands in for --user", map[string]string{"GREAT_MACHINE_USER": "root"},
+			[]string{"zathras", "--draal", idA, "--service", "web"}, `--user: "root" is no user`},
+		{"zathras: the flag of the sidecar's endpoint, which is gone", nil,
+			[]string{"zathras", "--draal", idA, "--service", "web", "--preload-url", "http://127.0.0.1:9889/v1/preload"}, "flag provided but not defined: -preload-url"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -326,41 +334,54 @@ func TestReadZathras(t *testing.T) {
 		draal:       wire.ID(idA),
 		service:     "web",
 		name:        host,
-		preloadURL:  "http://127.0.0.1:9889/v1/preload",
 		shell:       "/bin/sh",
 		stopTimeout: 2 * time.Minute,
 		healthAddr:  ":9890",
+		storeCache:  "/var/cache/great-machine",
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the defaults: got %+v, want %+v", got, want)
 	}
 
-	// The variables, and two flags that win over theirs. An empty
+	// The variables, and the flags that win over theirs. An empty
 	// --health-addr is no health check.
 	t.Setenv("GREAT_MACHINE_DRAAL", idB)
 	t.Setenv("GREAT_MACHINE_SERVICE", "api")
 	t.Setenv("GREAT_MACHINE_NAME", "api-0")
-	t.Setenv("GREAT_MACHINE_PRELOAD_URL", "http://127.0.0.1:1/preload")
 	t.Setenv("GREAT_MACHINE_SHELL", "/bin/bash")
 	t.Setenv("GREAT_MACHINE_STOP_TIMEOUT", "30s")
 	t.Setenv("GREAT_MACHINE_HEALTH_ADDR", "127.0.0.1:9999")
+	t.Setenv("GREAT_MACHINE_STORE_CACHE", "/cache")
+	t.Setenv("GREAT_MACHINE_NO_STORE", "true")
+	t.Setenv("GREAT_MACHINE_USER", "1000:100")
 	read(t, zathrasCommand(), reader, "--name", "api-1", "--health-addr", "")
 	want = zathrasConfig{
 		draal:       wire.ID(idB),
 		service:     "api",
 		name:        "api-1",
-		preloadURL:  "http://127.0.0.1:1/preload",
 		shell:       "/bin/bash",
 		stopTimeout: 30 * time.Second,
 		healthAddr:  "",
+		storeCache:  "/cache",
+		noStore:     true,
+		user:        &launcher.User{UID: 1000, GID: 100},
 	}
-	if got != want {
-		t.Errorf("the variables: got %+v, want %+v", got, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the variables: got %+v (user %+v), want %+v (user %+v)", got, got.user, want, want.user)
+	}
+
+	// A user without a group has the group of the same number.
+	read(t, zathrasCommand(), reader, "--store-cache", "/var/cache/other", "--user", "65534", "--no-store=false")
+	want.name, want.healthAddr = "api-0", "127.0.0.1:9999"
+	want.storeCache, want.noStore, want.user = "/var/cache/other", false, &launcher.User{UID: 65534, GID: 65534}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the flags: got %+v (user %+v), want %+v (user %+v)", got, got.user, want, want.user)
 	}
 }
 
 // A health check that cannot listen ends zathras at once, before it has
-// made a key or dialed anyone.
+// made a key or dialed anyone. Without a store of its own, which it would
+// have mounted before.
 func TestZathrasHealthAddressTaken(t *testing.T) {
 	cleanEnvironment(t)
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
@@ -370,7 +391,7 @@ func TestZathrasHealthAddressTaken(t *testing.T) {
 	defer taken.Close()
 	var stdout, stderr bytes.Buffer
 	got := run(context.Background(), newApp(&stdout, &stderr),
-		[]string{"great-machine", "zathras", "--draal", idA, "--service", "web", "--health-addr", taken.Addr().String()})
+		[]string{"great-machine", "zathras", "--draal", idA, "--service", "web", "--no-store", "--health-addr", taken.Addr().String()})
 	if got != 1 || !strings.Contains(stderr.String(), "great-machine: the health check: listen tcp") {
 		t.Errorf("the exit status is %d and stderr %q, want 1 and the failure to listen", got, stderr.String())
 	}
