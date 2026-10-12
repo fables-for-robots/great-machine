@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -28,7 +29,6 @@ import (
 	"github.com/fables-for-robots/great-machine/logring"
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/operator"
-	"github.com/fables-for-robots/great-machine/preload"
 	"github.com/fables-for-robots/great-machine/ptyshell"
 	"github.com/fables-for-robots/great-machine/storeserver"
 	"github.com/fables-for-robots/great-machine/supervisor"
@@ -84,18 +84,17 @@ type harness struct {
 
 // pod is a zathras with all that belongs to it.
 type pod struct {
-	name    string
-	id      wire.ID
-	sup     *supervisor.Supervisor
-	ring    *logring.Ring
-	agent   *zathras.Agent
-	health  *httptest.Server
-	preload *httptest.Server
+	name   string
+	id     wire.ID
+	sup    *supervisor.Supervisor
+	ring   *logring.Ring
+	agent  *zathras.Agent
+	health *httptest.Server
 
-	mu        sync.Mutex
-	conn      node.Conn // the latest connection to draal
-	away      bool      // it does not dial draal: see keepAway
-	preloaded []string  // the bodies the preload endpoint was sent
+	mu    sync.Mutex
+	conn  node.Conn // the latest connection to draal
+	away  bool      // it does not dial draal: see keepAway
+	asked []string  // the store paths the store was asked to fetch
 }
 
 // start builds testservice into a store of the test, starts a draal, the
@@ -265,8 +264,18 @@ func (h *harness) operator(key node.Key) *operator.Client {
 	return c
 }
 
+// Preload is the pod as the store of its zathras: it fetches nothing, and
+// notes what it was asked to fetch. The store of the tests is a directory
+// that is there from the start.
+func (p *pod) Preload(ctx context.Context, names []string) error {
+	p.mu.Lock()
+	p.asked = append(p.asked, names...)
+	p.mu.Unlock()
+	return nil
+}
+
 // startPod starts a zathras: its supervisor, its agent with a key of its
-// own, its health check and its preload endpoint.
+// own, its health check and its store.
 func (h *harness) startPod(name string) *pod {
 	h.t.Helper()
 	key, err := node.NewKey()
@@ -274,12 +283,6 @@ func (h *harness) startPod(name string) *pod {
 		h.t.Fatalf("NewKey: %v", err)
 	}
 	p := &pod{name: name, id: key.ID(), ring: logring.New(400, 16<<10)}
-	p.preload = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		p.mu.Lock()
-		p.preloaded = append(p.preloaded, string(body))
-		p.mu.Unlock()
-	}))
 	p.sup = supervisor.New(supervisor.Config{
 		Ring:        p.ring,
 		StopTimeout: 5 * time.Second,
@@ -312,7 +315,7 @@ func (h *harness) startPod(name string) *pod {
 		},
 		Supervisor:  p.sup,
 		Ring:        p.ring,
-		Preload:     preload.Client{URL: p.preload.URL},
+		Preload:     p,
 		Shell:       ptyshell.Config{},
 		ReportEvery: 50 * time.Millisecond,
 		RedialMin:   50 * time.Millisecond,
@@ -330,7 +333,6 @@ func (h *harness) startPod(name string) *pod {
 		cancel()
 		running.Wait()
 		p.health.Close()
-		p.preload.Close()
 	})
 	return p
 }
@@ -361,11 +363,12 @@ func (p *pod) comeBack() {
 	p.mu.Unlock()
 }
 
-// preloads returns everything the preload endpoint was sent.
-func (p *pod) preloads() string {
+// fetched returns the store paths the store of the zathras was asked to
+// fetch, by their names.
+func (p *pod) fetched() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return strings.Join(p.preloaded, "\n")
+	return slices.Clone(p.asked)
 }
 
 // healthz asks the health check, and returns the status and the body.
