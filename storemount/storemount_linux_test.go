@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -615,5 +616,40 @@ func TestWithoutTheCapabilityTheMountCannotBeMade(t *testing.T) {
 		if !strings.Contains(said, word) {
 			t.Errorf("the process does not say %q: %s", word, said)
 		}
+	}
+}
+
+// The cache is the zathras's alone to write, whatever it was before: a
+// volume of a pod comes writable by everybody, and whoever can write the
+// directory of the cache can put files of their own in the place of the
+// store's, whatever user the service runs as.
+func TestTheCacheIsMadeTheZathrassOwnToWrite(t *testing.T) {
+	needsRoot(t)
+	s := newStore(t)
+	cache := filepath.Join(t.TempDir(), "cache")
+	if err := os.Mkdir(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Mkdir is under the umask: the mode a volume with a group comes as
+	// is made by hand.
+	if err := os.Chmod(cache, 0o2777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(cache, 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+	s.mount("web", t.TempDir(), cache)
+
+	info, err := os.Stat(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("the cache has no Stat_t: %T", info.Sys())
+	}
+	if int(st.Uid) != os.Geteuid() || int(st.Gid) != os.Getegid() || info.Mode().Perm() != 0o755 {
+		t.Errorf("the cache is owned by %d:%d with mode %o, want %d:%d with mode %o: it is the zathras's alone to write",
+			st.Uid, st.Gid, info.Mode().Perm(), os.Geteuid(), os.Getegid(), 0o755)
 	}
 }

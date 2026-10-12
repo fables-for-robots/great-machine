@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"syscall"
 
 	"github.com/amber-store/jaccard-nfs-nix-store/preload"
 	"github.com/amber-store/jaccard-nfs-nix-store/refs"
@@ -31,6 +32,33 @@ type Mount struct {
 
 	stop    sync.Once
 	stopErr error
+}
+
+// own makes dir, the cache, a directory that the user of this process
+// alone may write to. The cache holds the files that are served, and a
+// volume of a pod comes writable by everybody: whoever can write the
+// directory can put files of their own in the place of the store's,
+// whatever user the service runs as.
+func own(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return err
+	}
+	uid, gid := os.Geteuid(), os.Getegid()
+	if st, ok := info.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != uid || int(st.Gid) != gid {
+		if err := os.Chown(dir, uid, gid); err != nil {
+			return err
+		}
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Start makes a key, opens the cache, serves it over NFS on a loopback
@@ -66,6 +94,9 @@ func Start(cfg Config) (*Mount, error) {
 	key, err := node.NewKey()
 	if err != nil {
 		return nil, fmt.Errorf("storemount: making a key: %w", err)
+	}
+	if err := own(cfg.Cache); err != nil {
+		return nil, fmt.Errorf("storemount: the cache %s has to be the zathras's alone to write, and cannot be made so: %w", cfg.Cache, err)
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("storemount: the directory of the store: %w", err)

@@ -36,7 +36,8 @@ type Config struct {
 	// what the mount is made of. Required.
 	Service string
 	// Cache is the directory of what was fetched. It is of one server and
-	// one service: with another, Start refuses it. Required.
+	// one service: with another, Start refuses it. Required. Start makes
+	// it a directory that the user of the zathras alone may write to.
 	Cache string
 	// Dir is the directory the store is mounted on, which is made if it
 	// is not there. "": DefaultDir.
