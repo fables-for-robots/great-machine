@@ -369,6 +369,21 @@ container: `/proc` masked, `/sys` read-only, the devices of a container.
 What `CAP_SYS_ADMIN` adds is taken away from the service and the shells
 by the launcher.
 
+Not all of it, as the execution of this stage found. A runtime's default
+seccomp profile lets `unshare`, `mount` and `setns` through for every
+process of a container that was given `CAP_SYS_ADMIN`, and refuses them
+in a container without it. The service and the shells, started without
+the capability, cannot mount in the container; but they can make a user
+namespace of their own, as root or as another user, and are root in it,
+over what that namespace holds and over nothing of the container
+(`unshare -Urm` and a `tmpfs` mounted there, seen in a container of this
+stage; `Operation not permitted` in one of Docker's defaults). That is a
+part of the kernel a container without the capability does not reach.
+Nothing in this stage closes it. A seccomp filter set by the launcher's
+thread, which `no_new_privs` allows it to set, would; so should a
+profile of the pod's own that lets `mount` through and not the other
+two.
+
 `appArmorProfile` is a field of Kubernetes 1.30; before it, the
 annotation `container.apparmor.security.beta.kubernetes.io/app:
 unconfined` says the same. With the runtime's default seccomp profile
@@ -448,7 +463,8 @@ threads of zathras keep `CAP_SYS_ADMIN`, and mount and unmount with it.
 - **What the service can still do** is what it could before: signal
   zathras, which runs as the same user, and read and write what root may
   in the container, the cache of the mount among it. That is the service's
-  own container; with `--user` it cannot.
+  own container; with `--user` it cannot. And one thing it could not
+  before, with or without `--user`: a user namespace of its own (5.1).
 
 ### 5.3 Another user
 

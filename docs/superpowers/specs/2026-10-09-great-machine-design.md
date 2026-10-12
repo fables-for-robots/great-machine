@@ -477,8 +477,8 @@ draal.
 - The service is started with the environment and the working directory of
   zathras, no standard input, and a process group of its own. It is
   started by the launcher (7.8): without `CAP_SYS_ADMIN` and a way to gain
-  it, as the user of `--user`, and through the program's own
-  `exec-in-place`, never straight from the mount.
+  it in the container, as the user of `--user`, and through the program's
+  own `exec-in-place`, never straight from the mount.
 - **`activate`**: zathras checks that the binary is a file it may execute,
   and refuses otherwise, leaving what runs alone. Then it takes the
   generation as its own, stops the service if one runs, forgets any backoff
@@ -607,6 +607,15 @@ every address: the kubelet asks at the address of the pod, not on loopback.
   `--user` they are that user, without any capability, and are given the
   pipes and the terminal they are started on, so that they can open
   `/dev/stdout` or their terminal anew.
+- **What the launcher does not take away** is user namespaces. A
+  runtime's seccomp profile lets `unshare`, `mount` and `setns` through
+  for every process of a container that was given `CAP_SYS_ADMIN`, and
+  refuses them in a container without it. The service and the shells
+  cannot mount in the container, but they can make a user namespace of
+  their own, as root or as another user, and are root in it: over what
+  that namespace holds, and over nothing of the container. Nothing
+  closes that yet. A seccomp filter that the launcher's thread sets,
+  which `no_new_privs` allows it, would.
 - **Nothing is executed from the mount by zathras itself.** A program
   on the mount is read through the NFS server of zathras, and Go's way to
   start a process holds the whole of zathras until the program is read:
