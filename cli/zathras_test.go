@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -120,7 +119,7 @@ func answering(t *testing.T, addr string) {
 }
 
 // returned waits for runZathras to return, and returns what it returned.
-func returned(t *testing.T, done <-chan error, logged *bytes.Buffer) error {
+func returned(t *testing.T, done <-chan error, logged *buffer) error {
 	t.Helper()
 	select {
 	case err := <-done:
@@ -144,7 +143,7 @@ func TestRunZathrasStartsItsStoreAndStopsItLast(t *testing.T) {
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
-	var logged bytes.Buffer
+	var logged buffer
 	done := make(chan error, 1)
 	go func() { done <- runZathras(ctx, cfg, quietLog(&logged)) }()
 
@@ -191,7 +190,7 @@ func TestRunZathrasWithoutAStore(t *testing.T) {
 	}
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
-	var logged bytes.Buffer
+	var logged buffer
 	done := make(chan error, 1)
 	go func() { done <- runZathras(ctx, cfg, quietLog(&logged)) }()
 	answering(t, cfg.healthAddr)
@@ -212,7 +211,7 @@ func TestRunZathrasWhoseStoreCannotBeStarted(t *testing.T) {
 	store := newFakeStore()
 	store.err = errors.New("storemount: mounting: operation not permitted: the container of a zathras has to let it mount")
 	cfg.startStore = store.start
-	var logged bytes.Buffer
+	var logged buffer
 	done := make(chan error, 1)
 	go func() { done <- runZathras(context.Background(), cfg, quietLog(&logged)) }()
 	err := returned(t, done, &logged)
@@ -241,7 +240,7 @@ func TestRunZathrasStopsItsStoreWhenItCannotGoOn(t *testing.T) {
 	cfg.healthAddr = taken.Addr().String()
 	store := newFakeStore()
 	cfg.startStore = store.start
-	var logged bytes.Buffer
+	var logged buffer
 	done := make(chan error, 1)
 	go func() { done <- runZathras(context.Background(), cfg, quietLog(&logged)) }()
 	if err := returned(t, done, &logged); err == nil || !strings.Contains(err.Error(), "the health check: listen tcp") {

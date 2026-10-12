@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"testing"
@@ -40,7 +39,7 @@ func TestRunZathrasMountsItsStore(t *testing.T) {
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
-	var logged bytes.Buffer
+	var logged buffer
 	done := make(chan error, 1)
 	go func() { done <- runZathras(ctx, cfg, quietLog(&logged)) }()
 	answering(t, cfg.healthAddr)
