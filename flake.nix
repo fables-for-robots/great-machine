@@ -133,9 +133,19 @@
           # the store of its service there: the program, busybox and the
           # certificates are copied to where an image has them. That
           # works because all three are files that need no other.
+          #
+          # And nothing at all is in its /nix/store, which zathras
+          # refuses to mount over otherwise. Left to itself Nix puts
+          # there what the copies name: busybox names itself, and the
+          # Go of nixpkgs writes into every program where it would look
+          # for the time zones, the MIME types and the names of
+          # protocols and ports when the machine has none (tzdata,
+          # mailcap, iana-etc). Neither program needs what it names, so
+          # the image is made without store paths.
           image = pkgs.dockerTools.buildLayeredImage {
             name = "ghcr.io/fables-for-robots/great-machine";
             tag = "nix";
+            includeStorePaths = false;
             extraCommands = ''
               mkdir -p bin etc/ssl/certs root
               mkdir -m 1777 tmp
