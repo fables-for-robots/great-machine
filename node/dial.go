@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/netip"
 	"time"
 
@@ -109,17 +110,59 @@ func Dial(ctx context.Context, cfg DialConfig) (Conn, error) {
 	}
 
 	log.Debug("connecting", "server", cfg.Server, "candidates", cands)
-	c, err := raceConnect(ctx, ep, server, cands)
+	c, err := raceConnect(ctx, ep, server, wire.ALPN, cands)
 	if err != nil {
 		stop()
 		ep.Shutdown(context.Background())
 		return nil, fmt.Errorf("dial %s: connect: %w", cfg.Server, err)
 	}
 	log.Debug("connected", "server", cfg.Server, "addr", c.RemoteAddr())
-	return &conn{c: c, release: func() error {
-		stop()
-		return ep.Shutdown(context.Background())
-	}}, nil
+	return &conn{
+		c: c,
+		release: func() error {
+			stop()
+			return ep.Shutdown(context.Background())
+		},
+		// To the addresses that were found for this dial: the peer is
+		// where it was, or the connection that is there would have ended.
+		again: func(ctx context.Context, alpn string) (*iroh.Conn, error) {
+			return raceConnect(ctx, ep, server, alpn, cands)
+		},
+	}, nil
+}
+
+// Opener is a connection of another protocol than great-machine's, which
+// is that protocol's to speak: a stream of it is opened for every request.
+// It is what jaccard-store's client is made over.
+type Opener interface {
+	OpenStreamConn(ctx context.Context) (net.Conn, error)
+	// Close ends the connection. The endpoint it was dialed from is not
+	// its own, and stays.
+	Close() error
+}
+
+// Again dials the peer of c once more, for the protocol alpn, from the
+// endpoint c was dialed from: the peer sees the same endpoint ID on both
+// connections. A key has one endpoint at a time, and two endpoints with
+// one key evict each other at the relay, so this is how one key speaks
+// two protocols to one peer. ctx bounds the dial alone.
+//
+// The connection it returns lives no longer than c: when c is closed its
+// endpoint is shut down, and with it everything that was dialed from it.
+// Only a connection that Dial returned has an endpoint to dial from.
+func Again(ctx context.Context, c Conn, alpn string) (Opener, error) {
+	dialed, ok := c.(*conn)
+	if !ok || dialed.again == nil {
+		return nil, errors.New("node: only a connection that was dialed here dials its peer again")
+	}
+	if alpn == "" || alpn == wire.ALPN {
+		return nil, fmt.Errorf("node: dialing again for %q: it is for another protocol than great-machine's", alpn)
+	}
+	other, err := dialed.again(ctx, alpn)
+	if err != nil {
+		return nil, fmt.Errorf("dialing %s again for %s: %w", c.RemoteID(), alpn, err)
+	}
+	return other, nil
 }
 
 // options returns what every endpoint of a dial is bound with: the key,
@@ -236,15 +279,15 @@ func lookup(ctx context.Context, services *iroh.AddressLookupServices, id key.En
 	return addr.Addrs(), nil
 }
 
-// raceConnect starts a connection to every candidate at once and returns
-// the first that completes. The attempts that lose are canceled, and one
+// raceConnect starts a connection for the protocol alpn to every
+// candidate at once and returns the first that completes. The attempts that lose are canceled, and one
 // that completes after the winner is closed.
 //
 // A record may list addresses that are dead from here, the address of a
 // container bridge or of another network. Dialed one after the other they
 // use up the time the dial has before a live one is tried; dialed
 // together, a live one answers in milliseconds.
-func raceConnect(ctx context.Context, ep *iroh.Endpoint, id key.EndpointID, cands []netaddr.TransportAddr) (*iroh.Conn, error) {
+func raceConnect(ctx context.Context, ep *iroh.Endpoint, id key.EndpointID, alpn string, cands []netaddr.TransportAddr) (*iroh.Conn, error) {
 	if len(cands) == 0 {
 		return nil, errors.New("no candidate addresses")
 	}
@@ -256,7 +299,7 @@ func raceConnect(ctx context.Context, ep *iroh.Endpoint, id key.EndpointID, cand
 	results := make(chan result, len(cands))
 	for _, ta := range cands {
 		go func() {
-			c, err := ep.Connect(ctx, netaddr.NewEndpointAddr(id, ta), wire.ALPN)
+			c, err := ep.Connect(ctx, netaddr.NewEndpointAddr(id, ta), alpn)
 			if err != nil {
 				err = fmt.Errorf("%s: %w", ta, err)
 			}
