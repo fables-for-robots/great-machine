@@ -332,7 +332,7 @@ func TestReadZathras(t *testing.T) {
 	}
 
 	// The defaults of the design.
-	read(t, zathrasCommand(), reader, "--draal", idA, "--service", "web")
+	read(t, zathrasCommand(), reader, "--draal", idA, "--service", "web", "--role-key", "/keys/web.key")
 	want := zathrasConfig{
 		draal:       wire.ID(idA),
 		service:     "web",
@@ -341,6 +341,7 @@ func TestReadZathras(t *testing.T) {
 		stopTimeout: 2 * time.Minute,
 		healthAddr:  ":9890",
 		storeCache:  "/var/cache/great-machine",
+		roleKey:     "/keys/web.key",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the defaults: got %+v, want %+v", got, want)
@@ -357,6 +358,7 @@ func TestReadZathras(t *testing.T) {
 	t.Setenv("GREAT_MACHINE_STORE_CACHE", "/cache")
 	t.Setenv("GREAT_MACHINE_NO_STORE", "true")
 	t.Setenv("GREAT_MACHINE_USER", "1000:100")
+	t.Setenv("GREAT_MACHINE_ROLE_KEY", "/run/secrets/api.key")
 	read(t, zathrasCommand(), reader, "--name", "api-1", "--health-addr", "")
 	want = zathrasConfig{
 		draal:       wire.ID(idB),
@@ -368,6 +370,7 @@ func TestReadZathras(t *testing.T) {
 		storeCache:  "/cache",
 		noStore:     true,
 		user:        &launcher.User{UID: 1000, GID: 100},
+		roleKey:     "/run/secrets/api.key",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the variables: got %+v (user %+v), want %+v (user %+v)", got, got.user, want, want.user)
@@ -394,7 +397,7 @@ func TestZathrasHealthAddressTaken(t *testing.T) {
 	defer taken.Close()
 	var stdout, stderr bytes.Buffer
 	got := run(context.Background(), newApp(&stdout, &stderr),
-		[]string{"great-machine", "zathras", "--draal", idA, "--service", "web", "--no-store", "--health-addr", taken.Addr().String()})
+		[]string{"great-machine", "zathras", "--draal", idA, "--service", "web", "--no-store", "--health-addr", taken.Addr().String(), "--role-key", aRoleKey(t)})
 	if got != 1 || !strings.Contains(stderr.String(), "great-machine: the health check: listen tcp") {
 		t.Errorf("the exit status is %d and stderr %q, want 1 and the failure to listen", got, stderr.String())
 	}

@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"github.com/fables-for-robots/great-machine/node"
 	"io"
 	"net"
 	"net/http"
 	"net/netip"
-	"reflect"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -89,7 +92,43 @@ func aZathras(t *testing.T) zathrasConfig {
 		stopTimeout: 5 * time.Second,
 		healthAddr:  freeAddr(t),
 		storeCache:  t.TempDir(),
+		roleKey:     aRoleKey(t),
 		addrs:       []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:1")},
+	}
+}
+
+// aRoleKey makes a role key in a directory of the test and returns its
+// file.
+func aRoleKey(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "role.key")
+	if _, err := node.LoadOrCreateKey(path); err != nil {
+		t.Fatalf("making a role key: %v", err)
+	}
+	return path
+}
+
+// A zathras has to be given the role key of its service, and makes none:
+// a key it made itself would be one nobody granted anything.
+func TestZathrasNeedsItsRoleKey(t *testing.T) {
+	cleanEnvironment(t)
+	var stdout, stderr bytes.Buffer
+	got := run(context.Background(), newApp(&stdout, &stderr),
+		[]string{"great-machine", "zathras", "--draal", idA, "--service", "web", "--no-store", "--health-addr", ""})
+	if want := "--role-key is required: give it, or set GREAT_MACHINE_ROLE_KEY"; got != 2 || !strings.Contains(stderr.String(), want) {
+		t.Errorf("without --role-key: the exit status is %d and stderr %q, want 2 and %q", got, stderr.String(), want)
+	}
+
+	missing := filepath.Join(t.TempDir(), "not-there.key")
+	stderr.Reset()
+	got = run(context.Background(), newApp(&stdout, &stderr),
+		[]string{"great-machine", "zathras", "--draal", idA, "--service", "web", "--no-store", "--health-addr", "", "--role-key", missing})
+	if got != 1 || !strings.Contains(stderr.String(), "the role key") || !strings.Contains(stderr.String(), missing) ||
+		!strings.Contains(stderr.String(), "great-machine id --key") {
+		t.Errorf("with a file that is not there: the exit status is %d and stderr %q, want 1, the file, and how a role key is made", got, stderr.String())
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Errorf("the zathras made the role key it did not find (%v)", err)
 	}
 }
 
@@ -155,10 +194,19 @@ func TestRunZathrasOpensItsStoreAndClosesItLast(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatalf("the store was not opened\n%s", logged.String())
 	}
-	want := storedir.Config{Server: cfg.draal, Addrs: cfg.addrs, Service: "web", Cache: cfg.storeCache}
-	got.Log = nil
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("the store was opened with %+v, want %+v", got, want)
+	if got.Service != "web" || got.Cache != cfg.storeCache || got.Dir != "" {
+		t.Errorf("the store was opened with the service %q, the cache %q and the directory %q; want web, %q and none", got.Service, got.Cache, got.Dir, cfg.storeCache)
+	}
+	// It is given what dials the store, and that is from the endpoint of
+	// the connection to draal: without one there is nothing to dial from.
+	if got.Dial == nil {
+		t.Fatal("the store was opened with nothing to dial the store with")
+	}
+	if o, err := got.Dial(context.Background()); err == nil {
+		o.Close()
+		t.Error("the store was dialed while the zathras has no connection to draal")
+	} else if !strings.Contains(err.Error(), "no connection to draal") {
+		t.Errorf("dialing the store without a connection to draal: %v", err)
 	}
 	answering(t, cfg.healthAddr)
 	if n := store.closes.Load(); n != 0 {

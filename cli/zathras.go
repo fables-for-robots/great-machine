@@ -20,6 +20,7 @@ import (
 	"github.com/fables-for-robots/great-machine/ptyshell"
 	"github.com/fables-for-robots/great-machine/stats"
 	"github.com/fables-for-robots/great-machine/storedir"
+	"github.com/fables-for-robots/great-machine/storeserver"
 	"github.com/fables-for-robots/great-machine/supervisor"
 	"github.com/fables-for-robots/great-machine/wire"
 	"github.com/fables-for-robots/great-machine/zathras"
@@ -48,6 +49,8 @@ func zathrasCommand() *cli.Command {
 				Usage: "`NAME` of the service this zathras belongs to (required)"},
 			&cli.StringFlag{Name: "name", EnvVars: []string{"GREAT_MACHINE_NAME"},
 				Usage: "`NAME` the operator sees (default: the host name, which in a pod is the pod's name)"},
+			&cli.StringFlag{Name: "role-key", EnvVars: []string{"GREAT_MACHINE_ROLE_KEY"},
+				Usage: "`FILE` of the role key of the service, which signs for this zathras: `great-machine id --key FILE` makes one, and an admin grants it zathras for the service (required)"},
 			&cli.StringFlag{Name: "store-cache", EnvVars: []string{"GREAT_MACHINE_STORE_CACHE"}, Value: "/var/cache/great-machine",
 				Usage: "`DIR`ectory the pack cache is kept in: what was pulled from the store, so that a store path costs less the next time"},
 			&cli.BoolFlag{Name: "no-store", EnvVars: []string{"GREAT_MACHINE_NO_STORE"},
@@ -90,6 +93,7 @@ type zathrasConfig struct {
 	storeCache  string         // where the pack cache is kept
 	noStore     bool           // no store of its own: nothing is fetched
 	user        *launcher.User // who the service and the shells run as; nil: the user of zathras
+	roleKey     string         // the file of the role key of the service
 	// addrs is for tests: draal, and with it the store, is dialed at these
 	// addresses, without a relay and without a lookup. No flag sets it.
 	addrs []netip.AddrPort
@@ -138,12 +142,51 @@ func readZathras(c *cli.Context) (zathrasConfig, error) {
 	if !cfg.noStore && cfg.storeCache == "" {
 		return zathrasConfig{}, usageError("--store-cache: the store needs a directory for its pack cache; --no-store is a zathras without a store of its own")
 	}
+	if cfg.roleKey, err = required(c, "role-key", "GREAT_MACHINE_ROLE_KEY"); err != nil {
+		return zathrasConfig{}, err
+	}
 	if cfg.name == "" {
 		if cfg.name, err = os.Hostname(); err != nil {
 			return zathrasConfig{}, fmt.Errorf("no host name to go by, give a name with --name: %w", err)
 		}
 	}
 	return cfg, nil
+}
+
+// draalLink is the connection of a zathras to draal that is there now.
+// The store is dialed from its endpoint: a zathras has one key, and a key
+// has one endpoint at a time.
+type draalLink struct {
+	mu   sync.Mutex
+	conn node.Conn
+}
+
+// set notes c as the connection to draal, until it has ended.
+func (l *draalLink) set(c node.Conn) {
+	l.mu.Lock()
+	l.conn = c
+	l.mu.Unlock()
+	go func() {
+		<-c.Done()
+		l.mu.Lock()
+		if l.conn == c {
+			l.conn = nil
+		}
+		l.mu.Unlock()
+	}()
+}
+
+// dialStore dials the store, which is draal, from the endpoint of the
+// connection to draal. Without one there is nothing to dial from: a pull
+// that needs the store then has failed, and is tried again.
+func (l *draalLink) dialStore(ctx context.Context) (node.Opener, error) {
+	l.mu.Lock()
+	c := l.conn
+	l.mu.Unlock()
+	if c == nil {
+		return nil, errors.New("the zathras has no connection to draal, from whose endpoint the store is dialed")
+	}
+	return node.Again(ctx, c, storeserver.ALPN)
 }
 
 // runZathras is zathras until ctx is done, which SIGINT and SIGTERM do:
@@ -158,6 +201,24 @@ func runZathras(ctx context.Context, cfg zathrasConfig, log *slog.Logger) (err e
 		return err
 	}
 
+	// A new key every time: the endpoint ID is the identity of this
+	// process, and two pods must not share one. It is the one key of the
+	// zathras, for its connection to draal and for what it pulls from
+	// the store.
+	key, err := node.NewKey()
+	if err != nil {
+		return fmt.Errorf("making a key: %w", err)
+	}
+	// The role key of the service says, once, that this endpoint acts for
+	// it at this draal: that is what draal lets a zathras register by.
+	// It is somebody's to put there, and none is made here.
+	role, err := node.LoadKey(cfg.roleKey)
+	if err != nil {
+		return fmt.Errorf("the role key of the service (--role-key): %w: `great-machine id --key FILE` makes one and prints the ID that an admin grants zathras", err)
+	}
+	statement := &wire.Statement{By: role.ID(), Signature: role.Sign(wire.StatementText(cfg.draal, key.ID()))}
+	var link draalLink
+
 	// The store, before anything that could use it. It is not dialed yet:
 	// draal is needed when a store path is asked for that is not there.
 	var store zathrasStore
@@ -169,7 +230,7 @@ func runZathras(ctx context.Context, cfg zathrasConfig, log *slog.Logger) (err e
 			open = func(c storedir.Config) (zathrasStore, error) { return storedir.Open(c) }
 		}
 		store, err = open(storedir.Config{
-			Server: cfg.draal, Addrs: cfg.addrs, Service: cfg.service,
+			Dial: link.dialStore, Service: cfg.service,
 			Cache: cfg.storeCache, Dir: cfg.storeDir, Log: log,
 		})
 		if err != nil {
@@ -202,16 +263,6 @@ func runZathras(ctx context.Context, cfg zathrasConfig, log *slog.Logger) (err e
 		}
 	}
 
-	// A new key every time: the endpoint ID is the identity of this
-	// process, and two pods must not share one.
-	key, err := node.NewKey()
-	if err != nil {
-		if listener != nil {
-			listener.Close()
-		}
-		return fmt.Errorf("making a key: %w", err)
-	}
-
 	ring := logring.New(ringLines, ringMaxLine)
 	sup := supervisor.New(supervisor.Config{
 		Ring:        ring,
@@ -226,8 +277,13 @@ func runZathras(ctx context.Context, cfg zathrasConfig, log *slog.Logger) (err e
 		Name:    cfg.name,
 		Version: Version,
 		Dial: func(ctx context.Context) (node.Conn, error) {
-			return node.Dial(ctx, node.DialConfig{Key: key, Server: cfg.draal, Addrs: cfg.addrs, Log: log})
+			c, err := node.Dial(ctx, node.DialConfig{Key: key, Server: cfg.draal, Addrs: cfg.addrs, Log: log})
+			if err == nil {
+				link.set(c)
+			}
+			return c, err
 		},
+		Statement:  statement,
 		Supervisor: sup,
 		Ring:       ring,
 		Stats:      stats.NewReader(),
@@ -240,7 +296,7 @@ func runZathras(ctx context.Context, cfg zathrasConfig, log *slog.Logger) (err e
 		agentCfg.Preload = store
 	}
 	agent := zathras.New(agentCfg)
-	log.Info("zathras", "endpoint", string(key.ID()), "service", cfg.service, "name", cfg.name, "draal", string(cfg.draal))
+	log.Info("zathras", "endpoint", string(key.ID()), "service", cfg.service, "name", cfg.name, "draal", string(cfg.draal), "role-key", string(role.ID()))
 
 	// Whatever ends first ends the rest: a signal, or a part that failed.
 	ctx, cancel := context.WithCancel(ctx)

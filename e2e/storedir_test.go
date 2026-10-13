@@ -6,16 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/fables-for-robots/great-machine/launcher"
+	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/storedir"
+	"github.com/fables-for-robots/great-machine/storeserver"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
@@ -89,10 +91,24 @@ func TestARolloutIntoAStoreDirectory(t *testing.T) {
 		t.Fatalf("launcher.New: %v", err)
 	}
 
+	// The store of the pod is dialed from the endpoint of its connection
+	// to draal, as a zathras dials it: one key, and both protocols.
 	var pid int
+	var running atomic.Pointer[pod]
 	real, err := storedir.Open(storedir.Config{
-		Server:  h.draalKey.ID(),
-		Addrs:   []netip.AddrPort{h.addr},
+		Dial: func(ctx context.Context) (node.Opener, error) {
+			p := running.Load()
+			if p == nil {
+				return nil, errors.New("the pod is not there yet")
+			}
+			p.mu.Lock()
+			conn := p.conn
+			p.mu.Unlock()
+			if conn == nil {
+				return nil, errors.New("the pod has no connection to draal")
+			}
+			return node.Again(ctx, conn, storeserver.ALPN)
+		},
 		Service: service,
 		Cache:   t.TempDir(),
 		Dir:     h.storeDir,
@@ -117,6 +133,7 @@ func TestARolloutIntoAStoreDirectory(t *testing.T) {
 	store := &asked{Store: real}
 	h.podStore, h.podStart = store, l.Start
 	p := h.startPod("web-0")
+	running.Store(p)
 	h.pods = append(h.pods, p)
 	h.fleetWhere("the zathras to register", func(f wire.Fleet) bool { return len(zathrasesOf(f)) == 1 })
 
@@ -169,9 +186,15 @@ func TestARolloutIntoAStoreDirectory(t *testing.T) {
 	// Another service has a store of its own in draal's, in which the
 	// store path of this one is not: its pod is told so, by name.
 	otherDir := filepath.Join(t.TempDir(), "store")
+	elsewhere, err := h.dial(ctx, newKey(t))
+	if err != nil {
+		t.Fatalf("the connection of another pod to draal: %v", err)
+	}
+	defer elsewhere.Close()
 	other, err := storedir.Open(storedir.Config{
-		Server:  h.draalKey.ID(),
-		Addrs:   []netip.AddrPort{h.addr},
+		Dial: func(ctx context.Context) (node.Opener, error) {
+			return node.Again(ctx, elsewhere, storeserver.ALPN)
+		},
 		Service: "api",
 		Cache:   t.TempDir(),
 		Dir:     otherDir,

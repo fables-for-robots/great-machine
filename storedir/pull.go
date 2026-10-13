@@ -10,9 +10,6 @@ import (
 	"github.com/amber-store/core/key"
 	"github.com/amber-store/core/packstore"
 	"github.com/amber-store/jaccard-store/client"
-	jsnode "github.com/amber-store/jaccard-store/node"
-	jswire "github.com/amber-store/jaccard-store/wire"
-	irohkey "github.com/tmc/go-iroh/key"
 
 	"github.com/fables-for-robots/great-machine/node"
 )
@@ -30,32 +27,23 @@ type conn interface {
 // dialed is jaccard-store's client with the connection it was made over.
 type dialed struct {
 	*client.Client
-	c *jsnode.Conn
+	c node.Opener
 }
 
 func (d *dialed) Close() error { return d.c.Close() }
 
-// dialer returns what dials the store of cfg for jaccard-store's
-// protocol, with the key given: the store directory's own. The connection
-// of a zathras to draal is dialed with an endpoint of its own, and two
-// endpoints with one key evict each other at the relay.
-func dialer(cfg Config, k node.Key) func(context.Context) (conn, error) {
+// dialer returns what makes a connection to the store of what cfg dials
+// it with: jaccard-store's client over it.
+func dialer(cfg Config) func(context.Context) (conn, error) {
 	return func(ctx context.Context) (conn, error) {
-		server, err := irohkey.ParseEndpointID(string(cfg.Server))
+		o, err := cfg.Dial(ctx)
 		if err != nil {
 			return nil, err
 		}
-		c, err := jsnode.Dial(ctx, jsnode.DialConfig{
-			Key:    k.Iroh(),
-			ALPN:   jswire.ALPN,
-			Server: server,
-			Addrs:  cfg.Addrs,
-			Log:    cfg.Log,
-		})
-		if err != nil {
-			return nil, err
+		if o == nil {
+			return nil, errors.New("no connection and no error")
 		}
-		return &dialed{Client: client.New(c, nil), c: c}, nil
+		return &dialed{Client: client.New(o, nil), c: o}, nil
 	}
 }
 

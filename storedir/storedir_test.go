@@ -31,8 +31,7 @@ func testConfig(t *testing.T, srv *testServer, service string, tp *tap) Config {
 		}
 	})
 	return Config{
-		Server:      srv.id,
-		Addrs:       srv.addrs,
+		Dial:        srv.dialer(),
 		Service:     service,
 		Cache:       filepath.Join(root, "cache"),
 		Dir:         dir,
@@ -405,9 +404,8 @@ func TestOpenRefusesWhatIsNoStore(t *testing.T) {
 	srv := startServer(t)
 	good := testConfig(t, srv, "web", newTap())
 	for what, change := range map[string]func(*Config){
-		"no server":             func(c *Config) { c.Server = "" },
-		"a server that is none": func(c *Config) { c.Server = "draal" },
-		"no service":            func(c *Config) { c.Service = "" },
+		"nothing to dial with": func(c *Config) { c.Dial = nil },
+		"no service":           func(c *Config) { c.Service = "" },
 		"a service that is none": func(c *Config) {
 			c.Service = "Not A Label"
 		},
