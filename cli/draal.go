@@ -34,7 +34,7 @@ const (
 func draalCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "draal",
-		Usage: "the controller: zathrases report to it, operators roll out through it",
+		Usage: "the controller: zathrases report to it, and who was granted a role rolls out through it",
 		Description: "The endpoint ID draal logs at its start is all that a zathras or an\n" +
 			"operator needs to reach it. draal is the store as well: closures are\n" +
 			"pushed to it and the pods fetch them from it, under the same endpoint\n" +
@@ -82,10 +82,10 @@ func draalCommand() *cli.Command {
 
 // draalConfig is what the command line of draal says.
 type draalConfig struct {
-	data      string
-	operators []wire.ID
-	store     storeConfig
-	bind      netip.AddrPort // the zero value: every address, a port the system picks
+	data   string
+	admins []wire.ID // of the command line: --admin, and --operator as it was
+	store  storeConfig
+	bind   netip.AddrPort // the zero value: every address, a port the system picks
 	// local is for tests: the iroh endpoint uses no relay, announces
 	// nothing and is bound to 127.0.0.1 unless bind says otherwise. No
 	// flag sets it.
@@ -129,7 +129,7 @@ func readDraal(c *cli.Context) (draalConfig, error) {
 			if err != nil {
 				return draalConfig{}, usageError("--%s: %q is not an endpoint ID, as `great-machine id` prints one: %w", flag, text, err)
 			}
-			cfg.operators = append(cfg.operators, id)
+			cfg.admins = append(cfg.admins, id)
 		}
 	}
 	if cfg.store, err = readStore(c); err != nil {
@@ -216,7 +216,7 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 	if err != nil {
 		return fmt.Errorf("the grants: %w", err)
 	}
-	allow := authz.New(authz.Config{Admins: cfg.operators}, grants)
+	allow := authz.New(authz.Config{Admins: cfg.admins}, grants)
 	if !allow.Admins() {
 		log.Warn("no admin was given on the command line and the database holds none: nobody can grant anything, and so nobody can do anything")
 	}
@@ -267,7 +267,7 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 	// requests of the store that are under way have their grace while
 	// their connections are still there.
 	defer store.Stop()
-	log.Info("serving", "endpoint", string(listener.ID()), "addr", listener.LocalAddr().String(), "operators", len(cfg.operators), "bucket", cfg.store.bucket.Bucket)
+	log.Info("serving", "endpoint", string(listener.ID()), "addr", listener.LocalAddr().String(), "admins", len(cfg.admins), "bucket", cfg.store.bucket.Bucket)
 
 	d := draal.New(draal.Config{
 		DB:    database,

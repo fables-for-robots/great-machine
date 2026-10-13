@@ -119,7 +119,7 @@ func TestRunDraalServesTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := draalForTest(t)
-	cfg.operators = []wire.ID{opKey.ID()}
+	cfg.admins = []wire.ID{opKey.ID()}
 	var logged buffer
 	done := startDraal(t, ctx, cfg, &logged)
 	id, addr := served(t, &logged)
@@ -154,8 +154,8 @@ func TestRunDraalServesTheStore(t *testing.T) {
 			t.Errorf("the data directory: %v", err)
 		}
 	}
-	if !strings.Contains(logged.String(), "operators=1") {
-		t.Errorf("the log does not say how many operators there are:\n%s", logged.String())
+	if !strings.Contains(logged.String(), "admins=1") {
+		t.Errorf("the log does not say how many admins the command line has:\n%s", logged.String())
 	}
 
 	cancel()
@@ -194,7 +194,7 @@ func TestRunDraalStopsWhileAPushIsUnderWay(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := draalForTest(t)
-	cfg.operators = []wire.ID{opKey.ID()}
+	cfg.admins = []wire.ID{opKey.ID()}
 	held := &heldBucket{Bucket: cfg.objects, asked: make(chan struct{}, 16)}
 	cfg.objects = held
 	cfg.storeGrace = 100 * time.Millisecond
@@ -336,7 +336,7 @@ func TestRunDraalLetsARequestOfTheStoreEndWhenItIsToldToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := draalForTest(t)
-	cfg.operators = []wire.ID{opKey.ID()}
+	cfg.admins = []wire.ID{opKey.ID()}
 	gated := &gatedBucket{Bucket: cfg.objects, waiting: make(chan struct{}, 16)}
 	cfg.objects = gated
 	// Longer than the test waits for anything: it does not pass by

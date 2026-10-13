@@ -19,7 +19,7 @@ func TestIsLoopback(t *testing.T) {
 		{"192.168.1.5:8080", false},
 		{"example.com:80", false},
 		{"localhost.example.com:80", false},
-		{"127.0.0.1", false}, // no port: not as --web-addr has it
+		{"127.0.0.1", false}, // no port: not as --addr has it
 		{"localhost", false},
 		{"::1", false},
 		{"", false},

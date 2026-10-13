@@ -398,7 +398,7 @@ func TestAnAdminPushesAndAZathrasOfTheServicePulls(t *testing.T) {
 		t.Errorf("pulled the root %s, and %s was pushed", pulled, pushed)
 	}
 	// The pack is recorded as uploaded by the endpoint that pushed it.
-	body := get(t, w.store.Admin(), "/api/refs")
+	body := get(t, w.store, "/api/refs")
 	if !strings.Contains(body, string(w.operator.ID())) {
 		t.Errorf("the store's page does not name the operator as the one who pushed: %s", body)
 	}
@@ -813,40 +813,33 @@ func TestABucketThatFails(t *testing.T) {
 }
 
 // get asks a handler for a path and returns the body of an answer of 200.
-func get(t *testing.T, h http.Handler, path string) string {
+func get(t *testing.T, s *Store, path string) string {
 	t.Helper()
-	srv := httptest.NewServer(h)
-	defer srv.Close()
-	resp, err := http.Get(srv.URL + path)
-	if err != nil {
-		t.Fatalf("GET %s: %v", path, err)
+	page := s.Page(path)
+	if page.Status != http.StatusOK {
+		t.Fatalf("GET %s: %d: %s", path, page.Status, page.Body)
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET %s: %d, %v: %s", path, resp.StatusCode, err, body)
-	}
-	return string(body)
+	return string(page.Body)
 }
 
 func TestAdminServesThePageAndTheFigures(t *testing.T) {
 	w := start(t, nil)
-	if page := get(t, w.store.Admin(), "/"); !strings.Contains(page, "jaccard-store") || !strings.Contains(page, "app.js") {
+	if page := get(t, w.store, "/"); !strings.Contains(page, "jaccard-store") || !strings.Contains(page, "app.js") {
 		t.Errorf("the page of the store is not jaccard-store's admin page: %s", page)
 	}
 	var stats struct {
 		Refs int64 `json:"refs"`
 	}
-	if err := json.Unmarshal([]byte(get(t, w.store.Admin(), "/api/stats")), &stats); err != nil || stats.Refs != 0 {
+	if err := json.Unmarshal([]byte(get(t, w.store, "/api/stats")), &stats); err != nil || stats.Refs != 0 {
 		t.Fatalf("the figures of an empty store: %+v, %v", stats, err)
 	}
 	if _, err := pushDir(t, w.dial(w.operator), storePath(t, "abc-web", "the program of web"), webRef); err != nil {
 		t.Fatalf("the push: %v", err)
 	}
-	if err := json.Unmarshal([]byte(get(t, w.store.Admin(), "/api/stats")), &stats); err != nil || stats.Refs != 1 {
+	if err := json.Unmarshal([]byte(get(t, w.store, "/api/stats")), &stats); err != nil || stats.Refs != 1 {
 		t.Errorf("the figures after a push: %+v, %v; want one reference", stats, err)
 	}
-	if refs := get(t, w.store.Admin(), "/api/refs"); !strings.Contains(refs, webRef) {
+	if refs := get(t, w.store, "/api/refs"); !strings.Contains(refs, webRef) {
 		t.Errorf("the references of the page do not name %s: %s", webRef, refs)
 	}
 }

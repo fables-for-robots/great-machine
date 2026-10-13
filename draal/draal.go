@@ -136,8 +136,8 @@ type Shell interface {
 	Close() error
 }
 
-// Controller is what an operator can do. The handler of the protocol and,
-// in stage 2, the HTTP API are written against it.
+// Controller is what an operator can do. The handler of the protocol is
+// written against it, and the made-up fleet of the demos is one.
 type Controller interface {
 	// Store returns where the closures of a service are pushed to:
 	// draal's own endpoint ID, on which it answers jaccard-store's

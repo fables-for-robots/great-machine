@@ -228,8 +228,8 @@ func TestReadDraal(t *testing.T) {
 	t.Setenv("GREAT_MACHINE_STORE_NO_VERIFY", "true")
 	read(t, draalCommand(), reader)
 	want = draalConfig{
-		data:      "/var/lib/draal",
-		operators: []wire.ID{wire.ID(idA), wire.ID(idB)},
+		data:   "/var/lib/draal",
+		admins: []wire.ID{wire.ID(idA), wire.ID(idB)},
 		store: storeConfig{
 			bucket:       bucket.Config{Bucket: "packs", Prefix: "great-machine", Endpoint: "http://rustfs.storage:9000", Region: "eu-central-1", PathStyle: true},
 			scratch:      "/scratch",
@@ -259,8 +259,8 @@ func TestReadDraal(t *testing.T) {
 		"--s3-bucket", "other", "--s3-prefix", "", "--s3-endpoint", "https://s3.example.com", "--s3-region", "auto", "--s3-path-style=false",
 		"--store-scratch", "scratch", "--store-verify-jobs", "1", "--store-max-pack-size", "1073741824", "--store-no-verify=false")
 	want = draalConfig{
-		data:      "data",
-		operators: []wire.ID{wire.ID(idC), wire.ID(idA)},
+		data:   "data",
+		admins: []wire.ID{wire.ID(idC), wire.ID(idA)},
 		store: storeConfig{
 			bucket:       bucket.Config{Bucket: "other", Endpoint: "https://s3.example.com", Region: "auto"},
 			scratch:      "scratch",

@@ -4,5 +4,6 @@
 //
 // What an operator can do is the interface Controller, which *Draal
 // implements. The handler of the protocol is written against those methods
-// alone, and so is the HTTP API of stage 2.
+// alone. Who may ask for which of them is decided by the grants (access.go),
+// which the handler asks before it does anything.
 package draal

@@ -127,7 +127,7 @@ func draalWithOperator(t *testing.T, operators ...wire.ID) (wire.ID, netip.AddrP
 	ctx, cancel := context.WithCancel(context.Background())
 	var logged buffer
 	cfg := draalForTest(t)
-	cfg.operators = operators
+	cfg.admins = operators
 	done := make(chan error, 1)
 	go func() { done <- runDraal(ctx, cfg, quietLog(&logged)) }()
 	t.Cleanup(func() {

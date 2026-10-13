@@ -133,17 +133,17 @@ func TestDraalAdminsAndTheNameTheFlagHad(t *testing.T) {
 	}
 	base := []string{"--data", "data", "--s3-bucket", "packs"}
 	read(t, draalCommand(), reader, append(base, "--admin", idA, "--operator", idB, "--admin", idC)...)
-	if want := []wire.ID{wire.ID(idA), wire.ID(idC), wire.ID(idB)}; !slices.Equal(got.operators, want) {
-		t.Errorf("--admin and --operator together: got %v, want %v", got.operators, want)
+	if want := []wire.ID{wire.ID(idA), wire.ID(idC), wire.ID(idB)}; !slices.Equal(got.admins, want) {
+		t.Errorf("--admin and --operator together: got %v, want %v", got.admins, want)
 	}
 	t.Setenv("GREAT_MACHINE_OPERATORS", idB)
 	read(t, draalCommand(), reader, base...)
-	if want := []wire.ID{wire.ID(idB)}; !slices.Equal(got.operators, want) {
-		t.Errorf("the variable the flag had: got %v, want %v", got.operators, want)
+	if want := []wire.ID{wire.ID(idB)}; !slices.Equal(got.admins, want) {
+		t.Errorf("the variable the flag had: got %v, want %v", got.admins, want)
 	}
 	t.Setenv("GREAT_MACHINE_ADMINS", idA+","+idC)
 	read(t, draalCommand(), reader, base...)
-	if want := []wire.ID{wire.ID(idA), wire.ID(idC), wire.ID(idB)}; !slices.Equal(got.operators, want) {
-		t.Errorf("both variables: got %v, want the admins of both, %v", got.operators, want)
+	if want := []wire.ID{wire.ID(idA), wire.ID(idC), wire.ID(idB)}; !slices.Equal(got.admins, want) {
+		t.Errorf("both variables: got %v, want the admins of both, %v", got.admins, want)
 	}
 }

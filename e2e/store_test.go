@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -142,13 +141,11 @@ type storeFigures struct {
 func (h *harness) storeFigures() storeFigures {
 	h.t.Helper()
 	h.mu.Lock()
-	page := h.store.Admin()
+	page := h.store.Page("/api/stats")
 	h.mu.Unlock()
-	rec := httptest.NewRecorder()
-	page.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stats", nil))
 	var f storeFigures
-	if err := json.Unmarshal(rec.Body.Bytes(), &f); err != nil || rec.Code != http.StatusOK {
-		h.t.Fatalf("the figures of the store: %d %s (%v)", rec.Code, rec.Body, err)
+	if err := json.Unmarshal(page.Body, &f); err != nil || page.Status != http.StatusOK {
+		h.t.Fatalf("the figures of the store: %d %s (%v)", page.Status, page.Body, err)
 	}
 	return f
 }

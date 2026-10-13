@@ -409,19 +409,14 @@ func (s *Store) answer(peer wire.ID, req jswire.Request) jswire.Response {
 	return resp
 }
 
-// Admin returns jaccard-store's admin page over the store's database: the
-// page, and under /api/ what it shows. It is read-only. It expects to be
-// asked with the path it is mounted under stripped.
-func (s *Store) Admin() http.Handler {
-	return admin.Handler(s.db)
-}
-
 // maxPage is the most of an answer of the page of the store that Page
 // returns: it travels in a message of draal, which holds 4 MiB.
 const maxPage = 3 << 20
 
-// Page returns what jaccard-store's admin page answers a GET of path
-// with, the query among it: the status, the content type and the body.
+// Page returns what jaccard-store's admin page over the store's database
+// answers a GET of path with, the query among it: the status, the content
+// type and the body. The page is read-only: /, and under /api/ what it
+// shows.
 // It is what draal answers an admin who asks for the page of the store,
 // which is served on the admin's own machine. A path that is none is
 // answered as a bad request, and an answer that is larger than a message
