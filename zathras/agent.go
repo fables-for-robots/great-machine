@@ -28,7 +28,7 @@ import (
 )
 
 // Preloader fetches the store paths of a closure before anything of it is
-// used: *storemount.Mount, the store of the zathras.
+// used: *storedir.Store, the store of the zathras.
 type Preloader interface {
 	// Preload fetches the store paths of names, each the name of a store
 	// path without /nix/store/. Its error is the reason a prepare fails

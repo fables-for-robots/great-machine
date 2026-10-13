@@ -166,12 +166,11 @@ func statusOfProcess(t *testing.T, pid int) map[string]string {
 // have to be put together rightly: the launcher is what starts the service
 // and the shells, with the user of --user; the store is asked for the
 // closure before the service is started; and at the end the store is
-// stopped when the service has ended, and not before, for the service
-// runs from it.
+// closed when the service has ended, and not before.
 //
 // The service ignores SIGTERM, so that it runs on for the stop timeout: a
-// store that is stopped too early is stopped under a service that runs.
-func TestRunZathrasRunsItsServiceThroughItsLauncherAndStopsItsStoreAfterIt(t *testing.T) {
+// store that is closed too early is closed under a service that runs.
+func TestRunZathrasRunsItsServiceThroughItsLauncherAndClosesItsStoreAfterIt(t *testing.T) {
 	asRoot := runtime.GOOS == "linux" && os.Geteuid() == 0
 	users := map[string]*launcher.User{"as the user of zathras": nil}
 	if asRoot {
@@ -213,10 +212,10 @@ func TestRunZathrasRunsItsServiceThroughItsLauncherAndStopsItsStoreAfterIt(t *te
 			cfg.stopTimeout = time.Second
 			cfg.user = user
 			store := newFakeStore()
-			cfg.startStore = store.start
+			cfg.openStore = store.open
 			var pid atomic.Int64
 			var ranAtStop atomic.Bool
-			store.onStop = func() { ranAtStop.Store(processAlive(int(pid.Load()))) }
+			store.onClose = func() { ranAtStop.Store(processAlive(int(pid.Load()))) }
 
 			ctx, stop := context.WithCancel(context.Background())
 			defer stop()
@@ -294,11 +293,11 @@ func TestRunZathrasRunsItsServiceThroughItsLauncherAndStopsItsStoreAfterIt(t *te
 			if took := time.Since(stopping); took < cfg.stopTimeout {
 				t.Errorf("runZathras returned after %s, and the service ignores SIGTERM: it had no stop timeout of %s\n%s", took, cfg.stopTimeout, logged.String())
 			}
-			if n := store.stops.Load(); n != 1 {
-				t.Errorf("the store was stopped %d times, want once", n)
+			if n := store.closes.Load(); n != 1 {
+				t.Errorf("the store was closed %d times, want once", n)
 			}
 			if ranAtStop.Load() {
-				t.Error("the store was stopped while the service still ran from it")
+				t.Error("the store was closed while the service still ran from it")
 			}
 			if processAlive(z.State.PID) {
 				t.Errorf("the service, process %d, runs on after runZathras has returned", z.State.PID)

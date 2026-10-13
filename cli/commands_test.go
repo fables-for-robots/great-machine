@@ -144,7 +144,7 @@ func TestInvalidCommandLines(t *testing.T) {
 		{"zathras: a --user above every ID", nil, []string{"zathras", "--draal", idA, "--service", "web", "--user", "1000:4294967296"}, `--user: "1000:4294967296" is no user`},
 		{"zathras: a --user with nothing behind the colon", nil, []string{"zathras", "--draal", idA, "--service", "web", "--user", "1000:"}, `--user: "1000:" is no user`},
 		{"zathras: a --user with nothing before the colon", nil, []string{"zathras", "--draal", idA, "--service", "web", "--user", ":100"}, `--user: ":100" is no user`},
-		{"zathras: a store and no directory for its cache", nil, []string{"zathras", "--draal", idA, "--service", "web", "--store-cache", ""}, "--store-cache: the store needs a directory for what it fetches"},
+		{"zathras: a store and no directory for its cache", nil, []string{"zathras", "--draal", idA, "--service", "web", "--store-cache", ""}, "--store-cache: the store needs a directory for its pack cache"},
 		{"zathras: the variable stands in for --user", map[string]string{"GREAT_MACHINE_USER": "root"},
 			[]string{"zathras", "--draal", idA, "--service", "web"}, `--user: "root" is no user`},
 		{"zathras: the flag of the sidecar's endpoint, which is gone", nil,
