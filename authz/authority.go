@@ -7,26 +7,6 @@ import (
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
-// The operations that stage 6 tells apart. A push, a commit, a listing
-// and a deletion were one, the store's write; who is asked for the grants,
-// for the page of the store and who it is are new.
-const (
-	// OpStorePush is the first two steps of a push, which name the
-	// reference: it is of the service the name is under.
-	OpStorePush Operation = "store-push"
-	// OpStoreCommit is the last step of a push, which names an upload and
-	// no reference. The store answers it for the endpoint that began the
-	// upload, and whoever deploys anything may ask.
-	OpStoreCommit Operation = "store-commit"
-	OpStoreList   Operation = "store-list"
-	OpStoreDelete Operation = "store-delete"
-	OpStorePage   Operation = "store-page"
-	// OpAccess is the grants: listing them, granting and revoking.
-	OpAccess Operation = "access"
-	// OpMe is a peer asking who it is, which every peer may.
-	OpMe Operation = "me"
-)
-
 // kind is who an operation is for.
 type kind int
 
