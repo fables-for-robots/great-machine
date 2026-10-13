@@ -22,6 +22,14 @@ type Request struct {
 	Watch    *WatchRequest    `json:"watch,omitempty"`
 	Rollouts *RolloutsRequest `json:"rollouts,omitempty"`
 	History  *HistoryRequest  `json:"history,omitempty"`
+
+	// What an operator asks about who may do what, and of the page of the
+	// store: access.go.
+	Grants    *GrantsRequest    `json:"grants,omitempty"`
+	Grant     *GrantRequest     `json:"grant,omitempty"`
+	Revoke    *RevokeRequest    `json:"revoke,omitempty"`
+	Me        *MeRequest        `json:"me,omitempty"`
+	StorePage *StorePageRequest `json:"store_page,omitempty"`
 }
 
 // Response is every message that answers a Request. Error, or exactly one
@@ -38,6 +46,12 @@ type Response struct {
 	Fleet      *Fleet       `json:"fleet,omitempty"`
 	Rollouts   *RolloutList `json:"rollouts,omitempty"`
 	History    *SampleList  `json:"history,omitempty"`
+
+	Grants    *GrantList `json:"grants,omitempty"`
+	Granted   *Granted   `json:"granted,omitempty"`
+	Revoked   *Revoked   `json:"revoked,omitempty"`
+	Me        *Identity  `json:"me,omitempty"`
+	StorePage *StorePage `json:"store_page,omitempty"`
 }
 
 // Phase is what a zathras is doing with its service.
@@ -103,6 +117,9 @@ type Register struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
 	State   State  `json:"state"`
+	// Statement is what a role key of the service signed for this
+	// zathras. Without one draal refuses the registration.
+	Statement *Statement `json:"statement,omitempty"`
 }
 
 // Registered answers Register.

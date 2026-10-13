@@ -315,3 +315,57 @@ func TestNewFleetMovesWhileRunRuns(t *testing.T) {
 		t.Fatal("timed out waiting for Run to end")
 	}
 }
+
+// The demo has grants to show, and grants and revokes as draal does.
+func TestTheDemoHasGrants(t *testing.T) {
+	d := newDemo(time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC), false)
+	ctx := t.Context()
+	me, err := d.Me(ctx)
+	if err != nil || me.ID != operator || len(me.Grants) != 1 || me.Grants[0].Role != wire.RoleAdmin || !me.Grants[0].Fixed {
+		t.Fatalf("Me = %+v, %v; want the admin of the command line", me, err)
+	}
+	before, err := d.Grants(ctx)
+	if err != nil || len(before) < 4 {
+		t.Fatalf("Grants = %d of them, %v", len(before), err)
+	}
+	roles := map[wire.Role]bool{}
+	for _, g := range before {
+		roles[g.Role] = true
+	}
+	if !roles[wire.RoleAdmin] || !roles[wire.RoleDeployer] || !roles[wire.RoleZathras] {
+		t.Errorf("the demo has the roles %v, want all three", roles)
+	}
+
+	key := idOf("a new key")
+	req := wire.GrantRequest{ID: key, Role: wire.RoleDeployer, Service: "web", Note: "new"}
+	if err := d.Grant(ctx, req); err != nil {
+		t.Fatalf("Grant: %v", err)
+	}
+	req.Note = "renamed"
+	if err := d.Grant(ctx, req); err != nil {
+		t.Fatalf("Grant again: %v", err)
+	}
+	after, _ := d.Grants(ctx)
+	if len(after) != len(before)+1 || after[len(after)-1].Note != "renamed" {
+		t.Errorf("after a grant that was made twice there are %d grants, the last %+v; want one more, with the new note", len(after), after[len(after)-1])
+	}
+	if err := d.Revoke(ctx, wire.RevokeRequest{ID: key, Role: wire.RoleDeployer, Service: "web"}); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	if err := d.Revoke(ctx, wire.RevokeRequest{ID: key, Role: wire.RoleDeployer, Service: "web"}); wire.CodeOf(err) != wire.CodeNotFound {
+		t.Errorf("revoking what is not there: %v, want not-found", err)
+	}
+	if err := d.Revoke(ctx, wire.RevokeRequest{ID: operator, Role: wire.RoleAdmin}); wire.CodeOf(err) != wire.CodeBadRequest {
+		t.Errorf("revoking the admin of the command line: %v, want a bad-request", err)
+	}
+	for _, bad := range []wire.GrantRequest{
+		{ID: key, Role: "root"},
+		{ID: "short", Role: wire.RoleAdmin},
+		{ID: key, Role: wire.RoleAdmin, Service: "web"},
+		{ID: key, Role: wire.RoleDeployer, Service: "Not A Service"},
+	} {
+		if err := d.Grant(ctx, bad); wire.CodeOf(err) != wire.CodeBadRequest {
+			t.Errorf("Grant(%+v) = %v, want a bad-request", bad, err)
+		}
+	}
+}
