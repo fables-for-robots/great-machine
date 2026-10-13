@@ -87,6 +87,11 @@ type harness struct {
 	// pod has a real store sets them (storedir_test.go).
 	podStore zathras.Preloader
 	podStart func(cmd *exec.Cmd, start func() error) error
+	// podService and podRole are the service a pod that is started from
+	// now on registers for, and the role key that signs for it. "" and
+	// nil: the service of the harness, and its role key.
+	podService string
+	podRole    *node.Key
 
 	mu        sync.Mutex
 	addr      netip.AddrPort     // where draal listens now
@@ -302,7 +307,12 @@ func (h *harness) operator(key node.Key) *operator.Client {
 // statement returns what the role key of the harness signed for a
 // zathras with the endpoint ID given, at the draal of the harness.
 func (h *harness) statement(zathras wire.ID) *wire.Statement {
-	return &wire.Statement{By: h.roleKey.ID(), Signature: h.roleKey.Sign(wire.StatementText(h.draalKey.ID(), zathras))}
+	return h.statementBy(h.roleKey, zathras)
+}
+
+// statementBy is statement with the role key given.
+func (h *harness) statementBy(role node.Key, zathras wire.ID) *wire.Statement {
+	return &wire.Statement{By: role.ID(), Signature: role.Sign(wire.StatementText(h.draalKey.ID(), zathras))}
 }
 
 // Preload is the pod as the store of its zathras: it fetches nothing, and
@@ -324,7 +334,13 @@ func (h *harness) startPod(name string) *pod {
 		h.t.Fatalf("NewKey: %v", err)
 	}
 	p := &pod{name: name, id: key.ID(), ring: logring.New(400, 16<<10)}
-	statement := h.statement(key.ID())
+	statement, of := h.statement(key.ID()), service
+	if h.podRole != nil {
+		statement = h.statementBy(*h.podRole, key.ID())
+	}
+	if h.podService != "" {
+		of = h.podService
+	}
 	var store zathras.Preloader = p
 	if h.podStore != nil {
 		store = h.podStore
@@ -342,7 +358,7 @@ func (h *harness) startPod(name string) *pod {
 	})
 	p.health = httptest.NewServer(health.Handler(func() wire.Phase { return p.sup.State().Phase }))
 	p.agent = zathras.New(zathras.Config{
-		Service: service,
+		Service: of,
 		Name:    name,
 		Version: "e2e",
 		Dial: func(ctx context.Context) (node.Conn, error) {
