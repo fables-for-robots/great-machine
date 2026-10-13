@@ -78,7 +78,7 @@ type harness struct {
 	// podStore and podStart are what a pod that is started from now on
 	// fetches a closure with and starts its processes with. nil: the pod
 	// itself, which fetches nothing, and a start as it is. A test whose
-	// pod has a real store sets them (mount_linux_test.go).
+	// pod has a real store sets them (storedir_test.go).
 	podStore zathras.Preloader
 	podStart func(cmd *exec.Cmd, start func() error) error
 
