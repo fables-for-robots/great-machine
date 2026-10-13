@@ -545,6 +545,10 @@ with them.
 
 ## 13. What follows: access control
 
+**[The design of stage 6](2026-10-13-great-machine-stage-6-design.md) is
+written**, and decided what this section left open. What follows is what
+was agreed before it, as it stood then.
+
 Stage 6 is to say who may do what. It has no design yet. What was agreed
 when this stage was split off from it, so that it is not lost:
 
