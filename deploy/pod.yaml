@@ -1,7 +1,8 @@
 # A pod of the service `web`: one container, which runs zathras. zathras
-# mounts a Nix store of its own on /nix/store, fetches into it whatever
-# draal rolls out, from the store draal keeps, and runs it. The pod holds
-# no image of the service, and has no sidecar.
+# fetches into /nix/store whatever draal rolls out, from the store draal
+# keeps, and runs it. The pod holds no image of the service and has no
+# sidecar, and its container is given nothing a container does not have:
+# no capability, and the runtime's own AppArmor and seccomp profiles.
 #
 # What to change: draal's endpoint ID, and the name of the service. In a
 # Deployment or a StatefulSet the `spec` below is the template's, and
@@ -21,46 +22,28 @@ spec:
       # service: that comes from the store.
       # The same tag as draal: draal and every zathras are kept on one tag,
       # because a draal and a zathras of different versions may not speak
-      # the same protocol. v0.2.0 is the first release without a sidecar,
-      # which exists once it has been tagged.
-      image: ghcr.io/fables-for-robots/great-machine:v0.2.0
+      # the same protocol. v0.3.0 is the first release that mounts
+      # nothing, which exists once it has been tagged.
+      image: ghcr.io/fables-for-robots/great-machine:v0.3.0
       command: ["great-machine", "zathras"]
       securityContext:
-        # zathras mounts the store. That takes CAP_SYS_ADMIN; and the
-        # runtime's AppArmor profile denies a container every mount,
-        # whatever its capabilities, so the container has no profile. It
-        # is not privileged: it is started with the /proc, the /sys and
-        # the devices of any container. The service and the shells are
-        # started without the capability, and without a way to gain it
-        # in the container. What they can do that they could not in a
-        # container without the capability is make a user namespace of
-        # their own: see "Pod" in the README.
+        # zathras mounts nothing: it writes what it fetches into
+        # /nix/store as files, and needs nothing for that which a
+        # container does not have. A namespace that enforces the Pod
+        # Security Standards admits this pod at the level `baseline`.
         #
-        # appArmorProfile is a field of Kubernetes 1.30. On a cluster
-        # before it, take the field out, and put this annotation into
-        # the metadata of the pod (of the template, in a Deployment):
-        #   container.apparmor.security.beta.kubernetes.io/app: unconfined
-        #
-        # A namespace that enforces the Pod Security Standards has to be
-        # at the level `privileged` for this pod: the capability and the
-        # absent profile are beyond `baseline`.
-        capabilities:
-          add: ["SYS_ADMIN"]
-        appArmorProfile:
-          type: Unconfined
+        # No process of the container gains a privilege by executing a
+        # program, a setuid one or one with file capabilities: zathras
+        # has no need to, so the service and the shells cannot.
+        allowPrivilegeEscalation: false
         # The runtime's seccomp profile, written out because a pod that
-        # says nothing has none at all on most clusters. It lets a
-        # container that has CAP_SYS_ADMIN mount; the tests of this
-        # repository mount under Docker's.
+        # says nothing has none at all on most clusters.
         seccompProfile:
           type: RuntimeDefault
-        # Where that is not enough, as on nodes with SELinux, which lets
-        # no container that is not privileged mount NFS, the container is
-        # privileged instead of the capability and the AppArmor profile:
-        #   privileged: true
-        # and the service is given a user that is not root, with
-        # GREAT_MACHINE_USER below: in a privileged container root can
-        # reach the node without any capability.
+        # A pod that was left with what v0.2.0 gave its container,
+        # CAP_SYS_ADMIN and no AppArmor profile, still runs, and zathras
+        # warns when it starts: nothing takes the capability from a
+        # service that is root any more.
       env:
         - name: GREAT_MACHINE_DRAAL
           value: "1111111111111111111111111111111111111111111111111111111111111111"
@@ -70,15 +53,19 @@ spec:
         # name.
         #
         # The user and the group the service and the shells run as. Not
-        # set: those of zathras, which is root.
+        # set: those of zathras, which is root. A service that is root
+        # can write the store it runs from, and the pack cache; one that
+        # is another user cannot: both are zathras's alone to write.
         # - name: GREAT_MACHINE_USER
         #   value: "1000:1000"
       volumeMounts:
+        - name: store
+          mountPath: /nix/store
         - name: cache
           mountPath: /var/cache/great-machine
       # What the container needs of memory and CPU is what the service
-      # needs and what the store needs to fetch and to serve: the two
-      # count together.
+      # needs and what zathras needs to fetch a closure and to write it
+      # out: the two count together.
       #
       # Ready while the service runs, and at no other time: not before
       # the first rollout, not while the service waits to be started
@@ -92,8 +79,17 @@ spec:
         periodSeconds: 2
         failureThreshold: 1
   volumes:
-    # What zathras has fetched: every store path once as it came and once
-    # as files. It lives as long as the pod, across restarts of the
-    # container, and nothing is ever removed from it.
+    # The store of the pod: every store path zathras has fetched, as
+    # files. It lives as long as the pod, across restarts of the
+    # container, so a container that is started again finds its store.
+    # Without this volume the store is the container's own, and a
+    # container that is started again writes every store path out anew
+    # from the cache, downloading nothing.
+    - name: store
+      emptyDir: {}
+    # The pack cache: every store path once more, as it was pulled, so
+    # that a store path a rollout changed costs the pod the download of
+    # what changed. Nothing is ever removed from either volume: a pod's
+    # disk holds every store path it was given twice.
     - name: cache
       emptyDir: {}

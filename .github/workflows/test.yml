@@ -76,8 +76,8 @@ jobs:
           # The program that Nix built has the page: its draal is asked for it.
           scripts/test-page.sh ./result/bin/great-machine
       # The image as a release builds it, and what a pod asks of it: that
-      # it has a /nix/store to mount the store on, and runs with a store
-      # mounted there.
+      # it has an empty /nix/store for the store of the pod, and runs with
+      # a volume put over it.
       - name: image
         run: |
           nix build .#image --option allow-unsafe-native-code-during-evaluation true
