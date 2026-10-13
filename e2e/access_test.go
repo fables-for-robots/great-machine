@@ -2,6 +2,9 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,9 +15,11 @@ import (
 	"github.com/amber-store/core/packstore"
 	"github.com/amber-store/jaccard-store/client"
 
+	"github.com/fables-for-robots/great-machine/human"
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/push"
 	"github.com/fables-for-robots/great-machine/storeserver"
+	"github.com/fables-for-robots/great-machine/web"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
@@ -327,10 +332,12 @@ func TestTheZathrasesOfTwoServicesPullTheirOwn(t *testing.T) {
 	// more when the revocation is answered, and pulls nothing from then
 	// on. The one of web is as it was.
 	h.revoke(roles["api"].ID(), wire.RoleZathras, "api")
+	// draal has closed the connection when it answers the revocation, and
+	// the zathras learns so as soon as that has reached it.
 	select {
 	case <-conns["api"].Done():
-	default:
-		t.Errorf("the connection of api's zathras is still there after the revocation of its role key was answered")
+	case <-time.After(deadline):
+		t.Errorf("the connection of api's zathras is still there after the revocation of its role key")
 	}
 	if _, err := h.pullAs(ctx, keys["api"], name("api")); !unauthorized(err) {
 		t.Errorf("the pull of api's zathras after its role key was revoked: %v, want it refused as unauthorized", err)
@@ -414,5 +421,180 @@ func TestARevocationEndsWhatTheGrantWasUsedFor(t *testing.T) {
 	})
 	if z, _ := zathrasOf(f, p.id); z.Name != p.name {
 		t.Errorf("the zathras came back as %+v, want %s", z, p.name)
+	}
+}
+
+// holds says whether a list of grants has the one of the key, the role
+// and the service given.
+func holds(grants []wire.Grant, id wire.ID, role wire.Role, service string) bool {
+	return slices.ContainsFunc(grants, func(g wire.Grant) bool {
+		return g.ID == id && g.Role == role && g.Service == service
+	})
+}
+
+// The page of an admin says who it is, lists the grants, grants and
+// revokes, and shows the page of the store; the page of a deployer says
+// who it is, and is refused the rest with what draal said. The bucket of
+// the store sets the environment of the test, so this test is not
+// parallel.
+func TestHTTPAccessAndThePageOfTheStore(t *testing.T) {
+	h := start(t, options{zathrases: 1, store: true})
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+	p := h.web()
+
+	// Who the page is: the admin of draal's command line.
+	var me wire.Identity
+	status, body := p.get("/api/me", "")
+	if err := json.Unmarshal(body, &me); status != http.StatusOK || err != nil || me.ID != h.opKey.ID() || len(me.Grants) != 1 ||
+		me.Grants[0].Role != wire.RoleAdmin || !me.Grants[0].Fixed {
+		t.Fatalf("GET /api/me = %d %s (%v), want the admin of the command line", status, body, err)
+	}
+
+	// A grant, and the list that has it, with who granted it.
+	k := newKey(t)
+	status, body = p.ask(http.MethodPost, "/api/grants", wire.GrantRequest{ID: k.ID(), Role: wire.RoleDeployer, Service: "web", Note: "through the page"})
+	if status != http.StatusNoContent {
+		t.Fatalf("POST /api/grants = %d %s, want 204", status, body)
+	}
+	var list wire.GrantList
+	status, body = p.get("/api/grants", "")
+	if err := json.Unmarshal(body, &list); status != http.StatusOK || err != nil {
+		t.Fatalf("GET /api/grants = %d %s (%v)", status, body, err)
+	}
+	if len(list.Grants) != 3 || !list.Grants[0].Fixed || list.Grants[0].ID != h.opKey.ID() ||
+		!holds(list.Grants, h.roleKey.ID(), wire.RoleZathras, "") {
+		t.Errorf("the grants are %+v, want the admin of the command line first, the role key of the harness and the deployer", list.Grants)
+	}
+	if i := slices.IndexFunc(list.Grants, func(g wire.Grant) bool { return g.ID == k.ID() }); i < 0 ||
+		list.Grants[i].Role != wire.RoleDeployer || list.Grants[i].Service != "web" || list.Grants[i].Note != "through the page" || list.Grants[i].By != h.opKey.ID() {
+		t.Errorf("the grants are %+v, want the deployer of web among them, granted by the admin", list.Grants)
+	}
+	// What draal refuses of a grant is the page's answer.
+	if status, body := p.ask(http.MethodPost, "/api/grants", map[string]string{"id": "nobody", "role": "deployer"}); status != http.StatusBadRequest || !strings.Contains(string(body), `"bad-request"`) {
+		t.Errorf("POST /api/grants with what is no endpoint ID = %d %s, want 400 and a bad-request", status, body)
+	}
+
+	// The page of the store, which draal answers for an admin.
+	var figures storeFigures
+	status, body = p.get("/store/api/stats", "")
+	if err := json.Unmarshal(body, &figures); status != http.StatusOK || err != nil || figures.Refs != 0 {
+		t.Errorf("GET /store/api/stats = %d %s (%v), want the figures of an empty store", status, body, err)
+	}
+	if status, body := p.get("/store/", ""); status != http.StatusOK || !strings.Contains(string(body), "jaccard-store") {
+		t.Errorf("GET /store/ = %d, %d bytes, want the page of the store", status, len(body))
+	}
+
+	// The page of the deployer: who it is, and nothing of the grants and
+	// of the store.
+	dp := h.webWith(web.Config{Client: pageClient{h.operator(k)}})
+	status, body = dp.get("/api/me", "")
+	if err := json.Unmarshal(body, &me); status != http.StatusOK || err != nil || me.ID != k.ID() || len(me.Grants) != 1 ||
+		me.Grants[0].Role != wire.RoleDeployer || me.Grants[0].Service != "web" {
+		t.Errorf("GET /api/me of the deployer = %d %s (%v), want it a deployer of web", status, body, err)
+	}
+	for _, path := range []string{"/api/grants", "/store/api/stats"} {
+		if status, body := dp.get(path, ""); status != http.StatusForbidden || !strings.Contains(string(body), "is no admin") {
+			t.Errorf("GET %s of the deployer = %d %s, want 403 and that it is no admin", path, status, body)
+		}
+	}
+	if status, body := dp.ask(http.MethodPost, "/api/grants", wire.GrantRequest{ID: k.ID(), Role: wire.RoleAdmin}); status != http.StatusForbidden {
+		t.Errorf("POST /api/grants of the deployer = %d %s, want 403", status, body)
+	}
+	if grants, err := h.op.Grants(ctx); err != nil || holds(grants, k.ID(), wire.RoleAdmin, "") {
+		t.Errorf("after the refused grant the grants are %+v, %v; want the deployer no admin", grants, err)
+	}
+
+	// A revocation, as the page asks for one: the service is always named.
+	revoke := "/api/grants?" + url.Values{"id": {string(k.ID())}, "role": {"deployer"}, "service": {"web"}}.Encode()
+	if status, body := p.ask(http.MethodDelete, revoke, nil); status != http.StatusNoContent {
+		t.Fatalf("DELETE %s = %d %s, want 204", revoke, status, body)
+	}
+	if grants, err := h.op.Grants(ctx); err != nil || holds(grants, k.ID(), wire.RoleDeployer, "web") {
+		t.Errorf("after the revocation the grants are %+v, %v; want the deployer gone", grants, err)
+	}
+	if status, body := p.ask(http.MethodDelete, revoke, nil); status != http.StatusNotFound {
+		t.Errorf("the same DELETE again = %d %s, want 404", status, body)
+	}
+	// An admin of the command line is revoked by no request.
+	fixed := "/api/grants?" + url.Values{"id": {string(h.opKey.ID())}, "role": {"admin"}, "service": {""}}.Encode()
+	if status, body := p.ask(http.MethodDelete, fixed, nil); status != http.StatusBadRequest {
+		t.Errorf("DELETE of the admin of the command line = %d %s, want 400", status, body)
+	}
+}
+
+// The access view of the terminal UI against a real draal: the grants are
+// listed, a grant is made through the form, and revoked after a yes; the
+// admin of the command line is not. Like every test of the terminal UI it
+// is not parallel.
+func TestTUIAccess(t *testing.T) {
+	h := start(t, options{zathrases: 1})
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+	u := h.startUI()
+	u.Wait("● live", "▸ web", human.ShortID(h.opKey.ID()), "admin")
+
+	u.Type("a")
+	u.Wait("2 grants", "ROLE", "SERVICE", "▸ admin", "draal's command line", "zathras", "the pods of the harness")
+	// The admin of the command line, which the cursor is on, is revoked
+	// by nothing.
+	u.Type("x")
+	u.Wait("no request revokes it")
+
+	// A grant through the form: the role as it opens, the ID, the service
+	// and the note.
+	k := newKey(t)
+	u.Type("g")
+	u.Wait("Grant a role", "‹ deployer ›")
+	u.Type("\r" + string(k.ID()) + "\rweb\rci\r")
+	u.Wait("3 grants", "deployer", human.ShortID(k.ID()), "ci")
+	grants, err := h.op.Grants(ctx)
+	if i := slices.IndexFunc(grants, func(g wire.Grant) bool { return g.ID == k.ID() }); err != nil || i < 0 ||
+		grants[i].Role != wire.RoleDeployer || grants[i].Service != "web" || grants[i].Note != "ci" || grants[i].By != h.opKey.ID() {
+		t.Fatalf("after the form the grants are %+v, %v; want a deployer of web, noted ci, by the admin", grants, err)
+	}
+
+	// The revocation of it: the grant under the cursor, after a yes.
+	for range 4 {
+		if strings.Contains(u.Screen(), "▸ deployer") {
+			break
+		}
+		u.Type("j")
+		time.Sleep(50 * time.Millisecond)
+	}
+	u.Wait("▸ deployer")
+	u.Type("x")
+	u.Type("y")
+	u.Wait("Revoked:", "2 grants")
+	if grants, err := h.op.Grants(ctx); err != nil || holds(grants, k.ID(), wire.RoleDeployer, "web") {
+		t.Errorf("after the revocation the grants are %+v, %v; want the deployer gone", grants, err)
+	}
+
+	u.Type("\x1b")
+	u.Wait("▸ web")
+	u.Type("q")
+	if err := u.end(); err != nil {
+		t.Errorf("Run = %v, want nil when the user quits", err)
+	}
+}
+
+// The terminal UI of a key that is no admin: the header says what it is,
+// and the access view whose view it is, with the ID an admin grants to.
+func TestTUIAccessOfAKeyThatIsNoAdmin(t *testing.T) {
+	h := start(t, options{zathrases: 1})
+	k := newKey(t)
+	h.grant(k.ID(), wire.RoleDeployer, service, "")
+	u := h.startUIAs(k)
+	u.Wait("● live", "▸ web", human.ShortID(k.ID()), "deployer")
+
+	u.Type("a")
+	screen := u.Wait("This view is an admin's.", "This key is no admin", string(k.ID()))
+	if strings.Contains(screen, "the pods of the harness") {
+		t.Errorf("a key that is no admin is shown a grant:\n%s", screen)
+	}
+
+	u.Type("q")
+	if err := u.end(); err != nil {
+		t.Errorf("Run = %v, want nil when the user quits", err)
 	}
 }

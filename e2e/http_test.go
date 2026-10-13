@@ -58,12 +58,16 @@ func (h *harness) web() *page {
 }
 
 // webWith is web with the times of cfg, for a test that needs another
-// than the handler's own, and with its guard, for a test that gives it a
-// ticket; its client and its logger are the harness's. A handler with a
-// ticket is told the port it listens on, as the command tells it.
+// than the handler's own, with its guard, for a test that gives it a
+// ticket, and with its client, for a test whose page is another key's;
+// without one its client is the operator of the harness, and its logger
+// is the harness's. A handler with a ticket is told the port it listens
+// on, as the command tells it.
 func (h *harness) webWith(cfg web.Config) *page {
 	h.t.Helper()
-	cfg.Client = pageClient{h.op}
+	if cfg.Client == nil {
+		cfg.Client = pageClient{h.op}
+	}
 	cfg.Log = quiet
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -107,6 +111,39 @@ func (p *page) get(path, host string) (int, []byte) {
 		p.t.Fatalf("GET %s: reading the answer: %v", path, err)
 	}
 	return resp.StatusCode, body
+}
+
+// ask asks for a path with the method given as the page does, with the
+// origin of the page and with body as JSON if there is one, and returns
+// the status and the body of the answer.
+func (p *page) ask(method, path string, body any) (int, []byte) {
+	p.t.Helper()
+	var sent io.Reader
+	if body != nil {
+		text, err := json.Marshal(body)
+		if err != nil {
+			p.t.Fatal(err)
+		}
+		sent = bytes.NewReader(text)
+	}
+	req, err := http.NewRequest(method, p.srv.URL+path, sent)
+	if err != nil {
+		p.t.Fatalf("NewRequest %s %s: %v", method, path, err)
+	}
+	req.Header.Set("Origin", p.srv.URL)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		p.t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	answer, err := io.ReadAll(resp.Body)
+	if err != nil {
+		p.t.Fatalf("%s %s: reading the answer: %v", method, path, err)
+	}
+	return resp.StatusCode, answer
 }
 
 // socket opens a WebSocket as the page does: with the origin of the page.
