@@ -90,14 +90,19 @@ The mount of stage 4 is gone, and the word with it.
 |---|---|
 | `packs/` under `--store-cache` | the pack cache: every object that was pulled, for as long as the directory lives |
 | `/nix/store/NAME` | a store path, written out |
-| `/nix/store/.great-machine-partial/` | the store paths that are being written |
+| `/nix/store/.great-machine-partial-NAME` | a store path that is being written |
 
 - **A name in the store directory is a store path that is whole.** A
-  store path is written under the partial directory and moved to its
-  name when all of it is on disk (§3.3). The move is the record: there
-  is no list of what was fetched.
-- **The partial directory is emptied whenever zathras starts**: what is
-  in it is what an earlier run was writing when it ended.
+  store path is written beside its name, as `.great-machine-partial-NAME`,
+  and moved to its name when all of it is on disk (§3.3). The move is
+  the record: there is no list of what was fetched.
+- **What is being written is beside its name, and in no directory of its
+  own.** A directory nobody may write to can be moved within its
+  directory; into another only root moves it, since that move writes its
+  `..`, and a zathras is to keep a store without being root.
+- **What was being written is removed whenever zathras starts**: whatever
+  in the store directory begins with `.great-machine-partial-` is what an
+  earlier run was writing when it ended.
 - **Both directories are one zathras's.** Nothing else writes to them,
   and no two zathrases share them.
 - **zathras makes them writable by its own user alone**, mode `0755`,
@@ -125,8 +130,8 @@ For every name of the closure:
 1. A name that is empty, that begins with `.`, or that has a `/` in it is
    refused: it names no store path. draal refuses an empty name, `.`,
    `..` and one with a `/` in it already (design §6.1); any other that
-   begins with `.` it lets through, and such a name could be that of the
-   partial directory.
+   begins with `.` it lets through, and what is being written has such a
+   name.
 2. If `/nix/store/NAME` is there, the store path is there: a store path
    never changes under its name. The store is asked nothing.
 3. Otherwise the reference `prefix + NAME` is pulled into the pack cache
@@ -225,8 +230,8 @@ A zathras that does the work (design §7.2):
 
 1. makes the launcher (§4.2);
 2. opens its store: makes the store directory and the cache if they are
-   not there, makes them its own to write (§3.1), opens the pack cache,
-   and empties the partial directory. A zathras that cannot ends with
+   not there, makes them its own to write (§3.1), removes what an
+   earlier run was writing, and opens the pack cache. A zathras that cannot ends with
    the error: without a store nothing can run, and the kubelet starts
    the container again;
 3. goes on as before: the health check, draal, the service.
@@ -237,8 +242,8 @@ that is not there.
 On SIGTERM, SIGINT or SIGHUP zathras stops the service and ends the
 shells as before, and then closes its store: the fetches are ended, the
 connection is closed, and the pack cache is closed. Nothing is
-unmounted, and what is left in the partial directory goes at the next
-start.
+unmounted, and what a fetch was writing and could not remove goes at
+the next start.
 
 ### 3.6 Without a store of its own
 
@@ -457,7 +462,7 @@ To design §13 and stage 4 §11:
     its name; a file that was setuid where it was pushed from is not
     where it is written out;
   - a name that begins with `.` is refused;
-  - what a run left in the partial directory, a directory that cannot be
+  - what a run was writing when it ended, a directory that cannot be
     written to among it, is gone after the next start, and the store
     paths are as they were;
   - a store directory and a cache that everybody may write to are

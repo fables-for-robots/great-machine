@@ -4,7 +4,7 @@
 
 **Goal:** zathras pulls the store paths of a closure and writes them into `/nix/store` as files, and mounts nothing: its container needs no capability, and its store is built and tested on every system.
 
-**Architecture:** A new package, `storedir`, takes the place of `storemount` behind `zathras.Preloader`. It pulls a reference into a pack cache with jaccard-store's client, writes its tree out under a partial directory with Core's `fstree`, and moves it to its name. With the mount gone the launcher is what is left of `--user`: no thread, no capability to drop, no `exec-in-place`.
+**Architecture:** A new package, `storedir`, takes the place of `storemount` behind `zathras.Preloader`. It pulls a reference into a pack cache with jaccard-store's client, writes its tree out beside its name with Core's `fstree`, and moves it there. With the mount gone the launcher is what is left of `--user`: no thread, no capability to drop, no `exec-in-place`.
 
 **Tech Stack:** Go 1.27; jaccard-store v0.7.0 (`client`, `node`, and for tests `server`, `db`, `bucket/buckettest`); Amber-Store Core v0.10.0 (`packstore`, `fstree`, `key`); go-iroh v0.3.0; `golang.org/x/sys/unix` for `syncfs` and the bounding set; Docker for the tests that need root.
 
@@ -18,7 +18,7 @@ This plan is shorter than those of stages 1 to 4, which spelled every line out f
 - **Versions**: Go 1.27.1, jaccard-store v0.7.0, Core v0.10.0, go-iroh v0.3.0, all as now. jaccard-nfs-nix-store leaves `go.mod`.
 - **Nothing is pushed, tagged or released without the human partner's word.** This stage ends in a pull request and a release, v0.3.0: both are asked for.
 - **draal, the protocol, the store in draal and the push are not changed.** A diff that touches `draal/`, `wire/`, `storeserver/`, `push/`, `authz/` or `node/` is a mistake.
-- **The names**: the package is `storedir`; the pack cache is `packs/` under `--store-cache`; the partial directory is `.great-machine-partial` in the store directory; no flag is added or taken away, and `--store-cache` and `--no-store` keep their variables.
+- **The names**: the package is `storedir`; the pack cache is `packs/` under `--store-cache`; what is being written is `.great-machine-partial-NAME` in the store directory, beside its name; no flag is added or taken away, and `--store-cache` and `--no-store` keep their variables.
 - **The times of a pull** are those of the spec's §3.4: 30 seconds for a dial, 1 second before a second attempt and twice as long each time up to 15 seconds, 2 minutes from the first failure, 1 hour for one attempt; twenty fetches at a time.
 - **What is written out** is what the table of the spec's §3.3 says, letter for letter: `0555` for a directory, for a file with the execute bit of its owner and for a root that is the content of a file, `0444` for any other file, the user and the group of zathras, no setuid, setgid or sticky bit.
 - **A container is never privileged and is given no capability** in a test or in `deploy/`.
@@ -53,7 +53,7 @@ From Task 3 on that container has no capability beyond Docker's defaults. A task
 
 ```
 storedir/
-  storedir.go        Config, Open, Close, NotFoundError: the directories, the pack cache, the partial directory
+  storedir.go        Config, Open, Close, NotFoundError: the directories, the pack cache, what a run was writing
   preload.go         Preload: the names of a closure, twenty fetches at a time, one fetch for a name
   pull.go            the connection to the store, a pull and its attempts
   write.go           a reference written out as files (the spec's §3.3)
@@ -142,7 +142,7 @@ This task settles the second of the spec's §11, with its first test: of two sto
   - a store path that is there is not asked of the store (a server that is stopped);
   - a store path the store lacks, and one pushed under another service's prefix alone: `*NotFoundError`, with the path and the service, at once and not after the time of a pull;
   - a name that is empty, begins with `.` or has a `/` in it is refused before the store is asked;
-  - what a run left in the partial directory, a directory of mode `0555` among it, is gone after `Open`, and the store paths are as they were;
+  - what a run was writing when it ended, a directory of mode `0555` among it, is gone after `Open`, and the store paths are as they were;
   - a store directory and a cache of mode `0777` are `0755` after `Open`;
   - a server that cannot be dialed for a while: the fetch succeeds; for longer than `PullTimeout`: an error with the path;
   - two `Preload`s of the same names fetch each store path once; one whose context is done returns, and the other gets its store paths;
