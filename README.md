@@ -8,7 +8,8 @@ an init that keeps a Nix store of its own in `/nix/store`: it fetches
 into it what it is told to run, as plain files, and runs it. Every
 zathras reports to **draal**, the controller, which also keeps the store
 of the fleet: every store path that was rolled out, as pack files in an
-S3 bucket. The operator talks to draal from the command line.
+S3 bucket. The operator talks to draal from the command line, with a
+key, and draal does for a key what the key was granted.
 
 ```
  laptop                                   cluster
@@ -40,14 +41,22 @@ half of a key, and the endpoint ID of draal is all that the others need to
 reach it, for the store as for everything else: no address, no port, no
 Service.
 
+What a key may do is what it was granted. An **admin** does everything, a
+**deployer** pushes and rolls out the services it was granted, and a
+**zathras** fetches and reports for the service whose role key signed for
+it. Nothing is open to a key that was granted nothing: see
+[Who may do what](#who-may-do-what).
+
 The store is [jaccard-store](https://github.com/amber-store/jaccard-store),
 inside the program: there is no server of it to run. A pod has no
 sidecar and mounts nothing: zathras pulls the store paths it is to run
 and writes them out as files.
 
-draal also serves [a web page](#the-web-page) that shows the fleet, the
-figures and the log of every zathras, and gives a shell in its container.
+[`great-machine web`](#the-web-page) serves a web page on the laptop that
+shows the fleet, the figures and the log of every zathras the key may
+see, and gives a shell in its container.
 [`great-machine tui`](#the-terminal-ui) shows the same in a terminal.
+draal itself serves no page, and listens for nothing but iroh.
 
 The design is in
 [`docs/superpowers/specs/2026-10-09-great-machine-design.md`](docs/superpowers/specs/2026-10-09-great-machine-design.md).
@@ -72,7 +81,7 @@ The build runs a program while Nix evaluates, which Nix allows only when
 asked (see [Development](#development)):
 
 ```sh
-nix build github:fables-for-robots/great-machine/v0.3.0 \
+nix build github:fables-for-robots/great-machine/v0.4.0 \
   --option allow-unsafe-native-code-during-evaluation true
 ./result/bin/great-machine version
 ```
@@ -89,12 +98,12 @@ great-machine id
 ```
 
 prints the endpoint ID of the operator's key, and creates the key the
-first time.
+first time. draal is given that ID as its first admin.
 
 **2. draal.** [`deploy/draal.yaml`](deploy/draal.yaml) runs it in the
-cluster with a volume for its data. Put in the operator's endpoint ID and
-the bucket, make the Secret with the bucket's credentials that the file
-names, then:
+cluster with a volume for its data. Put in the operator's endpoint ID,
+as the admin, and the bucket, make the Secret with the bucket's
+credentials that the file names, then:
 
 ```sh
 kubectl apply -f deploy/draal.yaml
@@ -105,34 +114,47 @@ draal logs its endpoint ID when it starts. By hand it is:
 
 ```sh
 export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...
-great-machine draal --data /var/lib/draal --operator OPERATOR_ID \
+great-machine draal --data /var/lib/draal --admin OPERATOR_ID \
   --s3-bucket my-packs --s3-region eu-central-1
 ```
 
-Its [web page](#the-web-page) is at `http://127.0.0.1:8080/` on the
-machine draal runs on. In the cluster that is the pod, and a forward
-brings it to the laptop:
+draal listens for nothing but iroh: it has no page, and needs no port and
+no forward. The admin of its command line is an admin whatever is granted
+later, and grants everybody else what they may do.
+
+**3. The role key of the service.** The pods of a service register with
+what a key of that service signed for them. On the laptop, make that key,
+put it into the cluster as a Secret, and grant it the role:
 
 ```sh
-kubectl port-forward deployment/draal 8080:8080    # then http://localhost:8080/
+export GREAT_MACHINE_DRAAL=DRAAL_ID
+great-machine id --key zathras-web.key     # makes the key, and prints its ID
+kubectl create secret generic web-zathras-key \
+  --from-file=zathras.key=zathras-web.key
+great-machine access grant zathras ROLE_KEY_ID --service web
 ```
 
-**3. A pod.** [`deploy/pod.yaml`](deploy/pod.yaml) is a whole pod of the
+The key file is the credential of every pod of `web`: keep it where the
+Secret is kept, and nowhere else.
+
+**4. A pod.** [`deploy/pod.yaml`](deploy/pod.yaml) is a whole pod of the
 service `web`: one container, which runs `great-machine zathras`. Put in
-the endpoint ID of draal, then:
+the endpoint ID of draal; the file names the Secret of the step before.
+Then:
 
 ```sh
 kubectl apply -f deploy/pod.yaml
 ```
 
 The pod runs and is not ready: its zathras has opened its store, which
-is empty, has registered with draal, and has nothing to run yet.
+is empty, has registered with draal, and has nothing to run yet. A
+zathras whose role key was not granted its service is refused by draal,
+says so in its log, and tries again.
 
-**4. A rollout.** On the laptop, build the program for the platform of the
+**5. A rollout.** On the laptop, build the program for the platform of the
 pods and roll it out:
 
 ```sh
-export GREAT_MACHINE_DRAAL=DRAAL_ID
 nix build .#packages.x86_64-linux.web        # in the program's own flake
 great-machine rollout web ./result/bin/web -- --listen :8080
 ```
@@ -147,6 +169,20 @@ all of them run it. The pod is ready now.
 great-machine status web
 great-machine logs -f web
 great-machine shell web
+great-machine web            # prints the link of the page
+```
+
+The last is [the web page](#the-web-page): the same in a browser, on the
+laptop and with the operator's key.
+
+**6. Who else may act.** The operator of step 1 is an admin, and may do
+all of this. Whoever else is to deploy `web`, and no more, sends the
+endpoint ID that `great-machine id` prints on their machine, and an
+admin grants it:
+
+```sh
+great-machine access grant deployer THEIR_ID --service web --note "whose key it is"
+great-machine access list
 ```
 
 ## Commands
@@ -155,13 +191,17 @@ great-machine shell web
 | --- | --- |
 | `great-machine draal` | the controller |
 | `great-machine zathras` | the init of an app container |
-| `great-machine id` | prints the endpoint ID of the operator's key, creating the key if it is missing |
+| `great-machine id` | prints the endpoint ID of the operator's key, or of the key that `--key` names, creating the key if it is missing |
 | `great-machine rollout [--parallel N] [--detach] SERVICE PATH [-- ARG...]` | pushes the closure and rolls it out |
 | `great-machine rollback [--parallel N] [--detach] SERVICE` | rolls the stable generation out again |
 | `great-machine status [SERVICE]` | lists services, or the zathrases of one |
 | `great-machine logs [-f] SERVICE [ZATHRAS]` | prints the last 400 lines, and follows with `-f` |
 | `great-machine shell SERVICE [ZATHRAS]` | a shell in the container of a zathras |
 | `great-machine tui` | the fleet in the terminal: services, zathrases, figures, logs, and a shell |
+| `great-machine web` | the fleet in a browser: serves [the web page](#the-web-page) on the laptop, and prints its link |
+| `great-machine access list` | lists [who may do what](#who-may-do-what) |
+| `great-machine access grant ROLE ID [--service NAME] [--note TEXT]` | grants a role to a key |
+| `great-machine access revoke ROLE ID [--service NAME]` | takes a grant away, and ends what it was used for |
 | `great-machine version` | prints the version of the program |
 
 Every flag has an environment variable, and a flag wins over its variable.
@@ -176,13 +216,13 @@ there are.
 ### draal
 
 ```sh
-great-machine draal --data DIR --s3-bucket NAME [--s3-region R] [--operator ID]... [--web-addr ADDR]
+great-machine draal --data DIR --s3-bucket NAME [--s3-region R] [--admin ID]...
 ```
 
 | flag | environment | default | meaning |
 | --- | --- | --- | --- |
 | `--data DIR` | `GREAT_MACHINE_DATA` | required | holds `draal.key` (created on first run), `draal.sqlite` and the database of the store, `store.sqlite` |
-| `--operator ID` | `GREAT_MACHINE_OPERATORS` | none | an endpoint ID that may act as an operator; may be repeated, and the variable takes several with commas between them |
+| `--admin ID` | `GREAT_MACHINE_ADMINS` | none | an endpoint ID that is an admin whatever was granted, and that no request revokes ([Who may do what](#who-may-do-what)); may be repeated, and the variable takes several with commas between them. The flag was `--operator` and the variable `GREAT_MACHINE_OPERATORS`: both are still taken, and mean the same |
 | `--s3-bucket NAME` | `GREAT_MACHINE_S3_BUCKET` | required | the bucket of [the store](#the-store) |
 | `--s3-prefix P` | `GREAT_MACHINE_S3_PREFIX` | none | put before the name of every object in the bucket |
 | `--s3-endpoint URL` | `GREAT_MACHINE_S3_ENDPOINT` | AWS | an S3 service other than AWS, as `http://HOST[:PORT]` or `https://HOST[:PORT]`, with the path the service is under if it has one |
@@ -192,26 +232,25 @@ great-machine draal --data DIR --s3-bucket NAME [--s3-region R] [--operator ID].
 | `--store-verify-jobs N` | `GREAT_MACHINE_STORE_VERIFY_JOBS` | `2` | packs verified at once |
 | `--store-max-pack-size SIZE` | `GREAT_MACHINE_STORE_MAX_PACK_SIZE` | `16GiB` | the largest pack, uncompressed: bytes, or a number with `KiB`, `MiB` or `GiB` |
 | `--store-no-verify` | `GREAT_MACHINE_STORE_NO_VERIFY` | off | take a pack without reading its data |
-| `--web-addr ADDR` | `GREAT_MACHINE_WEB_ADDR` | `127.0.0.1:8080` | where [the web page](#the-web-page) listens, as `HOST:PORT`; empty for no web page |
 | `--bind IP:PORT` | `GREAT_MACHINE_BIND` | every address, a port the system picks | the UDP address of the iroh endpoint |
 
-At start draal logs its endpoint ID, the bucket, and the URL of its web
-page. Without `--operator` it warns that nobody can act as an operator. An
-address for the web page that is taken ends the command with 1. The
-credentials of the bucket come from the AWS SDK's default chain:
-`AWS_ACCESS_KEY_ID` and the rest, a profile, or a role. **draal asks the
-bucket nothing when it starts**: a bucket that is not there, or
-credentials that are wrong, show in the first push, and not before. A
-draal without a region for its bucket does end at its start, and says
-so.
+At start draal logs its endpoint ID and the bucket. With no admin,
+neither of its command line nor among the grants, it warns that nobody
+can grant anything. It binds its iroh endpoint and no other port: it
+serves no page. The credentials of the bucket come from the AWS SDK's
+default chain: `AWS_ACCESS_KEY_ID` and the rest, a profile, or a role.
+**draal asks the bucket nothing when it starts**: a bucket that is not
+there, or credentials that are wrong, show in the first push, and not
+before. A draal without a region for its bucket does end at its start,
+and says so.
 
-draal keeps the services, their generations and their rollouts in
-`draal.sqlite`. Which zathrases are connected, and what they report, it
-keeps in memory. There is one draal for a fleet. **While it is down or
-cannot be reached, every service goes on running**: a zathras keeps what
-it runs and dials again, and a rollout that was under way is carried on
-with when draal is back. After it starts, draal waits 45 seconds before it
-decides anything, so that the zathrases are back first.
+draal keeps the services, their generations, their rollouts and the
+grants in `draal.sqlite`. Which zathrases are connected, and what they
+report, it keeps in memory. There is one draal for a fleet. **While it
+is down or cannot be reached, every service goes on running**: a zathras
+keeps what it runs and dials again, and a rollout that was under way is
+carried on with when draal is back. After it starts, draal waits 45
+seconds before it decides anything, so that the zathrases are back first.
 
 #### The store
 
@@ -253,21 +292,24 @@ and the pods fetch from it.
   the data directory up.
 - **Nothing is removed from the store.** A store path that no generation
   needs any more stays in the bucket.
-- **Who may do what.** Operators push. Anyone who knows the endpoint ID
-  of draal can fetch: see [Security](#security).
+- **Who may do what.** A deployer of a service pushes and lists under
+  the prefix of that service, a zathras that is registered for the
+  service fetches from it, and an admin does all of it, and deletes: see
+  [Who may do what](#who-may-do-what).
 - What the store holds, and what sharing and compression save, is on
-  draal's [web page](#the-web-page) under `/store/`.
+  [the web page](#the-web-page) under `/store/`, for admins.
 
 ### zathras
 
 ```sh
-great-machine zathras --draal ID --service NAME
+great-machine zathras --draal ID --service NAME --role-key FILE
 ```
 
 | flag | environment | default | meaning |
 | --- | --- | --- | --- |
 | `--draal ID` | `GREAT_MACHINE_DRAAL` | required | the endpoint ID of draal |
 | `--service NAME` | `GREAT_MACHINE_SERVICE` | required | the service this zathras belongs to |
+| `--role-key FILE` | `GREAT_MACHINE_ROLE_KEY` | required | the role key of its service, with which it signs what it registers with; zathras does not make the file |
 | `--name NAME` | `GREAT_MACHINE_NAME` | the host name, which in a pod is the pod's name | what the operator sees |
 | `--store-cache DIR` | `GREAT_MACHINE_STORE_CACHE` | `/var/cache/great-machine` | where the pack cache is kept |
 | `--no-store` | `GREAT_MACHINE_NO_STORE` | off | fetch nothing: `/nix/store` is whatever the machine has |
@@ -279,6 +321,16 @@ great-machine zathras --draal ID --service NAME
 zathras is the first process of the app container. It runs the service
 with its own environment and working directory, and:
 
+- **It registers with a statement of its service's role key**
+  (`--role-key`). The key signs, once, when zathras starts, that at this
+  draal this zathras acts for it, and draal takes a zathras whose role
+  key was granted the service
+  ([Who may do what](#who-may-do-what)). The statement is of this
+  zathras and this draal, and worth nothing to anybody else. A zathras
+  that is refused says why in its log, keeps what it runs, and tries
+  again, every 30 seconds at the most. A role key file that is missing
+  ends zathras at its start: it makes none, as a new key would be one
+  nobody granted anything.
 - **It keeps the store of its service in `/nix/store`**, as plain
   files, and mounts nothing. Every store path of a rollout is fetched
   before the rollout touches the service: pulled from draal's store into
@@ -301,7 +353,9 @@ with its own environment and working directory, and:
   and as files, and nothing is removed from either.
 - **A fetch that fails is tried again** for 2 minutes. One of a store
   path that the store does not have for the service fails at once, and
-  says so.
+  says so. A fetch is made over the endpoint that zathras is connected
+  to draal with, and draal lets a zathras fetch while it is registered:
+  one that finds no connection to draal has failed like any other.
 - **`/nix/store` and the cache are zathras's alone to write.** It makes
   them so when it starts, whatever a volume came as, and ends at once
   when it cannot open them. A `/nix/store` that holds something is used
@@ -323,19 +377,20 @@ with its own environment and working directory, and:
   container, so `kubectl logs` shows what it always shows. The last 400
   lines are also kept for `great-machine logs`, across restarts of the
   service.
-- **A zathras makes a new key every time it starts.** A container that
-  was restarted is a new zathras under the old name: it has nothing to
-  run until draal has sent it the generation of its service. What it had
-  fetched is still in `/nix/store`, when that is a volume of the pod;
-  where it is not, it is written out again from the pack cache.
+- **A zathras makes a new key every time it starts**, one for draal and
+  for the store alike. A container that was restarted is a new zathras
+  under the old name: it has nothing to run until draal has sent it the
+  generation of its service. What it had fetched is still in
+  `/nix/store`, when that is a volume of the pod; where it is not, it is
+  written out again from the pack cache.
 - `--no-store` is for a machine that has a `/nix/store` of its own,
   which zathras is not to write to: nothing is fetched, and a rollout
   runs what is there.
 
 ### Operator commands
 
-`id` takes `--key` alone. `rollout`, `rollback`, `status`, `logs`, `shell`
-and `tui` take both of these:
+`id` takes `--key` alone. `rollout`, `rollback`, `status`, `logs`, `shell`,
+`tui`, `web` and `access` take both of these:
 
 | flag | environment | default | meaning |
 | --- | --- | --- | --- |
@@ -375,81 +430,160 @@ echo uptime | great-machine shell web
 `tui` takes no argument and no flag of its own: see
 [The terminal UI](#the-terminal-ui).
 
+`web` takes `--addr ADDR` (`GREAT_MACHINE_WEB_ADDR`, default
+`127.0.0.1:8080`), where the page listens: see
+[The web page](#the-web-page).
+
+`access list`, `access grant` and `access revoke` are an admin's: see
+[Who may do what](#who-may-do-what).
+
+What a command is refused, because its key was not granted what it asks,
+it prints as draal said it, with the role that it takes, and ends with 1.
+
+## Who may do what
+
+draal does for a key what the key was granted, and nothing else. A grant
+is an endpoint ID, a role, and a service or every service. A key has as
+many grants as it was given, so one key can deploy `web` and `api` and
+nothing besides.
+
+| | admin | deployer of a service | zathras of a service |
+| --- | --- | --- | --- |
+| register as a zathras of the service, and report | | | by a statement of its role key |
+| fetch a store path of the service | yes | yes | while it is registered |
+| push to the store of the service, and list it | yes | yes | |
+| delete from the store | yes | | |
+| roll the service out, roll it back, list its rollouts | yes | yes | |
+| the logs, the figures and a shell of its zathrases | yes | yes | |
+| the fleet (`status`, the page, the terminal UI) | all of it | its services | |
+| grant, revoke and list grants; the page of the store | yes | | |
+
+- **An admin** does everything, for every service.
+- **A deployer** pushes and rolls out the services it was granted, reads
+  their logs and opens shells in them. A shell is a deployer's because a
+  rollout is: whoever may run a program of its choosing in the
+  containers of a service is not kept out of them by being refused a
+  shell. A deployer of every service is still no admin: it deletes
+  nothing and grants nothing.
+- **A zathras** is no key that connects. The grant is held by the **role
+  key** of a service, which every pod of the service is given and which
+  signs for them: see [zathras](#zathras) and [Pod](#pod).
+- **Nothing is open.** A key that was granted nothing is told its own
+  endpoint ID, which is what an admin needs to grant it something, and
+  nothing else.
+
+```sh
+great-machine access list
+great-machine access grant ROLE ID [--service NAME] [--note TEXT]
+great-machine access revoke ROLE ID [--service NAME]
+```
+
+`ROLE` is `admin`, `deployer` or `zathras`, and `ID` an endpoint ID, as
+`great-machine id` prints one. Without `--service` a grant is for every
+service, which an admin always is. `list` prints a line for a grant: the
+role, the service or `every`, the ID, the note, who granted it and when.
+A grant that is there already is there with the new note. The three are
+an admin's, and so are the same things on
+[the web page](#the-web-page) and in
+[the terminal UI](#the-terminal-ui).
+
+- **The first admin** is given to draal with `--admin`. Such an admin is
+  one whatever was granted, is listed with the grants, and is revoked by
+  no request: a draal that was just started has an admin, and no mistake
+  locks everybody out. An admin cannot revoke its own `admin` grant
+  either.
+- **A revocation ends what the grant was used for.** When the command
+  returns, draal has closed every connection of that key, and ended the
+  session of every zathras that the key signed for. They dial again, and
+  find what is still granted. A connection that another grant of the key
+  covered is closed with the rest, and costs a dial.
+- **A refusal says what it takes**: which role, and for which service.
+  It says nothing of what exists. A deployer of `web` is shown nothing of
+  `api` by `status`, and a zathras of `api` is to it one that is not
+  connected.
+- **A change is in force when the command returns.** The grants are in
+  `draal.sqlite`, and draal decides from a copy in its memory. There is
+  no history of them but draal's log, which has every grant and every
+  revocation with who asked.
+- **A key is all draal knows of anybody.** The note of a grant is where
+  to say whose key it is.
+
 ## The web page
 
-draal serves a web page, on `http://127.0.0.1:8080/` unless `--web-addr`
-says otherwise:
+```sh
+great-machine web --draal ID
+```
+
+serves the page on the laptop, and prints its link:
+
+```
+http://localhost:8080/?ticket=…
+```
+
+The page asks draal with the operator's key, as `status`, `logs` and
+`shell` do, and can do what that key may: draal decides. draal itself
+serves no page.
 
 | view | address | shows |
 | --- | --- | --- |
-| services | `/` | every service: its stable generation, its zathrases by phase, the last rollout and how far it is |
+| services | `/` | every service the key may see: its stable generation, its zathrases by phase, the last rollout and how far it is |
 | a service | `/s/SERVICE` | its zathrases (name, phase, generation, time running, restarts, CPU and memory), the rollout under way with every zathras' part in it, and the last 20 rollouts |
 | a zathras | `/s/SERVICE/z/ID` | its state in full; CPU, memory, disk and network over the last 15 minutes; the last 400 lines of its log, followed as they come; a shell in its container |
-| the store | `/store/` | what [the store](#the-store) holds: its references and packs, and what sharing and compression save. It is jaccard-store's own page, and changes nothing |
+| access | `/access` | for admins: the grants as a table (role, service, ID, note, who granted it and when; those of draal's command line marked), a form that grants, and for every grant that can be revoked a button that does, after it was confirmed |
+| the store | `/store/` | for admins: what [the store](#the-store) holds, its references and packs, and what sharing and compression save. It is jaccard-store's own page, and changes nothing |
 
-The page is what `status`, `logs` and `shell` are on the command line.
-**It can roll nothing out and nothing back**: a rollout needs the Nix
-store of the laptop, and the page has no authentication.
+The page is what `status`, `logs` and `shell` are on the command line,
+and for an admin what `access` is. **It can roll nothing out and nothing
+back**: a rollout needs the Nix store of the laptop, and is the command
+line's.
+
+Its header says who it is: the beginning of the operator's endpoint ID,
+and its roles. A key that was granted nothing is told so, with its ID,
+which is what an admin needs to grant it something. A key that is no
+admin has no access view, and no link to the store.
 
 It draws from one connection to draal, says so when that connection is
-lost, and connects again. It asks nothing of any other host: its scripts,
-styles and fonts are in the program.
+lost, and connects again. **It loads whether draal is there or not**:
+the command dials draal when the page first asks for something, and
+again after the connection was lost, and what the page asks meanwhile is
+answered `unavailable`, which it shows as a connection it lost. It asks
+nothing of any other host: its scripts, styles and fonts are in the
+program.
 
-**How it is reached.** On the machine draal runs on, by its URL, which
-draal logs at its start. In the cluster the page listens on the loopback
-address of draal's pod, where no other pod and no Service reaches it, and
-a forward brings it to the laptop:
+**The link and its ticket.** The command acts with the operator's key
+for whoever it answers, so it answers nobody without the ticket:
 
-```sh
-kubectl port-forward deployment/draal 8080:8080
-```
-
-then `http://localhost:8080/`. Whoever may forward a port to the pod
-(`pods/portforward` in the cluster's RBAC) reaches the page so, and with
-it a shell in every container: in a cluster that permission is the page's
-only authentication.
-
-**The page has no authentication, and whoever can reach its port has a
-shell in every container.** It answers under any host name: `localhost`,
-an IP address, or whatever name a tunnel, a forward or a proxy gives it.
-
-- **It listens on loopback by default**, `127.0.0.1:8080`, where only the
-  machine itself, or the pod, reaches it. An address that is not
-  loopback, such as `:8080`, is allowed, and draal warns about it at its
-  start. Do not put a Service or an Ingress in front of the port.
-- **The origin.** A WebSocket, which is how the page gets the fleet, the
-  logs and the shell, is refused with `403` when the page that opens it
-  was not loaded from the host it is opened on. That keeps another web
-  site that is open in the same browser from opening one directly.
-- **A limit that is known and was accepted.** The rule of the origin
-  does not hold against a web site that points a name of its own at
-  draal's address (DNS rebinding): its page is then of the same origin as
-  draal's, and gets a socket as draal's own page does. So the port should
-  be reachable only by people and machines that are trusted, and the
-  browser that is used for the page is best not used for browsing
-  elsewhere while the port is reachable from it.
-
-**Behind a proxy.** A proxy in front of draal has to authenticate whoever
-it lets through: it is then all the authentication there is. The name
-under which the proxy is reached may be any name, but the proxy has to
-pass on the `Host` header the browser sent, unchanged. One that rewrites
-it (nginx does by default; there it takes `proxy_set_header Host
-$http_host;`) loads the page and gets `403` for every WebSocket, so the
-page then says that its connection is lost. A WebSocket through nginx
-also needs the `Upgrade` and `Connection` headers passed on
-(`proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade;
-proxy_set_header Connection "upgrade";`), without which draal answers
-`400`. A proxy that does not authenticate puts a shell in every
-container on the network it listens on.
-
-`--web-addr ""` (or an empty `GREAT_MACHINE_WEB_ADDR`) turns the page off:
-nothing listens.
+- **It listens on loopback alone**, on `127.0.0.1:8080` unless `--addr`
+  names another loopback address. An address that is not loopback is
+  refused: the ticket and the cookie travel in the clear. From another
+  machine the page is reached through a tunnel, under `localhost` and
+  the same port (`ssh -L 8080:127.0.0.1:8080 HOST`).
+- **The ticket** is in the link. Opening the link gives the browser a
+  cookie and takes the ticket out of the address; every other request,
+  for the files of the page as for what the page asks, needs that cookie
+  and is answered `401` without it. The ticket is good for as long as
+  the command runs, so the link can be opened again, in another browser
+  too. A command that is started again has a new ticket, and a page that
+  is still open then says to open the link the command printed.
+- **The host name.** A request under another host name than `localhost`,
+  `127.0.0.1` or `[::1]`, with the port of the page, is refused with
+  `403`. A web site that points a name of its own at the loopback
+  address is not answered.
+- **The origin.** What changes something, and every WebSocket, which is
+  how the page gets the fleet, the logs and the shell, has to come from
+  the page itself, or is refused. That keeps a page of another program
+  on the same machine from acting with the cookie, which a browser sends
+  to every port of a host.
+- **What this does not keep out.** Loopback is every user's of a
+  machine, and the ticket is what keeps another user out. Whoever can
+  read the link, in the terminal or in the arguments a browser was
+  started with, has the page, and with it what the operator's key may
+  do, for as long as the command runs.
 
 A program that was built with `go build` alone has no page in it, since
-the page is built by Node (see [Development](#development)). Its draal
-warns about that at its start, and answers `501` with a line that says
-how the page is built. The program that Nix builds, and the image, have
-it.
+the page is built by Node (see [Development](#development)). Its
+`great-machine web` answers `501` with a line that says how the page is
+built. The program that Nix builds, and the image, have it.
 
 ## The terminal UI
 
@@ -459,18 +593,18 @@ great-machine tui --draal ID
 
 shows in a terminal what the web page shows, and follows it. It talks to
 draal as an operator, as `status`, `logs` and `shell` do: it takes
-`--draal` and `--key`, draal lets it in by its allowlist, and it needs
-neither the web page nor a forwarded port.
+`--draal` and `--key`, and draal shows it what its key was granted.
 
 | view | shows |
 | --- | --- |
 | services | every service: its stable generation, its zathrases by phase, its last rollout and how far it is |
 | a service | its zathrases as a table (name, phase and since when, generation and whether it is the stable one, restarts, last exit, CPU and memory), the rollout under way with where every zathras stands in it, and its last rollouts |
 | a zathras | its state in full; CPU, memory, disk and network over the last 15 minutes as sparklines, with the value now; the last 400 lines of its log, followed as they come |
+| access | for admins: the grants, a line for each as `great-machine access list` prints them |
 
 One view at a time fills the terminal, under a line that says where one
-is, the beginning of draal's endpoint ID and the state of the connection,
-and above a line of the keys that work there.
+is, the beginning of draal's endpoint ID, who the key is and the state of
+the connection, and above a line of the keys that work there.
 
 | key | does |
 | --- | --- |
@@ -480,11 +614,25 @@ and above a line of the keys that work there.
 | `PgUp` `PgDn` | a page up, a page down |
 | `g` `G` | the start, the end; in a log `G` also follows it again |
 | `s` | on a zathras: open a shell |
+| `a` | on the services: open access |
+| `g`, `x`, `y` | in access: grant; revoke the grant under the cursor; yes to the revocation |
 | `?` | the keys, and what the signs mean |
 | `q`, `Ctrl-C` | quit |
 
 **It can roll nothing out and nothing back.** `rollout` and `rollback`
 are commands of their own.
+
+**Access.** `a` on the view of the services opens the grants, which are
+an admin's to see and to change: what `great-machine access` does on the
+command line ([Who may do what](#who-may-do-what)). In this view `g`
+grants, through a form of four fields: the role (one of the three,
+changed with the arrow keys), the ID, the service (empty for every
+service) and the note. `Enter` on the last field asks draal, and `Esc`
+gives the form up. What draal refuses is said in the form, which stays
+as it was filled. `x` revokes the grant under the cursor, after `y` to a
+line that names it. An admin of draal's command line has no `x`. A key
+that is no admin is told that the view is an admin's, with its own
+endpoint ID, which is what an admin needs to grant it something.
 
 **The shell.** `s` on the view of a zathras that is connected opens a
 shell in its container, the one `great-machine shell` opens. First draal
@@ -516,8 +664,8 @@ once. When draal answers, the view that was open is alive again. A draal
 that takes the connection and does not answer within a minute is given
 up and dialed again, like a dial that failed; until then a key changes
 nothing, since there is no pause to end. What draal refuses at the very
-start, an operator that is not on its allowlist, ends the command with
-that refusal and the status 1.
+start, a key that was granted nothing, ends the command with that
+refusal and the status 1.
 
 **The terminal.** The terminal UI needs a terminal as its standard input
 and its standard output, and ends with the status 2 and one line
@@ -646,7 +794,7 @@ readinessProbe:
 ```yaml
 containers:
   - name: app
-    image: ghcr.io/fables-for-robots/great-machine:v0.3.0
+    image: ghcr.io/fables-for-robots/great-machine:v0.4.0
     command: ["great-machine", "zathras"]
     securityContext:
       allowPrivilegeEscalation: false
@@ -654,16 +802,33 @@ containers:
     env:
       - { name: GREAT_MACHINE_DRAAL, value: <endpoint id of draal> }
       - { name: GREAT_MACHINE_SERVICE, value: web }
+      - { name: GREAT_MACHINE_ROLE_KEY, value: /run/secrets/great-machine/zathras.key }
     volumeMounts:
       - { name: store, mountPath: /nix/store }
       - { name: cache, mountPath: /var/cache/great-machine }
+      - { name: role-key, mountPath: /run/secrets/great-machine, readOnly: true }
     readinessProbe:
       httpGet: { path: /healthz, port: 9890 }
 volumes:
   - { name: store, emptyDir: {} }
   - { name: cache, emptyDir: {} }
+  - { name: role-key, secret: { secretName: web-zathras-key, defaultMode: 0400 } }
 terminationGracePeriodSeconds: 150   # longer than --stop-timeout
 ```
+
+- **The role key of the service** is a Secret that is made first (the
+  top of [`deploy/pod.yaml`](deploy/pod.yaml) says how), the same in
+  every pod of the service, and mounted as a file that root alone reads.
+  zathras signs with it when it starts, and does not make it: a file
+  that is missing ends zathras at its start. An admin grants the key the
+  role, for this service:
+  `great-machine access grant zathras ID --service web`.
+- **The role key is in the container the service runs in.** A service
+  that is root reads it, and could sign with it for zathrases of its own
+  service, which register as what it already is and fetch what it
+  already has. With `GREAT_MACHINE_USER` the service cannot read the
+  file. A role key that was granted for one service signs for no other,
+  which is why a service is given its own.
 
 - **The container is given nothing beyond what a container has.** No
   capability is added, and the AppArmor profile is the runtime's:
@@ -701,54 +866,75 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
   of a shell session, CA certificates, a `/tmp`, and an empty
   `/nix/store` for the volume of the store to go over. Nothing in it
   needs a `/nix/store` of its own. It is the image of draal too. Name it
-  by a release tag, as `v0.3.0`, which exists once it has been tagged,
+  by a release tag, as `v0.4.0`, which exists once it has been tagged,
   and keep draal and every zathras on the same tag: a draal and a
   zathras of different versions may not speak the same protocol.
 
 ## Security
 
-- **Operators are an allowlist.** draal does what an operator command
-  asks only for the endpoint IDs it was given with `--operator`. The
-  operator's key file is the credential: whoever has it can roll out, and
-  has a shell in every container.
-- **The web page has no authentication.** Whoever can reach its port can
-  read every log and has a shell in every container, though no rollout.
-  It listens on loopback unless told otherwise, answers under any host
-  name, and is reached through `kubectl port-forward`: see
-  [The web page](#the-web-page). The port must not be exposed by a
-  Service, a proxy in front of it has to authenticate, and it should be
-  reachable only by people and machines that are trusted.
-- **Registration is open.** Any peer that knows the endpoint ID of draal
-  can register as a zathras of any service. It is then listed with the
-  others, is sent the path and the arguments of what the service runs,
-  and can halt a rollout by failing it. Treat the endpoint ID of draal as
-  something the pods know and the world does not, and put no secret in
-  the arguments of a service.
-- **What draal takes from a registrant is bounded.** A registration is
+- **draal does for a key what it was granted, and nothing else**: see
+  [Who may do what](#who-may-do-what). A key file is the credential.
+  Whoever has an admin's can do everything; whoever has a deployer's can
+  roll out the services it was granted, and has a shell in their
+  containers. The admins of draal's command line are admins for as long
+  as draal is started with them.
+- **Nothing is open.** A zathras registers with a statement that the
+  role key of its service signed for it, and fetches the store paths of
+  its service while it is registered, and no other's. A peer that knows
+  the endpoint ID of draal and was granted nothing is told its own
+  endpoint ID, and nothing else.
+- **draal listens for nothing but iroh.** It has no page and binds no
+  port for one: nothing is forwarded, and there is nothing of it to keep
+  off a network.
+- **The web page acts with the operator's key**, on the operator's
+  machine. `great-machine web` listens on loopback alone and answers
+  nobody without the ticket of its link, nothing under another host
+  name, and no change and no WebSocket that does not come from the page
+  itself: see [The web page](#the-web-page). That guards against a web
+  site that is open in the same browser, one that points a name of its
+  own at the loopback address among them, and against the page of
+  another program on the same machine. It does not guard against whoever
+  can read the link, in the terminal or in the arguments a browser was
+  started with: another user of the same machine who has the link has
+  the page, for as long as the command runs.
+- **The role key of a service is in its containers**, as a file that
+  root alone reads. A service that is root reads it, and can sign with
+  it for zathrases of its own service: they register as that service,
+  are listed with the others, are sent the path and the arguments of
+  what the service runs, can halt a rollout of it by failing it, and
+  fetch its store paths. They are of no other service. `--user` keeps
+  the service from the file. Give every service a role key of its own,
+  and put no secret in the arguments of a service or into a store path,
+  which a Nix store is no place for anyway.
+- **A revocation ends what the grant was used for.** draal closes every
+  connection of the key, and ends the session of every zathras the key
+  signed for, before it answers. A role key that got out is revoked, and
+  a new one is granted and put into the Secret.
+- **What draal takes from a zathras is bounded.** A registration is
   refused unless the name is 1 to 253 bytes of letters, digits, `.`, `_`
   and `-` and the version at most 64 bytes of printable ASCII. What a
   zathras reports is cleaned of control characters and cut before draal
   keeps or shows it (the binary at 4 KiB, the arguments at 128 of 1 KiB,
   the reason of a failure at 4 KiB), a report that is not of the protocol
   ends the connection, and draal keeps at most 900 samples of a zathras,
-  twice what 15 minutes bring. What draal does not bound is how many register:
-  a peer can register any number of zathrases, every one is sent to
-  every watcher, and a fleet that comes to more than a message holds
+  twice what 15 minutes bring. What draal does not bound is how many
+  register with the statements of one role key: a role key can sign for
+  any number of zathrases, every one is sent to every watcher that may
+  see the service, and a fleet that comes to more than a message holds
   (4 MiB) ends `status` and the following of a rollout, which draal
   logs.
-- **The store takes a push from operators alone**, and so a listing and
-  a removal. **Fetching is open**, as registration is: whoever knows the
-  endpoint ID of draal can fetch any store path of any service by its
-  name. The prefixes keep the stores of the services apart, and not their
-  contents secret. Put no secret into a store path, which a Nix store is
-  no place for anyway.
+- **The store decides for a service**: the one whose prefix a reference
+  is under. A push and a listing are a deployer's of that service, a
+  fetch also a zathras's that is registered for it, a removal an admin's
+  alone. The prefixes keep the stores of the services apart: a deployer
+  or a zathras of `web` is given nothing of `api`.
 - **The app container is given no capability** beyond a container's
   own, and has `no_new_privs`: zathras mounts nothing (see [Pod](#pod)).
   The service and the shells are started with what the container has. As
   root they can do what root in an ordinary container can, in their own
-  container: signal zathras, and write `/nix/store` and the pack cache,
-  which they and the generations after them run from. `--user` makes
-  them another user, which can write neither.
+  container: signal zathras, read the role key, and write `/nix/store`
+  and the pack cache, which they and the generations after them run
+  from. `--user` makes them another user, which can do none of it.
 - **Nothing in the pod takes requests to fetch.** zathras dials draal
   for what it fetches, and listens for nothing but its health check.
 - A shell runs as the user of the service, with everything the service
@@ -769,6 +955,43 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
   its closure finds no such file.
 - While draal cannot be reached, a pod runs what it has fetched and can
   fetch nothing new.
+
+## Upgrading from v0.3.0
+
+Up to v0.3.0 draal let its operators do everything, let any peer
+register as a zathras and fetch, and served the web page itself. From
+v0.4.0 on it decides by grants, a zathras registers with a statement of
+its service's role key, and the page is `great-machine web`. This is a
+cut: a draal of v0.4.0 refuses every zathras that has no statement, and
+every key that has no grant. In this order nothing stops:
+
+1. **A role key for every service.** `great-machine id --key FILE` makes
+   one and prints its ID. The file becomes a Secret, as the top of
+   [`deploy/pod.yaml`](deploy/pod.yaml) has it.
+2. **The pods, to v0.4.0**, with the Secret and
+   `GREAT_MACHINE_ROLE_KEY`. A zathras of v0.4.0 registers with a draal
+   of v0.3.0, which ignores the statement, and fetches from it.
+3. **draal, to v0.4.0.** `GREAT_MACHINE_OPERATORS` is still read, and
+   `--operator` still taken: who was an operator is an admin. Their
+   names are `GREAT_MACHINE_ADMINS` and `--admin` now. The web page is
+   gone from draal: `GREAT_MACHINE_WEB_ADDR` is read no longer, and a
+   draal that is still given `--web-addr` ends and names it (`flag
+   provided but not defined`).
+4. **The grants.** `great-machine access grant zathras ID --service
+   SERVICE` for every role key, and `deployer` for whoever is to deploy
+   and is no admin.
+
+**Between 3 and 4 every zathras is refused.** It keeps its service
+running and dials again, every 30 seconds at the most; the fleet is
+empty until the grants are there, and nothing can be rolled out. So the
+grants follow the upgrade of draal at once: the IDs of the role keys are
+known since step 1.
+
+The page is no longer reached with `kubectl port-forward`: it is
+[`great-machine web`](#the-web-page) on the laptop, with the operator's
+key. A Service, a proxy or a forward that was put in front of draal's
+port has nothing to reach. The operator's own program changes with
+draal, as with any release.
 
 ## Upgrading from v0.2.0
 
@@ -909,12 +1132,12 @@ cd ui && npm run dev        # the page on http://localhost:5173/, reloaded as it
 ```
 
 **The shell of the demo is a real one**: a shell on the machine that runs
-the demo, as the user who runs it. The demo has no authentication and
-answers under any host name, like draal's page, so its `--addr` should
-stay on loopback, which is its default.
+the demo, as the user who runs it. The demo has made-up grants and needs
+no ticket: whoever reaches its port has that shell, so its `--addr`
+should stay on loopback, which is its default.
 
-Vite passes `/api`, WebSockets included, on to `127.0.0.1:8080`, which
-can be a real draal as well.
+Vite passes `/api`, WebSockets included, on to `127.0.0.1:8080`, where
+the demo listens.
 
 The terminal UI has the same made-up fleet behind it with
 
@@ -958,8 +1181,9 @@ release is built with the tag in `GREAT_MACHINE_VERSION` and `--impure`.
 says), the type check and the build of the page and the tests of what
 serves it once more with it, zathras as the first process of a container,
 the tests that need root (`scripts/test-linux.sh`), the Nix build and
-the image. `scripts/test-page.sh` asks the program that
-Nix built, and the draal of the image, for the page.
+the image. `scripts/test-page.sh` asks `great-machine web`, of the
+program that Nix built and of the image, for the page, with the ticket
+of the link it prints.
 
 A tag `v*` is a release: `.github/workflows/release.yml` builds the image
 with Nix on a runner of each platform, pushes it as `:<tag>-amd64` and
@@ -968,7 +1192,7 @@ GitHub release with notes generated from what was merged since the last
 one.
 
 ```sh
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.4.0 && git push origin v0.4.0
 ```
 
 ## License
