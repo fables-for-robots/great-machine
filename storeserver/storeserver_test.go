@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -131,9 +132,31 @@ type world struct {
 	t        *testing.T
 	store    *Store
 	listener node.Listener
-	operator node.Key
+	operator node.Key // an admin of the command line
 	bucket   *gate
 	log      *logBuffer
+	// authority is who the store asks. Its grants are the test's to put.
+	authority *authz.Authority
+
+	mu         sync.Mutex
+	registered map[wire.ID]string // the zathrases that are registered, and for which service
+}
+
+// zathras returns a new key that is registered as a zathras of web: who
+// pulls, where a test is of something else than who may.
+func (w *world) zathras() node.Key {
+	w.t.Helper()
+	k := newKey(w.t)
+	w.register(k.ID(), "web")
+	return k
+}
+
+// register makes id a zathras that is registered for the service, as
+// draal's fleet has one.
+func (w *world) register(id wire.ID, service string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.registered[id] = service
 }
 
 func newKey(t *testing.T) node.Key {
@@ -152,12 +175,21 @@ func newKey(t *testing.T) node.Key {
 // start cannot be parallel.
 func start(t *testing.T, change func(*Config)) *world {
 	t.Helper()
-	w := &world{t: t, operator: newKey(t), log: &logBuffer{}}
+	w := &world{t: t, operator: newKey(t), log: &logBuffer{}, registered: map[wire.ID]string{}}
+	w.authority = authz.New(authz.Config{
+		Admins: []wire.ID{w.operator.ID()},
+		Registered: func(peer wire.ID) (string, bool) {
+			w.mu.Lock()
+			defer w.mu.Unlock()
+			service, ok := w.registered[peer]
+			return service, ok
+		},
+	}, nil)
 	w.bucket = &gate{Bucket: buckettest.New(t), waiting: make(chan struct{}, 64)}
 	cfg := Config{
 		Dir:     t.TempDir(),
 		Objects: w.bucket,
-		Authz:   authz.NewAllowlist([]wire.ID{w.operator.ID()}),
+		Authz:   w.authority,
 		Log:     slog.New(slog.NewTextHandler(w.log, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
 	if change != nil {
@@ -344,19 +376,23 @@ func TestALPNIsThatOfJaccardStore(t *testing.T) {
 	}
 }
 
-func TestAnOperatorPushesAndAStrangerPulls(t *testing.T) {
+func TestAnAdminPushesAndAZathrasOfTheServicePulls(t *testing.T) {
 	w := start(t, nil)
 	dir := storePath(t, "abc-web", "the program of web")
 	pushed, err := pushDir(t, w.dial(w.operator), dir, webRef)
 	if err != nil {
-		t.Fatalf("the push of an operator: %v", err)
+		t.Fatalf("the push of an admin: %v", err)
 	}
-	// Whoever knows the ID pulls: the mount of a zathras does so with a
-	// key that draal has never heard of.
+	// A zathras that is registered for the service pulls, with the key it
+	// registered with; nobody else that holds no grant does.
 	stranger := newKey(t)
+	if _, err := pull(t, w.dial(stranger), webRef); err == nil || !strings.Contains(err.Error(), "unauthorized: ") {
+		t.Fatalf("the pull of a stranger: %v, want it refused as unauthorized", err)
+	}
+	w.register(stranger.ID(), "web")
 	pulled, err := pull(t, w.dial(stranger), webRef)
 	if err != nil {
-		t.Fatalf("the pull of a stranger: %v", err)
+		t.Fatalf("the pull of a zathras of the service: %v", err)
 	}
 	if pulled != pushed {
 		t.Errorf("pulled the root %s, and %s was pushed", pulled, pushed)
@@ -367,9 +403,8 @@ func TestAnOperatorPushesAndAStrangerPulls(t *testing.T) {
 		t.Errorf("the store's page does not name the operator as the one who pushed: %s", body)
 	}
 	// A name the store has no reference for is what jaccard-store's
-	// client knows as no such reference, for a stranger as for anyone:
-	// the mount of a zathras tells a store path that was never pushed
-	// from one that could not be fetched by it.
+	// client knows as no such reference: a zathras tells a store path
+	// that was never pushed from one that could not be fetched by it.
 	if _, err = pull(t, w.dial(stranger), "/services/web/nix/store/nothing"); !errors.Is(err, client.ErrNotFound) {
 		t.Errorf("the pull of a name that is not there: %v, want client.ErrNotFound", err)
 	}
@@ -389,16 +424,16 @@ func TestAStrangerMayNotWrite(t *testing.T) {
 
 	// As jaccard-store's client meets it.
 	if _, err := pushDir(t, conn, storePath(t, "def-evil", "not the program of web"), "/services/web/nix/store/def-evil"); err == nil ||
-		!strings.Contains(err.Error(), "unauthorized: push-start is for operators") {
-		t.Errorf("the push of a stranger: %v, want it refused as unauthorized: push-start is for operators", err)
+		!strings.Contains(err.Error(), "unauthorized: "+string(stranger.ID())+" is no deployer of web and may not push its store paths") {
+		t.Errorf("the push of a stranger: %v, want it refused as unauthorized, for being no deployer of web", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), patience)
 	defer cancel()
-	if refs, err := client.New(conn, nil).List(ctx, ""); err == nil || !strings.Contains(err.Error(), "unauthorized: list is for operators") {
-		t.Errorf("the list of a stranger: %v, %v; want it refused as unauthorized: list is for operators", refs, err)
+	if refs, err := client.New(conn, nil).List(ctx, ""); err == nil || !strings.Contains(err.Error(), "unauthorized: "+string(stranger.ID())+" is no deployer of every service and may not list the store") {
+		t.Errorf("the list of a stranger: %v, %v; want it refused as unauthorized, for being no deployer of every service", refs, err)
 	}
-	if err := client.New(conn, nil).Delete(ctx, webRef); err == nil || !strings.Contains(err.Error(), "unauthorized: delete is for operators") {
-		t.Errorf("the delete of a stranger: %v, want it refused as unauthorized: delete is for operators", err)
+	if err := client.New(conn, nil).Delete(ctx, webRef); err == nil || !strings.Contains(err.Error(), "unauthorized: "+string(stranger.ID())+" is no admin and may not delete from the store") {
+		t.Errorf("the delete of a stranger: %v, want it refused as unauthorized, for being no admin", err)
 	}
 
 	// Every operation of a push by itself, as a client of its own making
@@ -413,7 +448,13 @@ func TestAStrangerMayNotWrite(t *testing.T) {
 			t.Errorf("%s of a stranger: %v, want a refusal", op, err)
 			continue
 		}
-		want := "unauthorized: " + string(op) + " is for operators"
+		want := "unauthorized: " + string(stranger.ID()) + map[jswire.Op]string{
+			jswire.OpPushStart:  " is no deployer of web and may not push its store paths",
+			jswire.OpPushUpload: " is no deployer of web and may not push its store paths",
+			jswire.OpPushCommit: " is no deployer of any service and may not push to the store",
+			jswire.OpList:       " is no deployer of every service and may not list the store",
+			jswire.OpDelete:     " is no admin and may not delete from the store",
+		}[op]
 		if resp.Error == nil || resp.Error.Code != jswire.CodeBadRequest || resp.Error.Message != want {
 			t.Errorf("%s of a stranger: %+v, want the refusal %q", op, resp.Error, want)
 		}
@@ -421,7 +462,11 @@ func TestAStrangerMayNotWrite(t *testing.T) {
 			t.Errorf("the refusal of %s left %d lines with the peer and the operation, want one:\n%s", op, logged, w.log.String())
 		}
 		// The line says that it was the store that refused.
-		if !strings.Contains(w.log.String(), line+" protocol=amber/jaccard-store/1") {
+		of := map[jswire.Op]string{jswire.OpPushCommit: `""`, jswire.OpList: `""`}[op]
+		if of == "" {
+			of = "web"
+		}
+		if !strings.Contains(w.log.String(), line+" service="+of+" protocol=amber/jaccard-store/1") {
 			t.Errorf("the line of the refusal of %s does not say protocol=amber/jaccard-store/1:\n%s", op, w.log.String())
 		}
 	}
@@ -448,14 +493,15 @@ func TestAPushByNoOperatorSaysSo(t *testing.T) {
 	dir := storePath(t, "abc-web", "the program of web")
 	ctx, cancel := context.WithTimeout(context.Background(), patience)
 	defer cancel()
+	nobody := newKey(t)
 	_, err := push.Push(ctx, push.Config{
-		Key:     newKey(t),
+		Key:     nobody,
 		Server:  w.listener.ID(),
 		Addrs:   []netip.AddrPort{w.listener.LocalAddr()},
 		Prefix:  wire.StorePrefix("web"),
 		TempDir: t.TempDir(),
 	}, []string{dir})
-	if want := `asking the store for the reference "/services/web/nix/store/abc-web": list: bad_request: unauthorized: list is for operators`; err == nil || err.Error() != want {
+	if want := `asking the store for the reference "/services/web/nix/store/abc-web": list: bad_request: unauthorized: ` + string(nobody.ID()) + ` is no deployer of web and may not list its store paths`; err == nil || err.Error() != want {
 		t.Fatalf("Push as a stranger: %v\nwant: %s", err, want)
 	}
 	// And when nothing answers under the ID it was given: the store is
@@ -503,7 +549,7 @@ func TestAnOperationTheStoreDoesNotKnow(t *testing.T) {
 // without an answer, and costs nothing after that.
 func TestNoRequestWithinRequestWait(t *testing.T) {
 	w := start(t, func(cfg *Config) { cfg.RequestWait = 50 * time.Millisecond })
-	conn := w.dial(newKey(t))
+	conn := w.dial(w.zathras())
 	ctx, cancel := context.WithTimeout(context.Background(), patience)
 	defer cancel()
 	for range 8 {
@@ -524,7 +570,7 @@ func TestNoRequestWithinRequestWait(t *testing.T) {
 	}
 	eventually(t, "the streams to be let go", func() bool { return w.store.streams.Load() == 0 })
 	// The connection is as good as before.
-	if resp, err := ask(t, conn, jswire.Request{Op: jswire.OpPull, Name: "nothing"}); err != nil || resp.Error == nil || resp.Error.Code != jswire.CodeNotFound {
+	if resp, err := ask(t, conn, jswire.Request{Op: jswire.OpPull, Name: "/services/web/nix/store/nothing"}); err != nil || resp.Error == nil || resp.Error.Code != jswire.CodeNotFound {
 		t.Errorf("a request after the silent streams: %+v, %v; want not_found", resp, err)
 	}
 }
@@ -536,7 +582,7 @@ func TestOneStreamMoreThanMaxStreams(t *testing.T) {
 	if _, err := pushDir(t, w.dial(w.operator), storePath(t, "abc-web", "the program of web"), webRef); err != nil {
 		t.Fatalf("the push: %v", err)
 	}
-	conn := w.dial(newKey(t))
+	conn := w.dial(w.zathras())
 	release := w.bucket.holdPulls()
 	defer release()
 
@@ -590,7 +636,7 @@ func TestStopWaitsForTheRequestsUnderWay(t *testing.T) {
 	if _, err := pushDir(t, w.dial(w.operator), storePath(t, "abc-web", "the program of web"), webRef); err != nil {
 		t.Fatalf("the push: %v", err)
 	}
-	conn, idle := w.dial(newKey(t)), w.dial(newKey(t))
+	conn, idle := w.dial(w.zathras()), w.dial(w.zathras())
 	// The store has both connections before it is stopped.
 	if _, err := ask(t, idle, jswire.Request{Op: jswire.OpPull, Name: "nothing"}); err != nil {
 		t.Fatalf("asking on the connection that will be idle: %v", err)
@@ -640,7 +686,7 @@ func TestStopWaitsForTheRequestsUnderWay(t *testing.T) {
 	}
 	gone(t, "the store is stopped", conn)
 	// A connection that comes now is closed at once.
-	gone(t, "the store was stopped before it came", w.dial(newKey(t)))
+	gone(t, "the store was stopped before it came", w.dial(w.zathras()))
 	// Stop may be called again, and Close closes what is left.
 	w.store.Stop()
 	if err := w.store.Close(); err != nil {
@@ -657,7 +703,7 @@ func TestStopEndsARequestThatOutlivesTheGrace(t *testing.T) {
 	if _, err := pushDir(t, w.dial(w.operator), storePath(t, "abc-web", "the program of web"), webRef); err != nil {
 		t.Fatalf("the push: %v", err)
 	}
-	conn := w.dial(newKey(t))
+	conn := w.dial(w.zathras())
 	release := w.bucket.holdPulls()
 	defer release()
 	answer := make(chan error, 1)
@@ -705,7 +751,7 @@ func TestStopReturnsThoughARequestDoesNotEnd(t *testing.T) {
 	if _, err := pushDir(t, w.dial(w.operator), storePath(t, "abc-web", "the program of web"), webRef); err != nil {
 		t.Fatalf("the push: %v", err)
 	}
-	conn := w.dial(newKey(t))
+	conn := w.dial(w.zathras())
 	w.bucket.mu.Lock()
 	w.bucket.deaf = true
 	w.bucket.mu.Unlock()
@@ -807,7 +853,7 @@ func TestAdminServesThePageAndTheFigures(t *testing.T) {
 
 func TestOpenRefusesWhatCannotBeAStore(t *testing.T) {
 	bucket := buckettest.New(t)
-	allow := authz.NewAllowlist(nil)
+	allow := authz.New(authz.Config{}, nil)
 	tests := []struct {
 		name string
 		cfg  Config
@@ -838,8 +884,8 @@ func TestTheStoreIsKeptInItsDirectory(t *testing.T) {
 	bucket := buckettest.New(t)
 	dir, scratch := t.TempDir(), filepath.Join(t.TempDir(), "elsewhere")
 	for _, cfg := range []Config{
-		{Dir: dir, Objects: bucket, Authz: authz.NewAllowlist(nil), Log: quiet},
-		{Dir: dir, Objects: bucket, Authz: authz.NewAllowlist(nil), Scratch: scratch, Log: quiet},
+		{Dir: dir, Objects: bucket, Authz: authz.New(authz.Config{}, nil), Log: quiet},
+		{Dir: dir, Objects: bucket, Authz: authz.New(authz.Config{}, nil), Scratch: scratch, Log: quiet},
 	} {
 		s, err := Open(context.Background(), cfg)
 		if err != nil {
@@ -888,7 +934,7 @@ func TestTheScratchIsADirectoryOfTheStoresOwn(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			cfg := Config{Dir: dir, Scratch: c.scratch(dir), Objects: bucket, Authz: authz.NewAllowlist(nil), Log: quiet}
+			cfg := Config{Dir: dir, Scratch: c.scratch(dir), Objects: bucket, Authz: authz.New(authz.Config{}, nil), Log: quiet}
 			// Twice: the database of the first time is among what the
 			// second finds.
 			for range 2 {
@@ -934,7 +980,7 @@ func TestABucketThatCannotBeReached(t *testing.T) {
 	store, err := Open(context.Background(), Config{
 		Dir:    t.TempDir(),
 		Bucket: bucket.Config{Bucket: "packs", Endpoint: "http://" + addr, Region: "us-east-1", PathStyle: true},
-		Authz:  authz.NewAllowlist([]wire.ID{operator.ID()}),
+		Authz:  authz.New(authz.Config{Admins: []wire.ID{operator.ID()}}, nil),
 		Log:    quiet,
 	})
 	if err != nil {
@@ -957,7 +1003,7 @@ func TestABucketThatCannotBeReached(t *testing.T) {
 	}
 	t.Logf("the push failed with: %v", err)
 	// Nothing points at what was not uploaded.
-	if _, err := pull(t, w.dial(newKey(t)), webRef); !errors.Is(err, client.ErrNotFound) {
+	if _, err := pull(t, w.dial(operator), webRef); !errors.Is(err, client.ErrNotFound) {
 		t.Errorf("a pull of what could not be pushed: %v, want client.ErrNotFound", err)
 	}
 }
@@ -987,5 +1033,129 @@ func TestAPushWithTheMostJobsThereAre(t *testing.T) {
 	}
 	if strings.Contains(w.log.String(), "more streams than the store answers") {
 		t.Errorf("the push opened more streams than the store answers at a time:\n%s", w.log.String())
+	}
+}
+
+// Every request of the store is of a service, the one whose prefix its
+// name or its prefix is under, and is granted by what the key holds for
+// that service: the table of the design, request by request.
+func TestARequestIsOfTheServiceItsNameIsUnder(t *testing.T) {
+	w := start(t, nil)
+	if _, err := pushDir(t, w.dial(w.operator), storePath(t, "abc-web", "the program of web"), webRef); err != nil {
+		t.Fatalf("the push of an admin: %v", err)
+	}
+	keys := map[string]node.Key{}
+	for _, name := range []string{"deployer of web", "deployer of api", "deployer of every service", "zathras of web", "zathras of api", "nobody"} {
+		keys[name] = newKey(t)
+	}
+	keys["admin"] = w.operator
+	w.authority.Replace([]wire.Grant{
+		{ID: keys["deployer of api"].ID(), Role: wire.RoleDeployer, Service: "api"},
+		{ID: keys["deployer of every service"].ID(), Role: wire.RoleDeployer},
+		{ID: keys["deployer of web"].ID(), Role: wire.RoleDeployer, Service: "web"},
+	})
+	w.register(keys["zathras of web"].ID(), "web")
+	w.register(keys["zathras of api"].ID(), "api")
+	conns := map[string]*jsnode.Conn{}
+	for name, k := range keys {
+		conns[name] = w.dial(k)
+	}
+
+	some := []string{"admin", "deployer of every service"}
+	ofWeb := append([]string{"deployer of web"}, some...)
+	for _, c := range []struct {
+		what string
+		req  jswire.Request
+		may  []string
+	}{
+		{"a pull of web", jswire.Request{Op: jswire.OpPull, Name: webRef}, append([]string{"zathras of web"}, ofWeb...)},
+		{"a pull of what is of no service", jswire.Request{Op: jswire.OpPull, Name: "/elsewhere/abc"}, some},
+		{"the start of a push to web", jswire.Request{Op: jswire.OpPushStart, Name: webRef}, ofWeb},
+		{"an upload to web", jswire.Request{Op: jswire.OpPushUpload, Name: webRef}, ofWeb},
+		{"a commit", jswire.Request{Op: jswire.OpPushCommit, UploadID: "1"}, []string{"admin", "deployer of every service", "deployer of web", "deployer of api"}},
+		{"a listing of web", jswire.Request{Op: jswire.OpList, Prefix: "/services/web/nix/store/"}, ofWeb},
+		{"a listing of one store path of web", jswire.Request{Op: jswire.OpList, Prefix: webRef}, ofWeb},
+		{"a listing of everything", jswire.Request{Op: jswire.OpList}, some},
+		{"a listing of what begins as web does", jswire.Request{Op: jswire.OpList, Prefix: "/services/we"}, some},
+		{"a listing of the services", jswire.Request{Op: jswire.OpList, Prefix: "/services/"}, some},
+		{"a deletion", jswire.Request{Op: jswire.OpDelete, Name: "/services/web/nix/store/nothing"}, []string{"admin"}},
+	} {
+		for name, conn := range conns {
+			resp, err := ask(t, conn, c.req)
+			if err != nil {
+				t.Errorf("%s by the %s: %v", c.what, name, err)
+				continue
+			}
+			refused := resp.Error != nil && strings.HasPrefix(resp.Error.Message, "unauthorized: ")
+			if may := slices.Contains(c.may, name); may == refused {
+				t.Errorf("%s by the %s: refused %v (%+v), want it granted to %v alone", c.what, name, refused, resp.Error, c.may)
+			}
+		}
+	}
+}
+
+// Drop ends the connections a peer has to the store, and no other's: it
+// is what a revocation does.
+func TestDropEndsTheConnectionsOfAPeer(t *testing.T) {
+	w := start(t, nil)
+	gone, stays := newKey(t), newKey(t)
+	w.register(gone.ID(), "web")
+	w.register(stays.ID(), "web")
+	a, b, c := w.dial(gone), w.dial(gone), w.dial(stays)
+	for _, conn := range []*jsnode.Conn{a, b, c} {
+		if _, err := ask(t, conn, jswire.Request{Op: jswire.OpPull, Name: webRef}); err != nil {
+			t.Fatalf("a request before the drop: %v", err)
+		}
+	}
+	w.store.Drop(gone.ID())
+	deadline := time.Now().Add(patience)
+	for _, conn := range []*jsnode.Conn{a, b} {
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			s, err := conn.OpenStreamConn(ctx)
+			cancel()
+			if err != nil {
+				break
+			}
+			s.Close()
+			if time.Now().After(deadline) {
+				t.Fatal("a connection of the peer that was dropped still opens streams")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if _, err := ask(t, c, jswire.Request{Op: jswire.OpPull, Name: webRef}); err != nil {
+		t.Errorf("the connection of another peer after the drop: %v", err)
+	}
+}
+
+// Page answers as jaccard-store's admin page answers a GET: it is what
+// draal sends an admin who asks for the page of the store.
+func TestPageAnswersAsTheAdminPageDoes(t *testing.T) {
+	w := start(t, nil)
+	if _, err := pushDir(t, w.dial(w.operator), storePath(t, "abc-web", "the program of web"), webRef); err != nil {
+		t.Fatalf("the push: %v", err)
+	}
+	page := w.store.Page("/")
+	if page.Status != http.StatusOK || !strings.HasPrefix(page.Type, "text/html") || !strings.Contains(string(page.Body), "jaccard-store") {
+		t.Errorf("the page: %d %q, %d bytes; want jaccard-store's admin page", page.Status, page.Type, len(page.Body))
+	}
+	stats := w.store.Page("/api/stats")
+	var figures struct {
+		Refs int64 `json:"refs"`
+	}
+	if stats.Status != http.StatusOK || !strings.HasPrefix(stats.Type, "application/json") || json.Unmarshal(stats.Body, &figures) != nil || figures.Refs != 1 {
+		t.Errorf("the figures: %d %q %s; want one reference, as JSON", stats.Status, stats.Type, stats.Body)
+	}
+	if refs := w.store.Page("/api/refs?prefix=/services/web/"); refs.Status != http.StatusOK || !strings.Contains(string(refs.Body), webRef) {
+		t.Errorf("the references, asked with a query: %d %s", refs.Status, refs.Body)
+	}
+	if none := w.store.Page("/api/nothing"); none.Status != http.StatusNotFound {
+		t.Errorf("a path the page has none of: %d, want 404", none.Status)
+	}
+	for _, bad := range []string{"", "api/stats", "//elsewhere/x", "/a b\n"} {
+		if got := w.store.Page(bad); got.Status != http.StatusBadRequest {
+			t.Errorf("Page(%q) = %d, want 400: it is no path of the page", bad, got.Status)
+		}
 	}
 }
