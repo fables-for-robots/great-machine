@@ -107,6 +107,49 @@ func webStorePath(t *testing.T) string {
 	return dir
 }
 
+// A draal that nobody is an admin of, by its command line or by a grant,
+// says so when it starts: nobody can grant anything. One that has an
+// admin says nothing of the kind.
+func TestRunDraalWithNoAdminSaysSo(t *testing.T) {
+	const warning = "no admin was given on the command line and the database holds none"
+	for _, tt := range []struct {
+		name   string
+		admins int
+		warns  bool
+	}{
+		{"no admin", 0, true},
+		{"an admin of the command line", 1, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cfg := draalForTest(t)
+			for range tt.admins {
+				k, err := node.NewKey()
+				if err != nil {
+					t.Fatal(err)
+				}
+				cfg.admins = append(cfg.admins, k.ID())
+			}
+			var logged buffer
+			done := startDraal(t, ctx, cfg, &logged)
+			served(t, &logged)
+			if got := strings.Contains(logged.String(), warning); got != tt.warns {
+				t.Errorf("draal warns that it has no admin: %v, want %v; it logged:\n%s", got, tt.warns, logged.String())
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Errorf("runDraal returned %v, want nil", err)
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatal("draal did not end")
+			}
+		})
+	}
+}
+
 // TestRunDraalServesTheStore: draal is the store. Asked where the
 // closures of a service go, it names itself and the prefix of the
 // service; a store path is pushed there with an operator's key; and the

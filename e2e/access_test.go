@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -370,13 +371,28 @@ func TestARevocationEndsWhatTheGrantWasUsedFor(t *testing.T) {
 	})
 	before, _ := zathrasOf(first, p.id)
 
-	// The deployer and its watch.
+	// The deployer, its watch and its shell in the zathras.
 	k := newKey(t)
 	h.grant(k.ID(), wire.RoleDeployer, service, "")
 	dep := h.operator(k)
 	fleets, err := dep.Watch(ctx)
 	if err != nil {
 		t.Fatalf("Watch as a deployer: %v", err)
+	}
+	sh, err := dep.Shell(ctx, p.id, wire.ShellRequest{Cols: 80, Rows: 24, Term: "dumb"})
+	if err != nil {
+		t.Fatalf("Shell as a deployer: %v", err)
+	}
+	defer sh.Close()
+	if _, err := sh.Write([]byte("echo mar''ker\n")); err != nil {
+		t.Fatalf("writing to the shell: %v", err)
+	}
+	for seen, buf := "", make([]byte, 4096); !strings.Contains(seen, "marker"); {
+		n, err := sh.Read(buf)
+		if err != nil {
+			t.Fatalf("the shell ended before the revocation, after %q: %v", seen, err)
+		}
+		seen += string(buf[:n])
 	}
 	ended := make(chan struct{})
 	go func() {
@@ -392,6 +408,25 @@ func TestARevocationEndsWhatTheGrantWasUsedFor(t *testing.T) {
 	}
 	if ctx.Err() != nil {
 		t.Fatalf("the watch ended with the time of the test, and not with the revocation")
+	}
+	// The shell is ended with the connection it was opened on: what is
+	// read of it comes to an end, and as it did not exit, the end is an
+	// error and no exit status.
+	read := make(chan error, 1)
+	go func() {
+		_, err := io.ReadAll(sh)
+		read <- err
+	}()
+	select {
+	case err := <-read:
+		if err == nil {
+			t.Errorf("the shell of the deployer ended with an exit status after the revocation, want it ended with its connection")
+		}
+	case <-time.After(deadline):
+		t.Fatalf("the shell of a deployer went on after its grant was revoked")
+	}
+	if status, err := sh.Wait(ctx); err == nil || ctx.Err() != nil {
+		t.Errorf("the shell of the deployer after the revocation: status %d, %v; want the error it ended with", status, err)
 	}
 	if _, err := h.operator(k).Watch(ctx); wire.CodeOf(err) != wire.CodeUnauthorized {
 		t.Errorf("Watch on a new connection after the revocation: %v, want unauthorized", err)
