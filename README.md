@@ -4,11 +4,11 @@ great-machine rolls a program that was built with Nix on a laptop out to a
 group of pods, and shows what those pods are doing.
 
 A pod holds no image of the program. Its one container runs **zathras**,
-an init that mounts a Nix store of its own on `/nix/store`, fetches into
-it what it is told to run, and runs it. Every zathras reports to
-**draal**, the controller, which also keeps the store of the fleet: every
-store path that was rolled out, as pack files in an S3 bucket. The
-operator talks to draal from the command line.
+an init that keeps a Nix store of its own in `/nix/store`: it fetches
+into it what it is told to run, as plain files, and runs it. Every
+zathras reports to **draal**, the controller, which also keeps the store
+of the fleet: every store path that was rolled out, as pack files in an
+S3 bucket. The operator talks to draal from the command line.
 
 ```
  laptop                                   cluster
@@ -40,10 +40,10 @@ half of a key, and the endpoint ID of draal is all that the others need to
 reach it, for the store as for everything else: no address, no port, no
 Service.
 
-The store is [jaccard-store](https://github.com/amber-store/jaccard-store)
-and the mount is [jaccard-nfs-nix-store](https://github.com/amber-store/jaccard-nfs-nix-store),
-both inside the program: there is no server of either to run, and a pod
-has no sidecar.
+The store is [jaccard-store](https://github.com/amber-store/jaccard-store),
+inside the program: there is no server of it to run. A pod has no
+sidecar and mounts nothing: zathras pulls the store paths it is to run
+and writes them out as files.
 
 draal also serves [a web page](#the-web-page) that shows the fleet, the
 figures and the log of every zathras, and gives a shell in its container.
@@ -54,10 +54,9 @@ The design is in
 
 ## Getting started
 
-What has to be there: an S3 bucket and credentials for it, a cluster
-whose nodes have the kernel's NFSv4.1 client, as the common distributions
-do, and let a container with `CAP_SYS_ADMIN` mount (see [Pod](#pod)), and
-Nix on the laptop.
+What has to be there: an S3 bucket and credentials for it, a cluster,
+and Nix on the laptop. A pod asks nothing of its node or of its
+namespace that a container does not have anyway (see [Pod](#pod)).
 
 **The network.** draal, every pod and the laptop dial out: to iroh's
 public relays, which carry a connection until a direct path is found
@@ -73,7 +72,7 @@ The build runs a program while Nix evaluates, which Nix allows only when
 asked (see [Development](#development)):
 
 ```sh
-nix build github:fables-for-robots/great-machine/v0.2.0 \
+nix build github:fables-for-robots/great-machine/v0.3.0 \
   --option allow-unsafe-native-code-during-evaluation true
 ./result/bin/great-machine version
 ```
@@ -126,7 +125,7 @@ the endpoint ID of draal, then:
 kubectl apply -f deploy/pod.yaml
 ```
 
-The pod runs and is not ready: its zathras has mounted its store, which
+The pod runs and is not ready: its zathras has opened its store, which
 is empty, has registered with draal, and has nothing to run yet.
 
 **4. A rollout.** On the laptop, build the program for the platform of the
@@ -270,8 +269,8 @@ great-machine zathras --draal ID --service NAME
 | `--draal ID` | `GREAT_MACHINE_DRAAL` | required | the endpoint ID of draal |
 | `--service NAME` | `GREAT_MACHINE_SERVICE` | required | the service this zathras belongs to |
 | `--name NAME` | `GREAT_MACHINE_NAME` | the host name, which in a pod is the pod's name | what the operator sees |
-| `--store-cache DIR` | `GREAT_MACHINE_STORE_CACHE` | `/var/cache/great-machine` | what the store of this zathras has fetched |
-| `--no-store` | `GREAT_MACHINE_NO_STORE` | off | mount nothing: `/nix/store` is whatever the container has |
+| `--store-cache DIR` | `GREAT_MACHINE_STORE_CACHE` | `/var/cache/great-machine` | where the pack cache is kept |
+| `--no-store` | `GREAT_MACHINE_NO_STORE` | off | fetch nothing: `/nix/store` is whatever the machine has |
 | `--user UID[:GID]` | `GREAT_MACHINE_USER` | those of zathras | the user and the group the service and the shells run as |
 | `--shell PATH` | `GREAT_MACHINE_SHELL` | `/bin/sh` | the program of a shell session |
 | `--stop-timeout D` | `GREAT_MACHINE_STOP_TIMEOUT` | `2m` | how long a service has to end after SIGTERM |
@@ -280,23 +279,39 @@ great-machine zathras --draal ID --service NAME
 zathras is the first process of the app container. It runs the service
 with its own environment and working directory, and:
 
-- **It mounts the store of its service on `/nix/store`** when it starts,
-  and ends at once, saying what the container lacks, when it cannot (see
-  [Pod](#pod)). It ends as well where `/nix/store` is there and holds
-  something, which the mount would hide from every process of the
-  machine: `--no-store` is for such a machine. The store is an NFS
-  server inside zathras, on a loopback port, that only zathras mounts; a
-  store path is fetched from draal the first time it is needed, and
-  every path of a rollout before the rollout touches the service. What
-  was fetched is kept in `--store-cache`, twice: as it came, and as
-  plain files. Nothing is removed from it. A cache is of one draal and
-  one service.
-- **The service and the shells run without `CAP_SYS_ADMIN`**, which
-  zathras itself needs to mount, and cannot gain it in the container
-  ([Pod](#pod) says what that leaves them). With `--user` they run as
-  that user and group, with no capability at all in the container; their
-  standard output and standard error, and the terminal of a shell, are
-  theirs, so a program that opens `/dev/stdout` anew can.
+- **It keeps the store of its service in `/nix/store`**, as plain
+  files, and mounts nothing. Every store path of a rollout is fetched
+  before the rollout touches the service: pulled from draal's store into
+  the pack cache, `packs/` under `--store-cache`, written out, and moved
+  to its name when all of it is on disk. A store path under its name
+  in `/nix/store` is whole, and one that is there is not fetched again.
+  While it is written it is `/nix/store/.great-machine-partial-NAME`,
+  beside its name; what a zathras was writing when it ended is removed
+  when it next starts.
+- **What is written out is what a Nix store holds**: directories and
+  the files that can be executed with mode `0555`, every other file with
+  `0444`, symbolic links as they are, all of it owned by zathras. A
+  store path that is one file gets an execute bit. A store path that
+  holds a device, a FIFO or a socket is refused.
+- **The pack cache makes the next fetch small.** It keeps every object
+  that was pulled, and a fetch downloads what it lacks. A store path
+  that a rollout changed leans on the pack of the one before: a pod that
+  has the one before downloads one pack for it, and a pod that is new
+  two at the most. A pod's disk holds every store path twice, as packs
+  and as files, and nothing is removed from either.
+- **A fetch that fails is tried again** for 2 minutes. One of a store
+  path that the store does not have for the service fails at once, and
+  says so.
+- **`/nix/store` and the cache are zathras's alone to write.** It makes
+  them so when it starts, whatever a volume came as, and ends at once
+  when it cannot open them. A `/nix/store` that holds something is used
+  as it is: zathras adds to it, and hides nothing.
+- **The service and the shells are started with what the container
+  has**, which is no capability beyond a container's own ([Pod](#pod)).
+  With `--user` they run as that user and group, with no capability at
+  all in the container, and cannot write the store; their standard
+  output and standard error, and the terminal of a shell, are theirs, so
+  a program that opens `/dev/stdout` anew can.
 - **A service that ends is started again**, whatever its exit status: at
   once if it ran for 30 seconds or longer, and otherwise after a delay of
   1 second, then twice as long each time, up to 2 minutes.
@@ -311,10 +326,11 @@ with its own environment and working directory, and:
 - **A zathras makes a new key every time it starts.** A container that
   was restarted is a new zathras under the old name: it has nothing to
   run until draal has sent it the generation of its service. What it had
-  fetched is still in its cache, when the cache is a volume of the pod.
-- `--no-store` is for a machine that has a `/nix/store` of its own, and
-  for a system that is not Linux, where zathras cannot mount: nothing is
-  fetched, and a rollout runs what is there.
+  fetched is still in `/nix/store`, when that is a volume of the pod;
+  where it is not, it is written out again from the pack cache.
+- `--no-store` is for a machine that has a `/nix/store` of its own,
+  which zathras is not to write to: nothing is fetched, and a rollout
+  runs what is there.
 
 ### Operator commands
 
@@ -630,94 +646,64 @@ readinessProbe:
 ```yaml
 containers:
   - name: app
-    image: ghcr.io/fables-for-robots/great-machine:v0.2.0
+    image: ghcr.io/fables-for-robots/great-machine:v0.3.0
     command: ["great-machine", "zathras"]
     securityContext:
-      capabilities: { add: ["SYS_ADMIN"] }
-      appArmorProfile: { type: Unconfined }
+      allowPrivilegeEscalation: false
       seccompProfile: { type: RuntimeDefault }
     env:
       - { name: GREAT_MACHINE_DRAAL, value: <endpoint id of draal> }
       - { name: GREAT_MACHINE_SERVICE, value: web }
     volumeMounts:
+      - { name: store, mountPath: /nix/store }
       - { name: cache, mountPath: /var/cache/great-machine }
     readinessProbe:
       httpGet: { path: /healthz, port: 9890 }
 volumes:
+  - { name: store, emptyDir: {} }
   - { name: cache, emptyDir: {} }
 terminationGracePeriodSeconds: 150   # longer than --stop-timeout
 ```
 
-- **The container can mount, and is not privileged.** zathras mounts the
-  store on `/nix/store`. That takes `CAP_SYS_ADMIN`; and the runtime's
-  AppArmor profile denies a container every mount, whatever its
-  capabilities, so the container has no profile. It is started with what
-  the runtime gives every container: a masked `/proc`, a `/sys` that
-  cannot be written, the devices of a container, and the runtime's
-  seccomp profile, which is written out because a pod that says nothing
-  has none on most clusters. A zathras that cannot mount ends at once
-  and says that this is what it lacks.
-- **Two things a cluster may want changed.** `appArmorProfile` is a
-  field of Kubernetes 1.30: on a cluster before it the field is taken
-  out, and the annotation
-  `container.apparmor.security.beta.kubernetes.io/app: unconfined` in the
-  metadata of the pod (of the template, in a Deployment) says the same.
-  And a namespace that enforces the Pod Security Standards has to be at
-  the level `privileged` for such a pod: the capability and the absent
-  profile are beyond `baseline`.
-- **The service does not have the capability.** zathras starts the
-  service and the shells without `CAP_SYS_ADMIN` and without a way to
-  gain it in the container, by a setuid program or otherwise: they
-  cannot mount there, nor undo what zathras mounted. With
-  `GREAT_MACHINE_USER` they are not root either.
-- **What the service has that it would not have in an ordinary
-  container** is user namespaces. A runtime's seccomp profile keeps some
-  system calls for containers that were given `CAP_SYS_ADMIN`:
-  `unshare`, `setns`, `clone` for a new namespace and the calls that
-  mount among them, with `bpf`, `perf_event_open` and others. It lets
-  them through for every process of such a container, the service among
-  them. Most of them the kernel itself then refuses a process that has
-  not the capability; making a user namespace it does not. So the
-  service and the shells, as root or as another user, can make a user
-  namespace of their own and are root in it, with every capability over
-  what that namespace holds: they can mount a `tmpfs` there. That gives
-  them nothing over the container, the store or zathras; it is a part of
-  the kernel that a container otherwise does not reach. Nothing in this
-  release closes it. A seccomp profile of the node's (`type: Localhost`)
-  that is the runtime's for a container without the capability, with
-  `mount` and `umount2` let through, should; this repository has not
-  tried one.
-- **Where that is not enough**, as on nodes with SELinux, which lets no
-  container that is not privileged mount NFS: `privileged: true` in the
-  place of the capability and the AppArmor profile, **and**
-  `GREAT_MACHINE_USER`. Root in a privileged container reaches the node
-  without any capability (the node's disks, `/proc/sysrq-trigger`), so
-  there the service should not be root. zathras warns at its start when
-  it is.
-- **The mount is the container's own.** It is made inside the container,
-  on no volume, so it reaches no other container and not the node, and it
-  is gone with the container.
-- **The cache** is a volume of the pod, so that a container that was
-  restarted finds what was fetched. It holds every store path the pod
-  has fetched, twice, and grows until the pod is gone. zathras makes the
-  directory its own to write when it starts, whatever the volume came
-  as, and leaves what is in it as it was: in a volume that is the pod's
-  own and new, a service of `GREAT_MACHINE_USER` cannot put files of its
-  own in the place of the store's, as a service that is root can.
-- **The node** needs the kernel's NFSv4.1 client.
+- **The container is given nothing beyond what a container has.** No
+  capability is added, and the AppArmor profile is the runtime's:
+  zathras mounts nothing. The runtime's seccomp profile is written out
+  because a pod that says nothing has none on most clusters. A namespace
+  that enforces the Pod Security Standards admits such a pod at the
+  level `baseline`.
+- **`allowPrivilegeEscalation: false` sets `no_new_privs`** for every
+  process of the container, zathras among them: nothing in it gains a
+  privilege by executing a program, by a setuid program or otherwise.
+- **A service that is root is root in the container of zathras.** It
+  can signal zathras, and write what root may: `/nix/store` and the pack
+  cache among it. What it writes there, it and the generations after it
+  run from, in that pod and no other. With `GREAT_MACHINE_USER` it
+  cannot: both directories are zathras's alone to write, whatever the
+  volumes came as.
+- **A container that was given more is warned about.** When the service
+  is root and the container has a capability that a container does not
+  get by default, zathras says so at its start, and names them and
+  `--user`. Nothing takes such a capability from the service.
+- **The store and the cache** are volumes of the pod, so that a
+  container that was restarted finds its store. Between them they hold
+  every store path the pod has fetched twice, as files and as packs, and
+  they grow until the pod is gone. Without the volume on `/nix/store`
+  the store is the container's own, and a container that was restarted
+  writes every store path out again from the cache: it asks draal for
+  each, and downloads nothing.
 - **The environment of the service is that of the container.** What the
   program needs of settings and secrets is put on the app container.
 - **What the container is given of memory and CPU** is for the service
-  and for the store together: fetching a store path and serving it count
-  with the service, and so do they in the figures of the zathras.
+  and for the store together: fetching a store path and writing it out
+  count with the service, and so do they in the figures of the zathras.
 - **The image**, `ghcr.io/fables-for-robots/great-machine`, for amd64 and
   arm64, holds the program, a static busybox for `/bin/sh` and the tools
   of a shell session, CA certificates, a `/tmp`, and an empty
-  `/nix/store` for the store to be mounted on. Nothing in it needs a
-  `/nix/store` of its own. It is the image of draal too. Name it by a
-  release tag, as `v0.2.0`, which exists once it has been tagged, and
-  keep draal and every zathras on the same tag: a draal and a zathras of
-  different versions may not speak the same protocol.
+  `/nix/store` for the volume of the store to go over. Nothing in it
+  needs a `/nix/store` of its own. It is the image of draal too. Name it
+  by a release tag, as `v0.3.0`, which exists once it has been tagged,
+  and keep draal and every zathras on the same tag: a draal and a
+  zathras of different versions may not speak the same protocol.
 
 ## Security
 
@@ -756,20 +742,15 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
   name. The prefixes keep the stores of the services apart, and not their
   contents secret. Put no secret into a store path, which a Nix store is
   no place for anyway.
-- **The app container has `CAP_SYS_ADMIN`**, for zathras to mount the
-  store, and no AppArmor profile; it is not privileged. The service and
-  the shells are started without the capability and with `no_new_privs`,
-  and cannot trace zathras, which has more than they do. As root they
-  can still do what root in an ordinary container can, in their own
-  container, the cache of the store included; and, as root or not, one
-  thing that a container without the capability is refused: make a user
-  namespace of their own (see [Pod](#pod)). `--user` makes them
-  another user. In a container that has to be privileged, give `--user`:
-  see [Pod](#pod).
-- **The store of a pod listens on loopback**, on a port the system
-  picks, for the kernel of the node to mount: whoever is in the pod's
-  network namespace can read the store, and nothing else can. Nothing in
-  the pod takes requests to fetch.
+- **The app container is given no capability** beyond a container's
+  own, and has `no_new_privs`: zathras mounts nothing (see [Pod](#pod)).
+  The service and the shells are started with what the container has. As
+  root they can do what root in an ordinary container can, in their own
+  container: signal zathras, and write `/nix/store` and the pack cache,
+  which they and the generations after them run from. `--user` makes
+  them another user, which can write neither.
+- **Nothing in the pod takes requests to fetch.** zathras dials draal
+  for what it fetches, and listens for nothing but its health check.
 - A shell runs as the user of the service, with everything the service
   can see.
 
@@ -782,19 +763,45 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
 - The figures of a zathras (CPU, memory, disk, network) are read from
   cgroup v2. On a node without it there are none. They are those of the
   container: the service, zathras and its store, and the shells.
-- A whole store path is fetched for one file of it. A fetch that takes
-  longer than three minutes is an I/O error for the process that waits
-  for it; the fetch goes on, and the next access finds it done. A rollout
-  fetches every path before it starts anything, so this is met by a
-  program that names a path outside its closure.
-- While draal cannot be reached, a pod serves what it has fetched and
-  can fetch nothing new.
+- A service runs from files on the pod's own disk: a rollout fetches
+  every path of its closure before it starts anything. Nothing is
+  fetched by being named, so a program that names a store path outside
+  its closure finds no such file.
+- While draal cannot be reached, a pod runs what it has fetched and can
+  fetch nothing new.
+
+## Upgrading from v0.2.0
+
+Up to v0.2.0 zathras mounted its store, for which its container had
+`CAP_SYS_ADMIN` and no AppArmor profile. From v0.3.0 on it writes the
+store paths out as files, and its container is given nothing. draal, its
+store and the protocol are as they were, so:
+
+1. **No service is rolled out again.** A pod of v0.3.0 is sent the
+   stable generation of its service, as any new pod is, and fetches it
+   from the store that v0.2.0 pushed to.
+2. **The image and the `securityContext` of a pod change together**, to
+   what [`deploy/pod.yaml`](deploy/pod.yaml) has: no `capabilities`, no
+   `appArmorProfile`, `allowPrivilegeEscalation: false`, and a volume on
+   `/nix/store`. The image of v0.3.0 with the `securityContext` of
+   v0.2.0 runs, but nothing takes `CAP_SYS_ADMIN` from the service any
+   more: a service that is root has it, and zathras warns about that at
+   its start. The image of v0.2.0 with the `securityContext` of v0.3.0
+   cannot mount, and ends at its start.
+3. **draal and the pods need not change in one step.** They end on one
+   tag, as with any release.
+4. **A namespace that was put at the Pod Security level `privileged`**
+   for these pods needs no more than `baseline` for them now.
+
+A cache that a pod of v0.2.0 kept is not used and not removed: the pack
+cache is a directory of its own in it. In a Deployment a pod of v0.3.0
+is a new pod, with new volumes.
 
 ## Upgrading from v0.1.0
 
 Up to v0.1.0 the store was a jaccard-store server of its own, and every
-pod had a sidecar. From v0.2.0 on draal is the store and zathras mounts
-it, so:
+pod had a sidecar. From v0.2.0 on draal is the store and a pod is one
+container, so:
 
 1. **draal gets a bucket**, with `--s3-bucket`, a region and
    credentials. `--jaccard-server` and `--jaccard-prefix` are gone: a
@@ -804,11 +811,12 @@ it, so:
    ends for want of `--s3-bucket`. Its data directory stays: the
    services, their generations and their rollouts are kept.
 2. **Every pod becomes one container**, as in
-   [`deploy/pod.yaml`](deploy/pod.yaml): no sidecar, no `store` volume,
-   the `securityContext`, the `cache` volume. draal, the pods and the
-   operator's own program change together, as with any release: a
-   `great-machine rollout` of v0.1.0 is refused by a draal of v0.2.0,
-   which wants to be told the service when it is asked for the store.
+   [`deploy/pod.yaml`](deploy/pod.yaml): no sidecar, and the
+   `securityContext` and the volumes of that file. draal, the pods and
+   the operator's own program change together, as with any release: a
+   `great-machine rollout` of v0.1.0 is refused by a draal of v0.2.0 or
+   later, which wants to be told the service when it is asked for the
+   store.
 3. **Every service is rolled out once more**, with the binary it runs if
    nothing else is to change. draal's store begins empty: what the old
    server holds is not taken over, and the stable generation of a
@@ -834,12 +842,11 @@ nix build --option allow-unsafe-native-code-during-evaluation true
 nix develop --option allow-unsafe-native-code-during-evaluation true
 ```
 
-In the dev shell are `go` (1.27, which the packages of the store's NFS
-server need), `sqlc`, `node` with `npm`, and `great-machine` as built from
-the tree, with the web page in it. With direnv, `.envrc`
-passes the option and reloads the shell, rebuilding the program, when the
-sources of the program or of the page change. Nix sees only the files git
-tracks, so `git add` new ones.
+In the dev shell are `go` (1.27), `sqlc`, `node` with `npm`, and
+`great-machine` as built from the tree, with the web page in it. With
+direnv, `.envrc` passes the option and reloads the shell, rebuilding the
+program, when the sources of the program or of the page change. Nix sees
+only the files git tracks, so `git add` new ones.
 
 ```sh
 go test ./...
@@ -858,17 +865,16 @@ services, and the terminal UI against them in a pseudo-terminal.
 `scripts/test-pid1.sh` runs zathras as the first process of a container,
 and takes Docker.
 
-The store of a zathras is mounted with the kernel's NFS client, and what
-zathras drops for the service is the kernel's too: the tests of both need
-Linux and root, and are skipped anywhere else. The mount itself is built
-for Linux alone; on a Mac `great-machine zathras` runs with `--no-store`.
-`scripts/test-linux.sh` runs the tests as root in a container that has
-what a pod's container has, `CAP_SYS_ADMIN` and no AppArmor profile, and
-is not privileged:
+The store of a zathras is built and tested on every system, without
+root, against a store in the test's process. What needs Linux and root
+is `--user`, a service that is started as another user: the tests of
+that are skipped anywhere else. `scripts/test-linux.sh` runs the tests
+as root in a container that has what a pod's container has, which is no
+capability beyond a container's own:
 
 ```sh
-scripts/test-linux.sh                              # every package
-scripts/test-linux.sh -run Mount -v ./storemount/  # the arguments are go test's
+scripts/test-linux.sh                           # every package
+scripts/test-linux.sh -run User -v ./launcher/  # the arguments are go test's
 ```
 
 ### The page
@@ -951,8 +957,8 @@ release is built with the tag in `GREAT_MACHINE_VERSION` and `--impure`.
 `go vet`, the tests, `sqlc diff` (the generated queries are what the SQL
 says), the type check and the build of the page and the tests of what
 serves it once more with it, zathras as the first process of a container,
-the tests that need root and the kernel (`scripts/test-linux.sh`), the
-Nix build and the image. `scripts/test-page.sh` asks the program that
+the tests that need root (`scripts/test-linux.sh`), the Nix build and
+the image. `scripts/test-page.sh` asks the program that
 Nix built, and the draal of the image, for the page.
 
 A tag `v*` is a release: `.github/workflows/release.yml` builds the image
@@ -962,7 +968,7 @@ GitHub release with notes generated from what was merged since the last
 one.
 
 ```sh
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 ## License
