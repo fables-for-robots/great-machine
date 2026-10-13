@@ -86,10 +86,11 @@ func (t *taken) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // hold for them. Without this, any page the operator has open could ask
 // 127.0.0.1 for a shell.
 //
-// The Host is not looked at beyond this: a page under any name is
-// draal's own when it was loaded from the host it asks. So this does not
-// keep out a site that points a name of its own at draal's address (DNS
-// rebinding), which is known and was decided so (the spec's section 4).
+// The Host is not looked at beyond this: a page under any name is the
+// handler's own when it was loaded from the host it asks. So this by
+// itself does not keep out a site that points a name of its own at the
+// address of the page (DNS rebinding). The guard does (ticket.go): it
+// answers under no host name but this machine's.
 func sameOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
@@ -299,7 +300,7 @@ func (s *socket) end() {
 // the page knows to come back.
 func (s *socket) done() {
 	if s.r.Context().Err() != nil {
-		s.shut(websocket.StatusGoingAway, "draal is shutting down")
+		s.shut(websocket.StatusGoingAway, "great-machine web is ending")
 	}
 	s.cancel()
 	s.stopRead()
@@ -316,7 +317,7 @@ func (h *handler) watch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.done()
-	fleets, err := h.cfg.Controller.Watch(s.ctx)
+	fleets, err := h.cfg.Client.Watch(s.ctx)
 	if err != nil {
 		s.fail(err)
 		return
@@ -357,7 +358,7 @@ func (h *handler) logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.done()
-	lines, err := h.cfg.Controller.Logs(s.ctx, id, follow)
+	lines, err := h.cfg.Client.Logs(s.ctx, id, follow)
 	if err != nil {
 		s.fail(err)
 		return

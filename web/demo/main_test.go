@@ -90,6 +90,29 @@ func TestDemoServes(t *testing.T) {
 		t.Errorf("GET store/ is %d %q, want 200 and a line that says the demo has no store", store.StatusCode, said)
 	}
 
+	// Who looks at the demo is an admin of made-up grants, and needs no
+	// ticket to be one.
+	who, err := client.Get(url + "api/me")
+	if err != nil {
+		t.Fatalf("GET api/me: %v", err)
+	}
+	defer who.Body.Close()
+	var me wire.Identity
+	if err := json.NewDecoder(who.Body).Decode(&me); err != nil || who.StatusCode != http.StatusOK || len(me.Grants) != 1 || me.Grants[0].Role != wire.RoleAdmin {
+		t.Errorf("who looks at the demo is %d %+v (%v), want an admin", who.StatusCode, me, err)
+	}
+	listed, err := client.Get(url + "api/grants")
+	if err != nil {
+		t.Fatalf("GET api/grants: %v", err)
+	}
+	defer listed.Body.Close()
+	var grants struct {
+		Grants []wire.Grant `json:"grants"`
+	}
+	if err := json.NewDecoder(listed.Body).Decode(&grants); err != nil || listed.StatusCode != http.StatusOK || len(grants.Grants) < 4 {
+		t.Errorf("the grants of the demo are %d with %d of them (%v), want several", listed.StatusCode, len(grants.Grants), err)
+	}
+
 	// Ended as an interrupt ends it: the socket is closed as going away.
 	stop()
 	select {

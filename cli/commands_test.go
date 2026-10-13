@@ -124,9 +124,8 @@ func TestInvalidCommandLines(t *testing.T) {
 		{"draal: the variable stands in for --operator", map[string]string{"GREAT_MACHINE_OPERATORS": idA + ",bob"},
 			[]string{"draal", "--data", d, "--s3-bucket", "packs"}, `--operator: "bob" is not an endpoint ID`},
 		{"draal: a bad --bind", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--bind", "4433"}, `--bind: "4433" is not an address to bind`},
-		{"draal: a bad --web-addr", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--web-addr", "8080"}, `--web-addr: "8080" is not an address to listen on`},
-		{"draal: the variable stands in for --web-addr", map[string]string{"GREAT_MACHINE_WEB_ADDR": "localhost"},
-			[]string{"draal", "--data", d, "--s3-bucket", "packs"}, `--web-addr: "localhost" is not an address to listen on`},
+		{"draal: the flag of the web page, which draal serves no more", nil,
+			[]string{"draal", "--data", d, "--s3-bucket", "packs", "--web-addr", "127.0.0.1:8080"}, "flag provided but not defined: -web-addr"},
 		{"draal: an argument", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "now"}, `draal takes no argument, got "now"`},
 
 		// zathras.
@@ -186,9 +185,8 @@ func TestReadDraal(t *testing.T) {
 	// store has its defaults.
 	read(t, draalCommand(), reader, "--data", "data", "--s3-bucket", "packs")
 	want := draalConfig{
-		data:    "data",
-		store:   storeConfig{bucket: bucket.Config{Bucket: "packs"}, verifyJobs: 2, maxPackBytes: 16 << 30},
-		webAddr: "127.0.0.1:8080",
+		data:  "data",
+		store: storeConfig{bucket: bucket.Config{Bucket: "packs"}, verifyJobs: 2, maxPackBytes: 16 << 30},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the least: got %+v, want %+v", got, want)
@@ -218,7 +216,6 @@ func TestReadDraal(t *testing.T) {
 			maxPackBytes: 64 << 20,
 			noVerify:     true,
 		},
-		webAddr: "127.0.0.1:8080",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("from the variables: got %+v, want %+v", got, want)
@@ -249,8 +246,7 @@ func TestReadDraal(t *testing.T) {
 			verifyJobs:   1,
 			maxPackBytes: 1 << 30,
 		},
-		webAddr: "127.0.0.1:8080",
-		bind:    netip.MustParseAddrPort("0.0.0.0:4433"),
+		bind: netip.MustParseAddrPort("0.0.0.0:4433"),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("from the flags: got %+v, want %+v", got, want)
@@ -275,47 +271,6 @@ func TestParseSize(t *testing.T) {
 		if got, err := parseSize(text); err == nil {
 			t.Errorf("parseSize(%q) = %d, want an error", text, got)
 		}
-	}
-}
-
-// TestReadDraalWebAddr: --web-addr has a default, its variable stands in
-// for it, the flag wins, and an empty value is no web page.
-func TestReadDraalWebAddr(t *testing.T) {
-	cleanEnvironment(t)
-	var got draalConfig
-	reader := func(c *cli.Context) (err error) {
-		got, err = readDraal(c)
-		return err
-	}
-	args := []string{"--data", "d", "--s3-bucket", "packs"}
-	with := func(more ...string) []string { return append(append([]string{}, args...), more...) }
-
-	read(t, draalCommand(), reader, args...)
-	if got.webAddr != "127.0.0.1:8080" {
-		t.Errorf("the default: got %q, want 127.0.0.1:8080", got.webAddr)
-	}
-	read(t, draalCommand(), reader, with("--web-addr", "")...)
-	if got.webAddr != "" {
-		t.Errorf("an empty flag: got %q, want no web page", got.webAddr)
-	}
-	read(t, draalCommand(), reader, with("--web-addr", " [::1]:9000 ")...)
-	if got.webAddr != "[::1]:9000" {
-		t.Errorf("the flag: got %q, want [::1]:9000", got.webAddr)
-	}
-
-	t.Setenv("GREAT_MACHINE_WEB_ADDR", "localhost:8081")
-	read(t, draalCommand(), reader, args...)
-	if got.webAddr != "localhost:8081" {
-		t.Errorf("the variable: got %q, want localhost:8081", got.webAddr)
-	}
-	read(t, draalCommand(), reader, with("--web-addr", ":8082")...)
-	if got.webAddr != ":8082" {
-		t.Errorf("the flag over the variable: got %q, want :8082", got.webAddr)
-	}
-	t.Setenv("GREAT_MACHINE_WEB_ADDR", "")
-	read(t, draalCommand(), reader, args...)
-	if got.webAddr != "" {
-		t.Errorf("an empty variable: got %q, want no web page", got.webAddr)
 	}
 }
 

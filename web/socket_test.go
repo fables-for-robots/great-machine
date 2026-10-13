@@ -18,7 +18,6 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/fables-for-robots/great-machine/draal"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
@@ -229,7 +228,7 @@ func linesOf(lines []wire.LogLine, more <-chan wire.LogLine, calls chan<- contex
 func TestSocketIsOpenedByItsOwnPageAlone(t *testing.T) {
 	w := newWatcher()
 	w.fleets <- fleetOf("web")
-	srv := serveSockets(t, Config{Controller: &fake{watch: w.watch}})
+	srv := serveSockets(t, Config{Client: &fake{watch: w.watch}})
 	address := strings.TrimPrefix(srv.URL, "http://")
 	_, port, _ := strings.Cut(address, ":")
 
@@ -310,11 +309,16 @@ func TestSocketIsOpenedByItsOwnPageAlone(t *testing.T) {
 // great-machine was told this and decided that the page answers under
 // any host name, on every address, loopback included; the spec's section
 // 4 records it. Who changes this test changes that decision.
+//
+// Since stage 6 that is the handler without a ticket alone, which the
+// demo has and no command of the program: with a ticket the handler
+// answers under no host name but this machine's, and such a page gets
+// nothing (TestAPageOfANameThatWasPointedAtThisMachineGetsNothing).
 func TestPageOfANameThatWasPointedAtDraalIsAnsweredAndGetsASocket(t *testing.T) {
 	w := newWatcher()
 	w.fleets <- fleetOf("web")
 	asked := make(chan wire.ShellRequest, 1)
-	srv := serveSockets(t, Config{Controller: &fake{watch: w.watch, shell: shells(newFakeShell(), asked)}})
+	srv := serveSockets(t, Config{Client: &fake{watch: w.watch, shell: shells(newFakeShell(), asked)}})
 	_, port, _ := strings.Cut(strings.TrimPrefix(srv.URL, "http://"), ":")
 	rebound := "attacker.example:" + port
 
@@ -351,7 +355,7 @@ func mustDial(t *testing.T, srv *httptest.Server, path string, opts *websocket.D
 func TestNoMoreSocketsThanMaxSockets(t *testing.T) {
 	w := newWatcher()
 	more := make(chan wire.LogLine)
-	srv := serveSockets(t, Config{Controller: &fake{watch: w.watch, logs: linesOf(nil, more, nil)}, MaxSockets: 3})
+	srv := serveSockets(t, Config{Client: &fake{watch: w.watch, logs: linesOf(nil, more, nil)}, MaxSockets: 3})
 	logs := "/api/zathras/" + string(zathrasA) + "/logs"
 	a, b, c := dial(t, srv, "/api/watch"), dial(t, srv, logs+"?follow=1"), dial(t, srv, "/api/watch")
 	refused := func() {
@@ -413,7 +417,7 @@ func TestNoMoreSocketsThanMaxSockets(t *testing.T) {
 // deadline of an answer is taken off a connection that becomes a socket.
 func TestSocketOutlivesTheTimeOfAnAnswer(t *testing.T) {
 	w := newWatcher()
-	inner := New(Config{Controller: &fake{watch: w.watch}, Dist: testDist(), Log: quiet})
+	inner := New(Config{Client: &fake{watch: w.watch}, Dist: testDist(), Log: quiet})
 	inner.(*handler).answerWait = 50 * time.Millisecond
 	srv := serveHandler(t, context.Background(), inner)
 	c := dial(t, srv, "/api/watch")
@@ -442,7 +446,7 @@ func TestSocketPathAskedWithoutAnUpgradeIsRefusedAsJSON(t *testing.T) {
 func TestWatch(t *testing.T) {
 	w := newWatcher()
 	w.fleets <- fleetOf("first")
-	srv := serveSockets(t, Config{Controller: &fake{watch: w.watch}})
+	srv := serveSockets(t, Config{Client: &fake{watch: w.watch}})
 	c := dial(t, srv, "/api/watch")
 	ctx := <-w.calls
 
@@ -480,19 +484,19 @@ func TestWatch(t *testing.T) {
 func TestWatchThatDraalRefusesOrEnds(t *testing.T) {
 	// Refused: the page is told after the upgrade, as it cannot read the
 	// answer of an upgrade that failed.
-	srv := serveSockets(t, Config{Controller: &fake{watch: func(context.Context) (<-chan wire.Fleet, error) {
+	srv := serveSockets(t, Config{Client: &fake{watch: func(context.Context) (<-chan wire.Fleet, error) {
 		return nil, wire.Errorf(wire.CodeInternal, "reading the fleet: the database is closed")
 	}}})
 	// An internal refusal says nothing of what went wrong, on a socket as
 	// anywhere.
-	if msg := wantError(t, dial(t, srv, "/api/watch"), wire.CodeInternal); msg != "draal failed to answer; its log says why" {
+	if msg := wantError(t, dial(t, srv, "/api/watch"), wire.CodeInternal); msg != "the request failed; what `great-machine web` logged says why" {
 		t.Errorf("the message is %q, want nothing of the controller's text", msg)
 	}
 
 	// Ended: a channel that is closed while the page is there.
 	fleets := make(chan wire.Fleet, 1)
 	fleets <- fleetOf("web")
-	srv = serveSockets(t, Config{Controller: &fake{watch: func(context.Context) (<-chan wire.Fleet, error) { return fleets, nil }}})
+	srv = serveSockets(t, Config{Client: &fake{watch: func(context.Context) (<-chan wire.Fleet, error) { return fleets, nil }}})
 	c := dial(t, srv, "/api/watch")
 	next(t, c)
 	close(fleets)
@@ -509,7 +513,7 @@ func TestLogsWithoutFollowAreTheRingAndANormalClose(t *testing.T) {
 	}
 	var asked []string
 	logs := linesOf(ring, nil, nil)
-	srv := serveSockets(t, Config{Controller: &fake{logs: func(ctx context.Context, id wire.ID, follow bool) (<-chan wire.LogLine, error) {
+	srv := serveSockets(t, Config{Client: &fake{logs: func(ctx context.Context, id wire.ID, follow bool) (<-chan wire.LogLine, error) {
 		asked = append(asked, fmt.Sprintf("%s %v", id, follow))
 		return logs(ctx, id, follow)
 	}}})
@@ -539,7 +543,7 @@ func TestLogsWithFollowGoOnUntilThePageCloses(t *testing.T) {
 	more := make(chan wire.LogLine)
 	calls := make(chan context.Context, 1)
 	ring := []wire.LogLine{{Stream: "stdout", Text: "in the ring"}}
-	srv := serveSockets(t, Config{Controller: &fake{logs: linesOf(ring, more, calls)}})
+	srv := serveSockets(t, Config{Client: &fake{logs: linesOf(ring, more, calls)}})
 	for _, query := range []string{"?follow=1", "?follow=true"} {
 		c := dial(t, srv, "/api/zathras/"+string(zathrasA)+"/logs"+query)
 		ctx := <-calls
@@ -566,7 +570,7 @@ func TestLogsWithFollowGoOnUntilThePageCloses(t *testing.T) {
 // the log broke, and the zathras is there still.
 func TestLogsOfAZathrasThatGoesEndWithTheReason(t *testing.T) {
 	more := make(chan wire.LogLine)
-	srv := serveSockets(t, Config{Controller: &fake{logs: linesOf(nil, more, nil)}})
+	srv := serveSockets(t, Config{Client: &fake{logs: linesOf(nil, more, nil)}})
 	c := dial(t, srv, "/api/zathras/"+string(zathrasA)+"/logs?follow=1")
 	more <- wire.LogLine{Stream: "stdout", Text: "the last line"}
 	var got wire.LogLine
@@ -581,7 +585,7 @@ func TestLogsOfAZathrasThatGoesEndWithTheReason(t *testing.T) {
 }
 
 func TestLogsThatDraalRefuses(t *testing.T) {
-	srv := serveSockets(t, Config{Controller: &fake{logs: func(_ context.Context, id wire.ID, _ bool) (<-chan wire.LogLine, error) {
+	srv := serveSockets(t, Config{Client: &fake{logs: func(_ context.Context, id wire.ID, _ bool) (<-chan wire.LogLine, error) {
 		return nil, wire.Errorf(wire.CodeUnavailable, "zathras %s is not connected", id)
 	}}})
 	// A zathras that is not connected: told after the upgrade.
@@ -603,7 +607,7 @@ func TestLogsThatDraalRefuses(t *testing.T) {
 }
 
 func TestLogsAnErrorThatIsNoRefusalIsInternalWithoutItsText(t *testing.T) {
-	srv := serveSockets(t, Config{Controller: &fake{logs: func(context.Context, wire.ID, bool) (<-chan wire.LogLine, error) {
+	srv := serveSockets(t, Config{Client: &fake{logs: func(context.Context, wire.ID, bool) (<-chan wire.LogLine, error) {
 		return nil, errors.New("open /var/lib/draal/secret: permission denied")
 	}}})
 	c := dial(t, srv, "/api/zathras/"+string(zathrasA)+"/logs")
@@ -620,7 +624,7 @@ func TestLogsFloodArrivesInOrder(t *testing.T) {
 	for i := range ring {
 		ring[i] = wire.LogLine{Stream: "stdout", Text: fmt.Sprintf("line %d %s", i, strings.Repeat("x", i%200))}
 	}
-	srv := serveSockets(t, Config{Controller: &fake{logs: linesOf(ring, nil, nil)}})
+	srv := serveSockets(t, Config{Client: &fake{logs: linesOf(ring, nil, nil)}})
 	c := dial(t, srv, "/api/zathras/"+string(zathrasA)+"/logs")
 	for i := range ring {
 		var got wire.LogLine
@@ -661,7 +665,7 @@ func TestSocketOfAPageThatDoesNotReadIsClosedAndHoldsUpNoOther(t *testing.T) {
 	// No ping falls into this test: only the deadline of a write may end the
 	// page that does not read; a ping would end it too, later, and hide a
 	// write that has no deadline.
-	srv := serveSockets(t, Config{Controller: &fake{logs: endless}, WriteWait: 2 * time.Second, PingEvery: time.Hour})
+	srv := serveSockets(t, Config{Client: &fake{logs: endless}, WriteWait: 2 * time.Second, PingEvery: time.Hour})
 
 	// The first page never reads. The lines fill what the connection
 	// holds, and then one of them is not taken.
@@ -749,7 +753,7 @@ func TestIdleSocketIsPingedAndOneThatDoesNotAnswerIsClosed(t *testing.T) {
 	w := newWatcher()
 	// WriteWait is what a pong has: long enough for a machine that is
 	// busy, and what the second half of the test takes.
-	srv := serveSockets(t, Config{Controller: &fake{watch: w.watch}, PingEvery: 20 * time.Millisecond, WriteWait: time.Second})
+	srv := serveSockets(t, Config{Client: &fake{watch: w.watch}, PingEvery: 20 * time.Millisecond, WriteWait: time.Second})
 
 	// A page that reads answers the pings, and keeps its socket.
 	var pings atomic.Int32
@@ -780,7 +784,7 @@ func TestIdleSocketIsPingedAndOneThatDoesNotAnswerIsClosed(t *testing.T) {
 
 func TestMessageOfAPageThatIsTooLongEndsTheSocket(t *testing.T) {
 	w := newWatcher()
-	srv := serveSockets(t, Config{Controller: &fake{watch: w.watch}})
+	srv := serveSockets(t, Config{Client: &fake{watch: w.watch}})
 	c := dial(t, srv, "/api/watch")
 	ctx := <-w.calls
 	// As long as a message may be.
@@ -804,10 +808,10 @@ func TestServerThatEndsClosesItsSocketsAsGoingAway(t *testing.T) {
 	w.fleets <- fleetOf("web")
 	more := make(chan wire.LogLine)
 	sh := newFakeShell()
-	srv := serveUnder(t, base, Config{Controller: &fake{
+	srv := serveUnder(t, base, Config{Client: &fake{
 		watch: w.watch,
 		logs:  linesOf(nil, more, nil),
-		shell: func(context.Context, wire.ID, wire.ShellRequest) (draal.Shell, error) { return sh, nil },
+		shell: func(context.Context, wire.ID, wire.ShellRequest) (Shell, error) { return sh, nil },
 	}})
 	before := runtime.NumGoroutine()
 	watch := dial(t, srv, "/api/watch")
@@ -860,7 +864,7 @@ func TestServerThatEndsWhileALogHasLinesReadyClosesItAsGoingAway(t *testing.T) {
 			<-ctx.Done()
 			return out, nil
 		}
-		srv := serveUnder(t, base, Config{Controller: &fake{logs: ready}})
+		srv := serveUnder(t, base, Config{Client: &fake{logs: ready}})
 		before := runtime.NumGoroutine()
 		c := dial(t, srv, "/api/zathras/"+string(zathrasA)+"/logs?follow=1")
 		// Whatever was written before the close is read past: none need
@@ -872,7 +876,7 @@ func TestServerThatEndsWhileALogHasLinesReadyClosesItAsGoingAway(t *testing.T) {
 		}
 		cancel()
 		var closed websocket.CloseError
-		if !errors.As(err, &closed) || closed.Code != websocket.StatusGoingAway || closed.Reason != "draal is shutting down" {
+		if !errors.As(err, &closed) || closed.Code != websocket.StatusGoingAway || closed.Reason != "great-machine web is ending" {
 			t.Fatalf("run %d: the socket ended with %v, want it closed as going away with the reason", run, err)
 		}
 		c.CloseNow()
@@ -894,7 +898,7 @@ func TestSocketsOfPagesThatDoNotAnswerEndWithinTwoSecondsOfTheServer(t *testing.
 	// machine that is busy with other tests.
 	asked := make(chan wire.ShellRequest, 1)
 	calls := make(chan context.Context, 1)
-	inner := New(Config{Dist: testDist(), Log: quiet, WriteWait: 250 * time.Millisecond, Controller: &fake{
+	inner := New(Config{Dist: testDist(), Log: quiet, WriteWait: 250 * time.Millisecond, Client: &fake{
 		watch: w.watch,
 		logs:  linesOf(nil, make(chan wire.LogLine), calls),
 		shell: shells(sh, asked),
@@ -940,7 +944,7 @@ func TestPageThatIsThereSeesWhyItsSocketWasClosed(t *testing.T) {
 	base, shutDown := context.WithCancel(context.Background())
 	defer shutDown()
 	w := newWatcher()
-	srv := serveUnder(t, base, Config{Controller: &fake{watch: w.watch}})
+	srv := serveUnder(t, base, Config{Client: &fake{watch: w.watch}})
 	c := dial(t, srv, "/api/watch")
 	<-w.calls
 	shutDown()
@@ -948,7 +952,7 @@ func TestPageThatIsThereSeesWhyItsSocketWasClosed(t *testing.T) {
 	defer cancel()
 	_, _, err := c.Read(ctx)
 	var closed websocket.CloseError
-	if !errors.As(err, &closed) || closed.Code != websocket.StatusGoingAway || closed.Reason != "draal is shutting down" {
+	if !errors.As(err, &closed) || closed.Code != websocket.StatusGoingAway || closed.Reason != "great-machine web is ending" {
 		t.Errorf("the socket ended with %v, want it closed as going away with the reason", err)
 	}
 }

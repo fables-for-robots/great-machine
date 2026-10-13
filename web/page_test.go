@@ -59,7 +59,7 @@ func TestPageServesItsFilesAndIndexForEveryOtherPath(t *testing.T) {
 // under localhost: nothing looks at the Host of a request to decide
 // whether to answer it.
 func TestPageIsAnsweredUnderEveryHostName(t *testing.T) {
-	srv := serve(t, Config{Controller: &fake{rollouts: func(string) ([]wire.RolloutInfo, error) { return nil, nil }}})
+	srv := serve(t, Config{Client: &fake{rollouts: func(string) ([]wire.RolloutInfo, error) { return nil, nil }}})
 	for _, host := range []string{
 		"localhost:8080", "127.0.0.1", "[::1]:8080",
 		"192.168.1.5:8080", "10.0.0.7",
@@ -141,7 +141,7 @@ func (u unsought) Open(name string) (fs.File, error) {
 func TestAnswerThatIsNotTakenLetsGoOfItsHandler(t *testing.T) {
 	dist := testDist()
 	dist["assets/big-0000.js"] = &fstest.MapFile{Data: make([]byte, 64<<20)}
-	inner := New(Config{Controller: &fake{}, Dist: dist, Log: quiet})
+	inner := New(Config{Client: &fake{}, Dist: dist, Log: quiet})
 	inner.(*handler).answerWait = 200 * time.Millisecond
 	returned := make(chan struct{})
 	srv := serveHandler(t, context.Background(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -190,7 +190,7 @@ func TestPageCannotBeLeftThroughThePath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("the secret"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	h := New(Config{Controller: &fake{}, Dist: os.DirFS(dist), Log: quiet})
+	h := New(Config{Client: &fake{}, Dist: os.DirFS(dist), Log: quiet})
 	// The paths are given to the handler as they are: a client would
 	// clean them before it sent them.
 	for _, path := range []string{"/../secret.txt", "/a/../../secret.txt", "/..%2fsecret.txt", "/%2e%2e/secret.txt", "//secret.txt/../../secret.txt"} {
@@ -234,7 +234,7 @@ func TestPageThatWasNotBuilt(t *testing.T) {
 
 func TestBuiltSaysWhatTheEmbeddedBuildAnswers(t *testing.T) {
 	// The tests pass with a build of the page in web/dist and without.
-	srv := httptest.NewServer(New(Config{Controller: &fake{}, Log: quiet}))
+	srv := httptest.NewServer(New(Config{Client: &fake{}, Log: quiet}))
 	defer srv.Close()
 	want := http.StatusNotImplemented
 	if Built() {

@@ -12,55 +12,9 @@ import (
 	"time"
 )
 
-func TestWebURL(t *testing.T) {
-	bound := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 4321}
-	tests := []struct{ addr, want string }{
-		{"127.0.0.1:8080", "http://127.0.0.1:4321/"},
-		{"127.0.0.1:0", "http://127.0.0.1:4321/"},
-		{"localhost:8080", "http://localhost:4321/"},
-		{"[::1]:8080", "http://[::1]:4321/"},
-		{":8080", "http://localhost:4321/"},
-		{"0.0.0.0:8080", "http://localhost:4321/"},
-		{"[::]:8080", "http://localhost:4321/"},
-		{"10.1.2.3:8080", "http://10.1.2.3:4321/"},
-	}
-	for _, tt := range tests {
-		if got := webURL(tt.addr, bound); got != tt.want {
-			t.Errorf("webURL(%q) is %q, want %q", tt.addr, got, tt.want)
-		}
-	}
-}
-
 // quietLog is a logger that writes to out.
 func quietLog(out io.Writer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(out, nil))
-}
-
-// TestAnnounceWeb: the line of the log, and the two warnings.
-func TestAnnounceWeb(t *testing.T) {
-	bound := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8080}
-	const notBuilt, notLoopback = "the web page was not built into this program", "not loopback: it has no authentication, and whoever reaches it has a shell in every container"
-
-	var logged buffer
-	announceWeb(quietLog(&logged), "127.0.0.1:8080", bound, true, true)
-	if got, want := logged.String(), `level=INFO msg="web page" addr=127.0.0.1:8080 url=http://127.0.0.1:8080/`; !strings.Contains(got, want) {
-		t.Errorf("logged %q, want %q in it", got, want)
-	}
-	if got := logged.String(); strings.Count(got, "\n") != 1 {
-		t.Errorf("a page that is built, on loopback, is one line: got %q", got)
-	}
-
-	logged = buffer{}
-	announceWeb(quietLog(&logged), "127.0.0.1:8080", bound, true, false)
-	if got := logged.String(); !strings.Contains(got, "level=WARN") || !strings.Contains(got, notBuilt) || strings.Contains(got, notLoopback) {
-		t.Errorf("a page that is not built: logged %q", got)
-	}
-
-	logged = buffer{}
-	announceWeb(quietLog(&logged), ":8080", &net.TCPAddr{IP: net.IPv6unspecified, Port: 8080}, false, true)
-	if got := logged.String(); !strings.Contains(got, "level=WARN") || !strings.Contains(got, notLoopback) || !strings.Contains(got, "url=http://localhost:8080/") || strings.Contains(got, notBuilt) {
-		t.Errorf("an address that is not loopback: logged %q", got)
-	}
 }
 
 // TestWebServerStopEndsWebSockets: a connection that a handler took over,
@@ -197,8 +151,8 @@ func TestWebServerAnswersARequestThatBeginsAfterStopWithItsReason(t *testing.T) 
 	for _, path := range []string{"/", "/api/watch", "/assets/index-1a2b.js"} {
 		after := httptest.NewRecorder()
 		w.server.Handler.ServeHTTP(after, httptest.NewRequest(http.MethodGet, path, nil))
-		if after.Code != http.StatusServiceUnavailable || after.Body.String() != "great-machine: draal is stopping\n" {
-			t.Errorf("%s after Stop: %d %q, want 503 and the line that says that draal is stopping", path, after.Code, after.Body.String())
+		if after.Code != http.StatusServiceUnavailable || after.Body.String() != "great-machine: the web page is ending\n" {
+			t.Errorf("%s after Stop: %d %q, want 503 and the line that says that the page is ending", path, after.Code, after.Body.String())
 		}
 		if ct := after.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
 			t.Errorf("%s after Stop: the content type is %q, want plain text", path, ct)

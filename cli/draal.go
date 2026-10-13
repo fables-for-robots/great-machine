@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -21,7 +20,6 @@ import (
 	"github.com/fables-for-robots/great-machine/draal"
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/storeserver"
-	"github.com/fables-for-robots/great-machine/web"
 	"github.com/fables-for-robots/great-machine/wire"
 	"github.com/urfave/cli/v2"
 )
@@ -69,8 +67,6 @@ func draalCommand() *cli.Command {
 				Usage: "largest uncompressed `SIZE` of a pack, in bytes or with KiB, MiB or GiB; the scratch space needed is this times --store-verify-jobs"},
 			&cli.BoolFlag{Name: "store-no-verify", EnvVars: []string{"GREAT_MACHINE_STORE_NO_VERIFY"},
 				Usage: "record a pack without reading its data: one that is incomplete or corrupt is then found by whoever pulls it"},
-			&cli.StringFlag{Name: "web-addr", EnvVars: []string{"GREAT_MACHINE_WEB_ADDR"}, Value: "127.0.0.1:8080",
-				Usage: "`ADDR`ess the web page listens on; empty for no web page"},
 			&cli.StringFlag{Name: "bind", EnvVars: []string{"GREAT_MACHINE_BIND"},
 				Usage: "UDP `IP:PORT` the iroh endpoint binds (default: every address, a port the system picks)"},
 		},
@@ -89,15 +85,11 @@ type draalConfig struct {
 	data      string
 	operators []wire.ID
 	store     storeConfig
-	webAddr   string         // "" for no web page
 	bind      netip.AddrPort // the zero value: every address, a port the system picks
 	// local is for tests: the iroh endpoint uses no relay, announces
 	// nothing and is bound to 127.0.0.1 unless bind says otherwise. No
 	// flag sets it.
 	local bool
-	// listenWeb is for tests: what binds the address of the web page.
-	// Nil means net.Listen. No flag sets it.
-	listenWeb func(network, addr string) (net.Listener, error)
 	// objects is for tests: the bucket of the store itself. Nil means
 	// the bucket the flags name. No flag sets it.
 	objects jsserver.Bucket
@@ -142,11 +134,6 @@ func readDraal(c *cli.Context) (draalConfig, error) {
 	}
 	if cfg.store, err = readStore(c); err != nil {
 		return draalConfig{}, err
-	}
-	if cfg.webAddr = strings.TrimSpace(c.String("web-addr")); cfg.webAddr != "" {
-		if _, _, err := net.SplitHostPort(cfg.webAddr); err != nil {
-			return draalConfig{}, usageError("--web-addr: %q is not an address to listen on: want HOST:PORT, such as 127.0.0.1:8080, or nothing for no web page", cfg.webAddr)
-		}
 	}
 	if bind := c.String("bind"); bind != "" {
 		if cfg.bind, err = netip.ParseAddrPort(bind); err != nil {
@@ -282,20 +269,6 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 	defer store.Stop()
 	log.Info("serving", "endpoint", string(listener.ID()), "addr", listener.LocalAddr().String(), "operators", len(cfg.operators), "bucket", cfg.store.bucket.Bucket)
 
-	// The web page listens before draal serves: an address that is taken
-	// ends the command here, with the endpoint and the database closed
-	// by what is deferred above.
-	var pageListener net.Listener
-	if cfg.webAddr != "" {
-		listen := cfg.listenWeb
-		if listen == nil {
-			listen = net.Listen
-		}
-		if pageListener, err = listen("tcp", cfg.webAddr); err != nil {
-			return fmt.Errorf("the web page: %w", err)
-		}
-	}
-
 	d := draal.New(draal.Config{
 		DB:    database,
 		Authz: allow,
@@ -304,40 +277,12 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 		Log:   log,
 	})
 
-	// The order of the end, once ctx is done: the web page is stopped
-	// first, its WebSockets with it, and only then does Serve get to
-	// know, through a context of its own. When Serve has returned the
-	// store is stopped, the endpoint is closed, and the two databases
-	// are closed, the store's first.
-	serving, stopServing := context.WithCancel(context.WithoutCancel(ctx))
-	defer stopServing()
-	pageFailed := make(chan error, 1)
-	if pageListener == nil {
-		defer context.AfterFunc(ctx, stopServing)()
-	} else {
-		page := startWeb(pageListener, web.New(web.Config{Controller: d, Store: store.Admin(), Log: log}), webStopWait, log)
-		// For the ways out of this function that are not the end of ctx.
-		defer page.Stop()
-		announceWeb(log, cfg.webAddr, pageListener.Addr(), web.IsLoopback(cfg.webAddr), web.Built())
-		go func() {
-			select {
-			case <-ctx.Done():
-			case err := <-page.Failed():
-				pageFailed <- err
-			case <-serving.Done():
-				return
-			}
-			page.Stop()
-			stopServing()
-		}()
-	}
-
-	err = d.Serve(serving, listener)
-	select {
-	case err := <-pageFailed:
-		return err
-	default:
-	}
+	// The order of the end, once ctx is done: Serve returns, the store is
+	// stopped, the endpoint is closed, and the two databases are closed,
+	// the store's first. draal serves no web page and binds no port but
+	// that of its endpoint: the page is `great-machine web`'s, on the
+	// machine of an operator.
+	err = d.Serve(ctx, listener)
 	if err != nil && ctx.Err() == nil {
 		return err
 	}
