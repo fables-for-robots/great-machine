@@ -627,8 +627,8 @@ an admin's to see and to change: what `great-machine access` does on the
 command line ([Who may do what](#who-may-do-what)). In this view `g`
 grants, through a form of four fields: the role (one of the three,
 changed with the arrow keys), the ID, the service (empty for every
-service) and the note. `Enter` on the last field asks draal, and `Esc`
-gives the form up. What draal refuses is said in the form, which stays
+service; an admin has no such field) and the note. `Enter` on the last
+field asks draal, and `Esc` gives the form up. What draal refuses is said in the form, which stays
 as it was filled. `x` revokes the grant under the cursor, after `y` to a
 line that names it. An admin of draal's command line has no `x`. A key
 that is no admin is told that the view is an admin's, with its own
