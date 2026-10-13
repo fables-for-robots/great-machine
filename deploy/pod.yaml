@@ -7,6 +7,19 @@
 # What to change: draal's endpoint ID, and the name of the service. In a
 # Deployment or a StatefulSet the `spec` below is the template's, and
 # every pod is a zathras under its own name.
+#
+# The role key of the service is made first, on the laptop. Every pod of
+# the service is given the same one, as a Secret, and an admin grants it
+# the role for the service:
+#
+#   great-machine id --key zathras-web.key        # makes the key, prints its ID
+#   kubectl create secret generic web-zathras-key \
+#     --from-file=zathras.key=zathras-web.key
+#   great-machine access grant zathras ID --service web
+#
+# A zathras registers with what that key signed for it. One whose role
+# key was not granted its service is refused by draal, and says so in
+# its log.
 apiVersion: v1
 kind: Pod
 metadata:
@@ -22,9 +35,9 @@ spec:
       # service: that comes from the store.
       # The same tag as draal: draal and every zathras are kept on one tag,
       # because a draal and a zathras of different versions may not speak
-      # the same protocol. v0.3.0 is the first release that mounts
-      # nothing, which exists once it has been tagged.
-      image: ghcr.io/fables-for-robots/great-machine:v0.3.0
+      # the same protocol. v0.4.0 is the first release whose zathras
+      # registers with its role key, which exists once it has been tagged.
+      image: ghcr.io/fables-for-robots/great-machine:v0.4.0
       command: ["great-machine", "zathras"]
       securityContext:
         # zathras mounts nothing: it writes what it fetches into
@@ -49,13 +62,21 @@ spec:
           value: "1111111111111111111111111111111111111111111111111111111111111111"
         - name: GREAT_MACHINE_SERVICE
           value: web
+        # The role key of the service, from the Secret below. zathras
+        # does not make the file: one that is missing ends it at its
+        # start.
+        - name: GREAT_MACHINE_ROLE_KEY
+          value: /run/secrets/great-machine/zathras.key
         # The name the operator sees is the host name, which is the pod's
         # name.
         #
         # The user and the group the service and the shells run as. Not
         # set: those of zathras, which is root. A service that is root
-        # can write the store it runs from, and the pack cache; one that
-        # is another user cannot: both are zathras's alone to write.
+        # can write the store it runs from, and the pack cache, and
+        # reads the role key, with which it could sign for zathrases of
+        # its own service. One that is another user can do none of it:
+        # the two directories are zathras's alone to write, and the role
+        # key is root's alone to read.
         # - name: GREAT_MACHINE_USER
         #   value: "1000:1000"
       volumeMounts:
@@ -63,6 +84,9 @@ spec:
           mountPath: /nix/store
         - name: cache
           mountPath: /var/cache/great-machine
+        - name: role-key
+          mountPath: /run/secrets/great-machine
+          readOnly: true
       # What the container needs of memory and CPU is what the service
       # needs and what zathras needs to fetch a closure and to write it
       # out: the two count together.
@@ -93,3 +117,12 @@ spec:
     # disk holds every store path it was given twice.
     - name: cache
       emptyDir: {}
+    # The role key of the service: the Secret that was made first (see
+    # the top of this file), as a file that root alone reads. It is in
+    # the container the service runs in, which is why a service is given
+    # a role key of its own: a key that was granted for one service signs
+    # for no other.
+    - name: role-key
+      secret:
+        secretName: web-zathras-key
+        defaultMode: 0400
