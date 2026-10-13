@@ -5,6 +5,7 @@ import (
 	"context"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -59,17 +60,28 @@ func TestDemoRuns(t *testing.T) {
 		var said bytes.Buffer
 		ended := make(chan error, 1)
 		go func() { ended <- run(t.Context(), slave, slave, tt.empty, &said) }()
-		for end := time.Now().Add(deadline); ; time.Sleep(5 * time.Millisecond) {
-			mu.Lock()
-			shown := sequences.ReplaceAllString(out.String(), "")
-			mu.Unlock()
-			if strings.Contains(shown, tt.shows) && strings.Contains(shown, "live") {
-				break
-			}
-			if time.Now().After(end) {
-				t.Fatalf("timed out waiting for the demo to show %q; it shows %q", tt.shows, shown)
+		wait := func(words ...string) {
+			t.Helper()
+			for end := time.Now().Add(deadline); ; time.Sleep(5 * time.Millisecond) {
+				mu.Lock()
+				shown := sequences.ReplaceAllString(out.String(), "")
+				mu.Unlock()
+				if !slices.ContainsFunc(words, func(w string) bool { return !strings.Contains(shown, w) }) {
+					return
+				}
+				if time.Now().After(end) {
+					t.Fatalf("timed out waiting for the demo to show %q; it shows %q", words, shown)
+				}
 			}
 		}
+		// Who looks at the demo is an admin, which the header says.
+		wait(tt.shows, "live", "admin·draal")
+		// The view of the grants, which are made up as the fleet is: the
+		// first of them is chosen, and it is the admin's own.
+		if _, err := master.WriteString("a"); err != nil {
+			t.Fatalf("typing a: %v", err)
+		}
+		wait("›access", "norequestrevokesit.")
 		if _, err := master.WriteString("q"); err != nil {
 			t.Fatalf("typing q: %v", err)
 		}
@@ -142,6 +154,28 @@ func TestOperatorOfTheDemoEndsWhatWasAskedOfIt(t *testing.T) {
 	}
 	if err := sh.Close(); err != nil {
 		t.Errorf("closing the shell: %v", err)
+	}
+	// Who may do what is the demo's too: the key is an admin, and what
+	// it grants is in the list until it revokes it.
+	me, err := op.Me(context.Background())
+	if err != nil || len(me.Grants) != 1 || me.Grants[0].Role != wire.RoleAdmin {
+		t.Errorf("Me = %+v, %v", me, err)
+	}
+	before, err := op.Grants(context.Background())
+	if err != nil || len(before) != 6 {
+		t.Fatalf("Grants = %d of them, %v", len(before), err)
+	}
+	if err := op.Grant(context.Background(), wire.GrantRequest{ID: z.ID, Role: wire.RoleDeployer, Service: "web", Note: "a test"}); err != nil {
+		t.Errorf("Grant: %v", err)
+	}
+	if list, _ := op.Grants(context.Background()); len(list) != len(before)+1 {
+		t.Errorf("after a grant there are %d grants, and before it there were %d", len(list), len(before))
+	}
+	if err := op.Revoke(context.Background(), wire.RevokeRequest{ID: z.ID, Role: wire.RoleDeployer, Service: "web"}); err != nil {
+		t.Errorf("Revoke: %v", err)
+	}
+	if list, _ := op.Grants(context.Background()); len(list) != len(before) {
+		t.Errorf("after the revocation there are %d grants, and before the grant there were %d", len(list), len(before))
 	}
 
 	op.Close()

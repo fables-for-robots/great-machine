@@ -563,6 +563,39 @@ func (r *runner) do(e effect) {
 			}
 			r.spawn(func() { r.follow(ctx, c, op, e) })
 		}
+	case effMe:
+		if c, op := r.current(e.epoch); c != nil {
+			r.spawn(func() {
+				// Whatever comes of it is told as it is: a draal that does
+				// not say who the key is costs the header that part, and
+				// the watch says when the connection is lost.
+				me, err := op.Me(c.ctx)
+				if c.ctx.Err() == nil {
+					r.send(meMsg{epoch: e.epoch, n: e.n, me: me, err: err})
+				}
+			})
+		}
+	case effGrants:
+		if c, op := r.current(e.epoch); c != nil {
+			r.spawn(func() {
+				grants, err := op.Grants(c.ctx)
+				r.answer(c, err, grantsMsg{epoch: e.epoch, n: e.n, grants: grants, err: err})
+			})
+		}
+	case effGrant:
+		if c, op := r.current(e.epoch); c != nil {
+			r.spawn(func() {
+				err := op.Grant(c.ctx, e.req)
+				r.answer(c, err, grantedMsg{epoch: e.epoch, n: e.n, err: err})
+			})
+		}
+	case effRevoke:
+		if c, op := r.current(e.epoch); c != nil {
+			r.spawn(func() {
+				err := op.Revoke(c.ctx, e.req)
+				r.answer(c, err, revokedMsg{epoch: e.epoch, n: e.n, err: err})
+			})
+		}
 	case effShell:
 		r.openShell(e)
 	case effGiveUp:

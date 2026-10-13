@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/fables-for-robots/great-machine/human"
+	"github.com/fables-for-robots/great-machine/wire"
 )
 
 // What is drawn: the model as text. A view is a list of lines; view
@@ -98,20 +99,47 @@ func (m *model) body(h int) []string {
 		return m.serviceView(h)
 	case screenZathras:
 		return m.zathrasView(h)
+	case screenAccess:
+		return m.accessView(h)
 	}
 	return m.servicesView(h)
 }
 
-// header draws the first line: where one is, draal, and the state of
-// the connection.
+// header draws the first line: where one is, who the key is, draal, and
+// the state of the connection.
 func (m *model) header() string {
 	conn := m.connWords()
 	if m.cfg.Draal != "" && m.width >= 70 {
 		conn = "draal " + cut(m.cfg.Draal, 12) + " · " + conn
 	}
-	conn = " " + cut(conn, m.width/2) + " "
+	// The right part has half of the line, and of the other half what
+	// the left part does not need: who the key is has its place where
+	// one is said in few words, and gives way where it is not.
+	room := max(m.width/2, m.width-width(m.where(m.width))-4)
+	for _, who := range m.whoWords() {
+		if width(who+" · "+conn) <= room {
+			conn = who + " · " + conn
+			break
+		}
+	}
+	conn = " " + cut(conn, room) + " "
 	left := m.width - width(conn)
 	return stTitle.Render(pad(" "+m.where(left-2), left)) + stBar.Render(conn)
+}
+
+// whoWords says who the key is in the ways the header may: the beginning
+// of its ID with its roles and of which services they are, and with its
+// roles alone. There is none while draal has not said.
+func (m *model) whoWords() []string {
+	if !m.haveMe {
+		return nil
+	}
+	id := human.ShortID(m.me.ID)
+	short := make([]wire.Grant, 0, len(m.me.Grants))
+	for _, g := range m.me.Grants {
+		short = append(short, wire.Grant{Role: g.Role})
+	}
+	return []string{id + " " + rolesWords(m.me.Grants), id + " " + rolesWords(short)}
 }
 
 // where says where one is, in at most w cells: the program, the service
@@ -123,6 +151,8 @@ func (m *model) where(w int) string {
 	switch m.screen {
 	case screenServices:
 		return cut(root, w)
+	case screenAccess:
+		return cut(root+sep+"access", w)
 	case screenService:
 		return cut(root+sep+middle(service, max(w-width(root+sep), 8)), w)
 	}
@@ -176,12 +206,18 @@ func (m *model) banner() []string {
 
 // noticeLines is what is said once, when there is something: a line,
 // or as many as three when it is long, as the error of a shell may be.
+// The question whether a grant is to be revoked is said there too: the
+// next key answers it.
 func (m *model) noticeLines() []string {
-	if m.notice == "" || m.tooSmall() {
+	notice := m.notice
+	if m.asked != nil {
+		notice = "Revoke " + grantWords(*m.asked, "from") + "? y revokes it; any other key leaves it."
+	}
+	if notice == "" || m.tooSmall() {
 		return nil
 	}
 	var out []string
-	for _, l := range wrap(m.notice, m.width-2, 3) {
+	for _, l := range wrap(notice, m.width-2, 3) {
 		out = append(out, line(m.width, seg{" " + l, stWarn}))
 	}
 	return out
@@ -204,8 +240,24 @@ func (m *model) keys() string {
 		keys = nil
 	case m.help:
 		keys = []key{{"any key", "back", 1}, {"q", "quit", 0}}
+	case m.form != nil:
+		// Every other key is a letter of the form, q among them.
+		keys = []key{{"enter", "next", 2}, {"←→", "the role", 3}, {"esc", "give it up", 1}, {"ctrl-c", "quit", 0}}
+	case m.asked != nil:
+		keys = []key{{"y", "revoke", 1}, {"any other key", "leave it", 2}, {"q", "quit", 0}}
+	case m.screen == screenAccess && !m.listed():
+		// Without a list there is nothing to move in, to grant to or to
+		// revoke from.
+		keys = []key{{"esc", "back", 2}, {"?", "keys", 1}, {"q", "quit", 0}}
+	case m.screen == screenAccess:
+		keys = []key{{"↑↓", "move", 5}, {"g", "grant", 4}, {"x", "revoke", 3}, {"esc", "back", 2}, {"?", "keys", 1}, {"q", "quit", 0}}
+		// An admin of draal's command line has no x, and neither has a
+		// list without a grant.
+		if m.gIdx >= len(m.grants) || m.grants[m.gIdx].Fixed {
+			keys = []key{{"↑↓", "move", 4}, {"g", "grant", 3}, {"esc", "back", 2}, {"?", "keys", 1}, {"q", "quit", 0}}
+		}
 	case m.screen == screenServices:
-		keys = []key{{"↑↓", "move", 3}, {"enter", "open", 2}, {"?", "keys", 1}, {"q", "quit", 0}}
+		keys = []key{{"↑↓", "move", 4}, {"enter", "open", 3}, {"a", "access", 2}, {"?", "keys", 1}, {"q", "quit", 0}}
 	case m.screen == screenService:
 		keys = []key{{"↑↓", "move", 4}, {"enter", "open", 3}, {"esc", "back", 2}, {"?", "keys", 1}, {"q", "quit", 0}}
 	default:
@@ -263,6 +315,7 @@ func (m *model) helpView(h int) []string {
 		{"PgUp PgDn", "a page up, a page down"},
 		{"g  G", "the start, the end; in a log G also follows it again"},
 		{"s", "on a zathras: open a shell"},
+		{"a", "on the services: who may do what (g grants, x revokes)"},
 		{"?", "these keys"},
 		{"q  Ctrl-C", "quit"},
 	}

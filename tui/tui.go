@@ -1,7 +1,8 @@
 // Package tui is the terminal UI of great-machine: what the web page
 // shows, in a terminal. It shows every service and every connected
 // zathras with its state, its figures and its log, followed live, and
-// rolls nothing out.
+// rolls nothing out. It says who its key is to draal, and has a view of
+// who may do what, in which an admin grants and revokes.
 //
 // It talks to draal through an Operator, as the other operator commands
 // do, and is three parts. The model is the state and a function of the
@@ -33,6 +34,12 @@ type Operator interface {
 	History(ctx context.Context, zathras wire.ID) ([]wire.Sample, error)
 	Logs(ctx context.Context, zathras wire.ID, follow bool) (<-chan wire.LogLine, error)
 	Shell(ctx context.Context, zathras wire.ID, req wire.ShellRequest) (Shell, error)
+	// Me is who the key is to draal: every key may ask. Grants, Grant
+	// and Revoke are an admin's: what the view of the grants is made of.
+	Me(ctx context.Context) (wire.Identity, error)
+	Grants(ctx context.Context) ([]wire.Grant, error)
+	Grant(ctx context.Context, req wire.GrantRequest) error
+	Revoke(ctx context.Context, req wire.RevokeRequest) error
 	Close() error
 }
 

@@ -98,7 +98,7 @@ func TestServicesViewAt80x24(t *testing.T) {
 		"",
 		"",
 		"",
-		" ↑↓ move  enter open  ? keys  q quit",
+		" ↑↓ move  enter open  a access  ? keys  q quit",
 	})
 }
 
@@ -582,6 +582,28 @@ func TestNoLineIsWiderByTheRenderersCounts(t *testing.T) {
 		}
 		press(m, "esc", "down")
 	}
+	// The grants, each chosen in its turn, and the form with such text
+	// typed into it.
+	grants := fixtureGrants()
+	for i := range grants {
+		name := names[i%len(names)]
+		grants[i].Service = name
+		grants[i].Note = strings.Repeat(name+" ", 1+i)
+	}
+	m, _ = onAccess(80, 30)
+	m.update(grantsMsg{epoch: 1, n: m.grantsN, grants: grants})
+	for range grants {
+		check("the grants", m)
+		press(m, "down")
+	}
+	press(m, "x")
+	check("the question", m)
+	press(m, "n", "g")
+	for _, name := range names[:3] {
+		press(m, "down")
+		m.update(tea.PasteMsg{Content: strings.Repeat(name+" ", 6)})
+	}
+	check("the form", m)
 }
 
 // FuzzViews draws every view with whatever bytes in every field that
@@ -646,5 +668,47 @@ func FuzzViews(f *testing.F) {
 		m.update(logEndedMsg{epoch: m.epoch, id: m.logID, err: wire.Errorf(wire.CodeInternal, "%s", evil)})
 		m.update(lostMsg{epoch: m.epoch, err: wire.Errorf(wire.CodeInternal, "%s", text)})
 		check("lost", m)
+
+		// And the grants: who the key is, the list, the question, the
+		// form with the bytes typed into it, and what draal refuses with.
+		grants := fixtureGrants()
+		for i := range grants {
+			g := &grants[i]
+			g.ID += wire.ID(evil)
+			g.Role += wire.Role(text)
+			g.Service = evil + g.Service
+			g.Note = text + g.Note + evil
+			g.By = wire.ID(evil)
+		}
+		grants = append(grants, wire.Grant{ID: wire.ID(evil), Role: wire.Role(evil), Service: text, Note: evil, By: wire.ID(text)})
+		m, _ = newTestModel(80, 24)
+		goLive(m, fl)
+		m.update(meMsg{epoch: m.epoch, n: m.meN, me: wire.Identity{ID: wire.ID(evil), Grants: grants[1:]}})
+		check("who the key is", m)
+		press(m, "a")
+		m.update(grantsMsg{epoch: m.epoch, n: m.grantsN, grants: grants})
+		check("access", m)
+		press(m, "G", "x")
+		check("the question", m)
+		press(m, "y")
+		m.update(revokedMsg{epoch: m.epoch, n: m.revokeN, err: wire.Errorf(wire.CodeBadRequest, "%s", evil)})
+		check("a revocation that was refused", m)
+		press(m, "g")
+		for _, typed := range []string{evil, text, evil + text} {
+			press(m, "down")
+			m.update(tea.PasteMsg{Content: typed})
+			typeText(m, typed)
+		}
+		check("the form", m)
+		press(m, "enter")
+		m.update(grantedMsg{epoch: m.epoch, n: m.grantN, err: wire.Errorf(wire.CodeBadRequest, "%s", evil+text)})
+		check("a grant that was refused", m)
+		press(m, "esc")
+		m.update(grantsMsg{epoch: m.epoch, n: m.grantsN, err: wire.Errorf(wire.CodeUnauthorized, "%s", text)})
+		check("access of a key that is no admin", m)
+		m.update(grantsMsg{epoch: m.epoch, n: m.grantsN, err: wire.Errorf(wire.CodeInternal, "%s", evil)})
+		check("access that was refused", m)
+		m.update(lostMsg{epoch: m.epoch, err: wire.Errorf(wire.CodeInternal, "%s", text)})
+		check("access, lost", m)
 	})
 }

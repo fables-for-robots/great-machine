@@ -36,6 +36,9 @@ func tuiCommand(deps tuiDeps) *cli.Command {
 			"zathras opens a shell in its container, which Ctrl-] leaves; q quits.\n" +
 			"While a shell is being opened Esc gives it up, and nothing else that is\n" +
 			"typed then is acted on or passed on to the shell.\n\n" +
+			"Its first line says who the key is to draal: the beginning of its endpoint\n" +
+			"ID, and its roles. The key a on the services shows who may do what, to an\n" +
+			"admin: g grants a role there, and x revokes the one that is chosen.\n\n" +
 			"It needs a terminal as its standard input and its standard output. When\n" +
 			"the connection to draal is lost it says so, keeps what it showed, and\n" +
 			"asks again by itself.",

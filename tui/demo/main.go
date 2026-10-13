@@ -77,11 +77,22 @@ func run(ctx context.Context, in, out *os.File, empty bool, errs io.Writer) erro
 	})
 }
 
-// operator is a draal.Controller as the tui.Operator of one connection:
-// what an *operator.Client is over a real draal. Close ends what was
-// asked of it, as closing a client does.
+// controller is what the demo has behind the terminal UI: a
+// draal.Controller that also says who may do what, as a *demo.Demo
+// does with grants that are made up.
+type controller interface {
+	draal.Controller
+	Me(ctx context.Context) (wire.Identity, error)
+	Grants(ctx context.Context) ([]wire.Grant, error)
+	Grant(ctx context.Context, req wire.GrantRequest) error
+	Revoke(ctx context.Context, req wire.RevokeRequest) error
+}
+
+// operator is a controller as the tui.Operator of one connection: what
+// an *operator.Client is over a real draal. Close ends what was asked
+// of it, as closing a client does.
 type operator struct {
-	c    draal.Controller
+	c    controller
 	ctx  context.Context
 	stop context.CancelFunc
 }
@@ -90,7 +101,7 @@ type operator struct {
 var _ tui.Operator = (*operator)(nil)
 
 // newOperator returns a connection to the controller.
-func newOperator(c draal.Controller) *operator {
+func newOperator(c controller) *operator {
 	ctx, stop := context.WithCancel(context.Background())
 	return &operator{c: c, ctx: ctx, stop: stop}
 }
@@ -146,6 +157,34 @@ func (o *operator) Logs(ctx context.Context, zathras wire.ID, follow bool) (<-ch
 // Shell starts a shell: of the demo, a real one on this machine.
 func (o *operator) Shell(ctx context.Context, zathras wire.ID, req wire.ShellRequest) (tui.Shell, error) {
 	return o.c.Shell(ctx, zathras, req)
+}
+
+// Me says who looks at the demo: an admin of the command line.
+func (o *operator) Me(ctx context.Context) (wire.Identity, error) {
+	ctx, free := o.both(ctx)
+	defer free()
+	return o.c.Me(ctx)
+}
+
+// Grants returns the made-up grants.
+func (o *operator) Grants(ctx context.Context) ([]wire.Grant, error) {
+	ctx, free := o.both(ctx)
+	defer free()
+	return o.c.Grants(ctx)
+}
+
+// Grant grants, in the memory of the demo.
+func (o *operator) Grant(ctx context.Context, req wire.GrantRequest) error {
+	ctx, free := o.both(ctx)
+	defer free()
+	return o.c.Grant(ctx, req)
+}
+
+// Revoke revokes, in the memory of the demo.
+func (o *operator) Revoke(ctx context.Context, req wire.RevokeRequest) error {
+	ctx, free := o.both(ctx)
+	defer free()
+	return o.c.Revoke(ctx, req)
 }
 
 // Close ends the connection.
