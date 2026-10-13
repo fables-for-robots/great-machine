@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/fables-for-robots/great-machine/authz"
 	"github.com/fables-for-robots/great-machine/db"
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/wire"
@@ -96,6 +97,9 @@ func (d *Draal) Grant(ctx context.Context, by wire.ID, req wire.GrantRequest) er
 	grant := wire.Grant{ID: id, Role: req.Role, Service: req.Service, Note: clean(req.Note, maxNote), By: by, At: d.cfg.Now().UTC()}
 	d.access.Lock()
 	defer d.access.Unlock()
+	if err := d.admin(by); err != nil {
+		return err
+	}
 	if err := d.cfg.DB.PutGrant(ctx, grant); err != nil {
 		return wire.Errorf(wire.CodeInternal, "recording the grant: %v", err)
 	}
@@ -104,6 +108,15 @@ func (d *Draal) Grant(ctx context.Context, by wire.ID, req wire.GrantRequest) er
 	}
 	d.log.Info("granted", "key", id, "role", req.Role, "service", req.Service, "by", by)
 	return nil
+}
+
+// admin returns nil when by is an admin now. A grant and a revocation ask
+// it under the lock they are made under: whoever asked was let in as an
+// admin, and may have been revoked since by a revocation that was made
+// first. Two admins that revoke each other at once would otherwise both
+// be made, and leave draal with no admin.
+func (d *Draal) admin(by wire.ID) error {
+	return d.cfg.Authz.Authorize(by, authz.OpAccess, "")
 }
 
 // Revoke takes a grant away, and ends what it was used for before it
@@ -126,6 +139,9 @@ func (d *Draal) Revoke(ctx context.Context, by wire.ID, req wire.RevokeRequest, 
 	}
 	d.access.Lock()
 	defer d.access.Unlock()
+	if err := d.admin(by); err != nil {
+		return err
+	}
 	err = d.cfg.DB.DeleteGrant(ctx, id, req.Role, req.Service)
 	switch {
 	case errors.Is(err, db.ErrNotFound) && req.Role == wire.RoleAdmin && d.cfg.Authz.Fixed(id):

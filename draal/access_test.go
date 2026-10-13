@@ -2,6 +2,7 @@ package draal
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -582,5 +583,93 @@ func TestThePageOfTheStore(t *testing.T) {
 	none := startWorld(t, granted(t))
 	if _, _, err := ask(t, none.dial(operatorID), &wire.Request{StorePage: &wire.StorePageRequest{Path: "/"}}); wire.CodeOf(err) != wire.CodeNotFound {
 		t.Errorf("the page of the store of a draal that has none = %v, want not-found", err)
+	}
+}
+
+// onMessage is the handler of a logger that does something, once, when a
+// message that begins as given is logged, in the goroutine that logs it.
+type onMessage struct {
+	message string
+	once    sync.Once
+	do      func()
+}
+
+func (h *onMessage) Enabled(context.Context, slog.Level) bool { return true }
+func (h *onMessage) WithAttrs([]slog.Attr) slog.Handler       { return h }
+func (h *onMessage) WithGroup(string) slog.Handler            { return h }
+
+func (h *onMessage) Handle(_ context.Context, r slog.Record) error {
+	if strings.HasPrefix(r.Message, h.message) {
+		h.once.Do(h.do)
+	}
+	return nil
+}
+
+// A registration that a revocation of its role key overtakes is not let
+// in behind it. The revocation here is made between the moment the
+// registration was found to be of a role key of the service and the
+// moment the zathras would join the fleet: draal logs there that what
+// this zathras reports had to be cleaned, and the logger of the test
+// revokes at that line. A revocation ends the sessions it finds, so one
+// that joined behind it would stay for as long as it kept its connection.
+func TestARegistrationThatARevocationOvertakesIsNotLetIn(t *testing.T) {
+	role, err := node.NewKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := granted(t, wire.Grant{ID: role.ID(), Role: wire.RoleZathras, Service: "web"})
+	var w *world
+	revoked := make(chan error, 1)
+	cfg.Log = slog.New(&onMessage{message: "a zathras reports more than draal keeps", do: func() {
+		revoked <- w.d.Revoke(context.Background(), commandAdmin, wire.RevokeRequest{ID: role.ID(), Role: wire.RoleZathras, Service: "web"}, nil)
+	}})
+	w = startWorld(t, cfg)
+
+	zathras := nodetest.ID(60)
+	state := idle()
+	state.Binary = "/nix/store/x/bin/web\a" // cleaned, which is logged
+	_, resp, err := ask(t, w.dial(zathras), &wire.Request{Register: &wire.Register{
+		Service: "web", Name: "pod-1", Version: "test", State: state, Statement: statementOf(role, cfg.ID, zathras),
+	}})
+	select {
+	case err := <-revoked:
+		if err != nil {
+			t.Fatalf("the revocation: %v", err)
+		}
+	default:
+		t.Fatal("the revocation was not made in the middle of the registration: the test does not test what it is to")
+	}
+	if wire.CodeOf(err) != wire.CodeUnauthorized {
+		t.Errorf("the registration that the revocation overtook = %+v, %v; want it refused as unauthorized", resp, err)
+	}
+	if service, in := w.d.ServiceOf(zathras); in {
+		t.Errorf("the zathras is registered for %s behind the revocation of its role key", service)
+	}
+}
+
+// A grant and a revocation are an admin's at the moment they are made,
+// and not only when they were asked for: two admins that revoke each
+// other at once would otherwise both be let through, one after the
+// other, and leave draal with none.
+func TestAGrantAndARevocationAreAnAdminsWhenTheyAreMade(t *testing.T) {
+	other := aKey().ID()
+	cfg := granted(t, append(theUsual(), wire.Grant{ID: other, Role: wire.RoleAdmin})...)
+	w := startWorld(t, cfg)
+	ctx := context.Background()
+
+	// Both were let in as admins; the first revocation is made, and the
+	// second is of a key that is no admin any more.
+	if err := w.d.Revoke(ctx, grantedAdmin, wire.RevokeRequest{ID: other, Role: wire.RoleAdmin}, nil); err != nil {
+		t.Fatalf("an admin revoking another: %v", err)
+	}
+	if err := w.d.Revoke(ctx, other, wire.RevokeRequest{ID: grantedAdmin, Role: wire.RoleAdmin}, nil); wire.CodeOf(err) != wire.CodeUnauthorized {
+		t.Errorf("the revocation by a key that is no admin any more: %v, want unauthorized", err)
+	}
+	if err := w.d.Grant(ctx, other, wire.GrantRequest{ID: other, Role: wire.RoleAdmin}); wire.CodeOf(err) != wire.CodeUnauthorized {
+		t.Errorf("the grant by a key that is no admin any more: %v, want unauthorized", err)
+	}
+	grants := w.d.Grants()
+	if holds(grants, grantedAdmin, wire.RoleAdmin, "") == nil || holds(grants, other, wire.RoleAdmin, "") != nil {
+		t.Errorf("the grants are %+v, want the admin that revoked first an admin still, and the other none", grants)
 	}
 }

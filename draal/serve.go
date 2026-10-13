@@ -185,7 +185,20 @@ func (d *Draal) register(ctx context.Context, conn node.Conn, s node.Stream, reg
 	sess := &session{id: id, service: reg.Service, name: reg.Name, conn: conn, by: by}
 	// The fleet and the sessions change together, so that whoever sees
 	// the member finds its connection.
+	//
+	// The role key is asked about once more, under the lock: a revocation
+	// replaces the grants and then, under this lock, ends the sessions it
+	// finds. A registration that was let through before the grants were
+	// replaced, and joined after the revocation had looked, would stay
+	// for as long as it kept its connection; asked here, it is either
+	// refused or found.
 	d.mu.Lock()
+	if err := d.cfg.Authz.Signer(by, reg.Service); err != nil {
+		d.mu.Unlock()
+		d.log.Warn("refused", "peer", id, "operation", "register", "service", reg.Service, "reason", said(err))
+		d.refuse(s, err)
+		return
+	}
 	epoch := d.fleet.Join(fleet.Member{
 		ID: id, Service: reg.Service, Name: reg.Name,
 		Connected: now, State: state, Reported: now,
