@@ -13,8 +13,13 @@ import (
 )
 
 // admit maps a request of an operator to its operation and its service
-// and asks Authorize. A refusal is logged. A zathras that is not connected
-// is unavailable, for a peer that may ask at all.
+// and asks the authority whether the peer may. A refusal is logged.
+//
+// What is asked about a zathras is of the service the zathras is of. A
+// key that may ask it of some service and not of that one is answered as
+// for a zathras that is not connected: it does not learn that there is
+// one. A key that may ask it of no service is refused, in the same words
+// whether the zathras is there or not, and they name no service.
 func (d *Draal) admit(peer wire.ID, req *wire.Request) error {
 	var (
 		op      authz.Operation
@@ -38,24 +43,32 @@ func (d *Draal) admit(peer wire.ID, req *wire.Request) error {
 		op, zathras = authz.OpLogs, &req.Logs.Zathras
 	case req.Shell != nil:
 		op, zathras = authz.OpShell, &req.Shell.Zathras
+	case req.Me != nil:
+		op = authz.OpMe
+	case req.Grants != nil, req.Grant != nil, req.Revoke != nil:
+		op = authz.OpAccess
+	case req.StorePage != nil:
+		op = authz.OpStorePage
 	default:
 		return wire.Errorf(wire.CodeBadRequest, "draal answers no such request")
 	}
-	connected := true
 	if zathras != nil {
-		service, connected = d.ServiceOf(*zathras)
+		service, connected := d.ServiceOf(*zathras)
+		if connected && d.cfg.Authz.Authorize(peer, op, service) == nil {
+			return nil
+		}
+		if err := d.cfg.Authz.Any(peer, op); err != nil {
+			d.log.Warn("refused", "peer", peer, "operation", op)
+			return err
+		}
+		if connected {
+			d.log.Warn("refused", "peer", peer, "operation", op, "service", service)
+		}
+		return notConnected(*zathras)
 	}
 	if err := d.cfg.Authz.Authorize(peer, op, service); err != nil {
 		d.log.Warn("refused", "peer", peer, "operation", op, "service", service)
-		if zathras != nil {
-			// The answer is the same whether the zathras is connected or
-			// not, and names no service.
-			return wire.Errorf(wire.CodeUnauthorized, "%s is no operator and may not %s", peer, op)
-		}
 		return err
-	}
-	if !connected {
-		return notConnected(*zathras)
 	}
 	return nil
 }
@@ -63,7 +76,8 @@ func (d *Draal) admit(peer wire.ID, req *wire.Request) error {
 // operate answers one request of an operator through the methods of
 // Controller, and returns when the peer has ended the stream, or, after a
 // refusal, when RefuseWait has passed.
-func (d *Draal) operate(ctx context.Context, peer wire.ID, s node.Stream, req *wire.Request) {
+func (d *Draal) operate(ctx context.Context, conn node.Conn, s node.Stream, req *wire.Request) {
+	peer := conn.RemoteID()
 	if err := d.admit(peer, req); err != nil {
 		d.refuse(s, err)
 		return
@@ -98,7 +112,7 @@ func (d *Draal) operate(ctx context.Context, peer wire.ID, s node.Stream, req *w
 		}
 		return true
 	}
-	if err := d.respond(ctx, peer, req, send); err != nil {
+	if err := d.respond(ctx, conn, req, send); err != nil {
 		if werr := wire.WriteError(out, err); werr != nil {
 			unwritten(werr)
 		}
@@ -149,7 +163,8 @@ func asked(req *wire.Request) []string {
 
 // respond does what req asks and sends what answers it. An error it
 // returns is the answer.
-func (d *Draal) respond(ctx context.Context, peer wire.ID, req *wire.Request, send func(*wire.Response) bool) error {
+func (d *Draal) respond(ctx context.Context, conn node.Conn, req *wire.Request, send func(*wire.Response) bool) error {
+	peer := conn.RemoteID()
 	switch {
 	case req.Store != nil:
 		info, err := d.Store(ctx, req.Store.Service)
@@ -175,6 +190,8 @@ func (d *Draal) respond(ctx context.Context, peer wire.ID, req *wire.Request, se
 			return err
 		}
 		for f := range fleets {
+			// What the key may see, by the grants as they are now.
+			f = d.seen(peer, f)
 			if !send(&wire.Response{Fleet: &f}) {
 				break
 			}
@@ -201,6 +218,29 @@ func (d *Draal) respond(ctx context.Context, peer wire.ID, req *wire.Request, se
 				break
 			}
 		}
+	case req.Me != nil:
+		me := d.Me(peer)
+		send(&wire.Response{Me: &me})
+	case req.Grants != nil:
+		send(&wire.Response{Grants: &wire.GrantList{Grants: d.Grants()}})
+	case req.Grant != nil:
+		if err := d.Grant(ctx, peer, *req.Grant); err != nil {
+			return err
+		}
+		send(&wire.Response{Granted: &wire.Granted{}})
+	case req.Revoke != nil:
+		// The connection the revocation is asked on is an admin's and
+		// stays one: it is not among those that are ended.
+		if err := d.Revoke(ctx, peer, *req.Revoke, conn); err != nil {
+			return err
+		}
+		send(&wire.Response{Revoked: &wire.Revoked{}})
+	case req.StorePage != nil:
+		page, err := d.StorePage(req.StorePage.Path)
+		if err != nil {
+			return err
+		}
+		send(&wire.Response{StorePage: &page})
 	}
 	return nil
 }

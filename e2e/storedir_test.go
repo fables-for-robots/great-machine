@@ -184,13 +184,25 @@ func TestARolloutIntoAStoreDirectory(t *testing.T) {
 	}
 
 	// Another service has a store of its own in draal's, in which the
-	// store path of this one is not: its pod is told so, by name.
+	// store path of this one is not: its pod is told so, by name. It is a
+	// zathras of api that is registered: nobody else pulls what is api's.
 	otherDir := filepath.Join(t.TempDir(), "store")
-	elsewhere, err := h.dial(ctx, newKey(t))
+	otherKey := newKey(t)
+	elsewhere, err := h.dial(ctx, otherKey)
 	if err != nil {
 		t.Fatalf("the connection of another pod to draal: %v", err)
 	}
 	defer elsewhere.Close()
+	reg, err := elsewhere.OpenStream(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reg.Close()
+	if resp, err := wire.Call(reg, &wire.Request{Register: &wire.Register{
+		Service: "api", Name: "api-0", Version: "e2e", State: wire.State{Phase: wire.PhaseIdle}, Statement: h.statement(otherKey.ID()),
+	}}); err != nil || resp.Registered == nil {
+		t.Fatalf("registering the pod of another service: %+v, %v", resp, err)
+	}
 	other, err := storedir.Open(storedir.Config{
 		Dial: func(ctx context.Context) (node.Opener, error) {
 			return node.Again(ctx, elsewhere, storeserver.ALPN)

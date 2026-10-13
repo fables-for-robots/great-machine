@@ -581,12 +581,8 @@ func (b *gatedBucket) PresignGet(ctx context.Context, objectKey string, ttl time
 // dialStore connects to the store of a draal, for jaccard-store's
 // protocol, with a key nobody knows: a pull is every peer's. The
 // connection ends with the test.
-func dialStore(t *testing.T, id wire.ID, addr netip.AddrPort) *jsnode.Conn {
+func dialStore(t *testing.T, k node.Key, id wire.ID, addr netip.AddrPort) *jsnode.Conn {
 	t.Helper()
-	k, err := node.NewKey()
-	if err != nil {
-		t.Fatal(err)
-	}
 	server, err := irohkey.ParseEndpointID(string(id))
 	if err != nil {
 		t.Fatal(err)
@@ -660,9 +656,13 @@ func TestRunDraalLetsARequestOfTheStoreEndWhenItIsToldToEnd(t *testing.T) {
 		t.Fatalf("the push: %v", err)
 	}
 
-	pulling, idle := dialStore(t, id, addr), dialStore(t, id, addr)
-	// The store has both connections before draal is told to end.
-	if _, err := askStore(idle, 20*time.Second, jswire.Request{Op: jswire.OpPull, Name: "nothing"}); err != nil {
+	// Dialed with the key of the admin, one after the other: a pull is
+	// nobody's who was granted nothing, and a key has one endpoint at a
+	// time.
+	pulling := dialStore(t, opKey, id, addr)
+	idle := pulling
+	// The store has the connection before draal is told to end.
+	if _, err := askStore(idle, 20*time.Second, jswire.Request{Op: jswire.OpPull, Name: wire.StorePrefix("web") + "nothing"}); err != nil {
 		t.Fatalf("asking on the connection that will be idle: %v", err)
 	}
 	release := gated.holdPulls()

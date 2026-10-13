@@ -218,10 +218,16 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 	// closed and Serve, which writes to the database, has returned.
 	defer func() { err = errors.Join(err, database.Close()) }()
 
-	if len(cfg.operators) == 0 {
-		log.Warn("no --operator was given: nobody can act as an operator over iroh, and nobody can push to the store")
+	// Who may do what: the admins of the command line, and the grants of
+	// the database, which draal decides by from a copy in memory.
+	grants, err := database.Grants(ctx)
+	if err != nil {
+		return fmt.Errorf("the grants: %w", err)
 	}
-	allow := authz.NewAllowlist(cfg.operators)
+	allow := authz.New(authz.Config{Admins: cfg.operators}, grants)
+	if !allow.Admins() {
+		log.Warn("no admin was given on the command line and the database holds none: nobody can grant anything, and so nobody can do anything")
+	}
 
 	// The store is opened before the endpoint is bound: one that cannot
 	// be opened ends the command before draal has announced itself.
@@ -288,6 +294,7 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 	d := draal.New(draal.Config{
 		DB:    database,
 		Authz: allow,
+		Store: store,
 		ID:    listener.ID(),
 		Log:   log,
 	})

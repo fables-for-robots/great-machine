@@ -287,3 +287,29 @@ func TestRegisteredIsSetLater(t *testing.T) {
 		t.Error("a zathras of web pulls what is of no service")
 	}
 }
+
+// Any says whether a key may ask a thing of some service at all: it is
+// what draal asks before it tells a key that a zathras is not there.
+func TestMayAKeyAskOfAnyService(t *testing.T) {
+	a := anAuthority()
+	for _, peer := range []wire.ID{fixedAdmin, admin, depWeb, depAll, depBoth} {
+		if err := a.Any(peer, OpLogs); err != nil {
+			t.Errorf("Any(%s, logs) = %v", peer, err)
+		}
+	}
+	for _, peer := range []wire.ID{roleWeb, zWeb, nobody} {
+		err := a.Any(peer, OpShell)
+		if wire.CodeOf(err) != wire.CodeUnauthorized {
+			t.Fatalf("Any(%s, shell) = %v, want unauthorized", peer, err)
+		}
+		if want := string(peer) + " is no deployer of any service and may not open a shell"; err.(*wire.Error).Message != want {
+			t.Errorf("the refusal reads %q, want %q", err.(*wire.Error).Message, want)
+		}
+	}
+	if err := a.Any(depAll, OpAccess); wire.CodeOf(err) != wire.CodeUnauthorized {
+		t.Errorf("Any(a deployer, access) = %v, want unauthorized", err)
+	}
+	if err := a.Any(nobody, OpMe); err != nil {
+		t.Errorf("Any(nobody, me) = %v", err)
+	}
+}

@@ -198,6 +198,29 @@ func (a *Authority) Authorize(peer wire.ID, op Operation, service string) error 
 	return wire.Errorf(wire.CodeUnauthorized, "%s may not %s: there is no such operation", peer, op)
 }
 
+// Any returns nil when peer may do op for some service at all, whichever:
+// draal asks it of a key that asks about a zathras it may not see, to
+// tell a key that may ask of nobody from one that asks of the wrong one.
+func (a *Authority) Any(peer wire.ID, op Operation) error {
+	w := what[op]
+	t := a.grants.Load()
+	switch w.kind {
+	case forEverybody:
+		return nil
+	case forDeployer, forAnyDeployer:
+		if a.isAdmin(t, peer) || t.any(peer, wire.RoleDeployer) {
+			return nil
+		}
+		return wire.Errorf(wire.CodeUnauthorized, "%s is no deployer of any service and may not %s", peer, w.ofNone)
+	case forAdmin:
+		if a.isAdmin(t, peer) {
+			return nil
+		}
+		return wire.Errorf(wire.CodeUnauthorized, "%s is no admin and may not %s", peer, w.ofNone)
+	}
+	return wire.Errorf(wire.CodeUnauthorized, "%s may not %s: there is no such operation", peer, op)
+}
+
 // Signer returns nil when by is a role key that signs for a zathras of
 // the service: it holds zathras for the service, or for every service.
 // The refusal names the role key and the service, and the command that
