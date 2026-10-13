@@ -22,7 +22,7 @@ var another = &User{UID: 65534, GID: 65534}
 // /dev/stderr anew, as many are configured to, opens what it was started
 // with, whoever it runs as.
 func TestWhatIsStartedCanOpenItsStandardStreams(t *testing.T) {
-	rootWithSysAdmin(t)
+	root(t)
 	for name, user := range map[string]*User{"as root": nil, "as another user": another} {
 		t.Run(name, func(t *testing.T) {
 			l := newLauncher(t, Config{User: user})
@@ -50,7 +50,7 @@ func TestWhatIsStartedCanOpenItsStandardStreams(t *testing.T) {
 // another user it is given the terminal: it opens it by its name, as
 // whatever asks for the terminal of its session does.
 func TestWhatIsStartedCanOpenItsTerminal(t *testing.T) {
-	rootWithSysAdmin(t)
+	root(t)
 	for name, user := range map[string]*User{"as root": nil, "as another user": another} {
 		t.Run(name, func(t *testing.T) {
 			l := newLauncher(t, Config{User: user})
@@ -81,7 +81,7 @@ func TestWhatIsStartedCanOpenItsTerminal(t *testing.T) {
 // or a terminal, and nothing else: a file that a process writes to, and
 // a device of the system, as /dev/null is, keep their owner.
 func TestWhatIsNoPipeAndNoTerminalKeepsItsOwner(t *testing.T) {
-	rootWithSysAdmin(t)
+	root(t)
 	l := newLauncher(t, Config{User: another})
 	file, err := os.CreateTemp(t.TempDir(), "out")
 	if err != nil {

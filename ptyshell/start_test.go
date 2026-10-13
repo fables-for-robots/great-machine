@@ -13,15 +13,6 @@ import (
 	"github.com/fables-for-robots/great-machine/launcher"
 )
 
-// The tests that start a shell through a launcher start this binary,
-// which then replaces itself with the shell, as great-machine does.
-func TestMain(m *testing.M) {
-	if status, was := launcher.Replace(os.Args); was {
-		os.Exit(status)
-	}
-	os.Exit(m.Run())
-}
-
 // Start, if set, is what starts the shell: it is given the command of the
 // shell and what starts it on its terminal.
 func TestStartIsGivenTheCommandAndWhatStartsIt(t *testing.T) {
@@ -60,14 +51,13 @@ func throughALauncher(t *testing.T, cfg Config) Config {
 	if err != nil {
 		t.Fatalf("launcher.New: %v", err)
 	}
-	t.Cleanup(l.Close)
 	cfg.Start = l.Start
 	return cfg
 }
 
-// Through a launcher the shell is the program itself first, which then
-// becomes the shell: on the terminal, in its session, with its
-// environment, its directory and its exit status, and ended as before.
+// Through a launcher the shell runs as it does without one: on the
+// terminal, in its session, with its environment, its directory and its
+// exit status, and ended as before.
 func TestThroughALauncherTheShellRunsAsBefore(t *testing.T) {
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -104,9 +94,8 @@ func TestThroughALauncherCloseEndsTheShell(t *testing.T) {
 	out.waitEOF(t)
 }
 
-// A shell that is not there is an error of Start, with a launcher too:
-// whoever asked for a shell is told, and is not given a session whose
-// only line is the error.
+// A shell that is not there is a start that failed, and so an error of
+// Start, with a launcher as without: whoever asked for a shell is told.
 func TestThroughALauncherAShellThatIsNotThere(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "no-such-shell")
 	s, err := Start(throughALauncher(t, Config{Shell: missing}))

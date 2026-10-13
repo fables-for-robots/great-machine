@@ -109,14 +109,7 @@ func Start(cfg Config) (*Session, error) {
 	// its standard input, as its controlling terminal (Setctty).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 	if cfg.Start != nil {
-		// What Start starts may be another program that becomes the
-		// shell only afterwards, as a launcher has it: a shell that is
-		// not there would then be a session that says so and ends. It
-		// is to be an error here, as it is without, so it is looked at
-		// first.
-		if err = executable(cmd.Path); err == nil {
-			err = cfg.Start(cmd, cmd.Start)
-		}
+		err = cfg.Start(cmd, cmd.Start)
 	} else {
 		err = cmd.Start()
 	}
@@ -133,22 +126,6 @@ func Start(cfg Config) (*Session, error) {
 	s := &Session{pty: master, cmd: cmd, done: make(chan struct{})}
 	go s.wait()
 	return s, nil
-}
-
-// executable returns nil for a regular file with an execute bit, through
-// its symbolic links, and why path is none otherwise. The error of a file
-// that is not there names it and is os.ErrNotExist.
-func executable(path string) error {
-	info, err := os.Stat(path)
-	switch {
-	case err != nil:
-		return err
-	case !info.Mode().IsRegular():
-		return fmt.Errorf("%s is no regular file", path)
-	case info.Mode().Perm()&0o111 == 0:
-		return fmt.Errorf("%s has no execute bit", path)
-	}
-	return nil
 }
 
 // pollable returns the terminal that f is as a file whose Read ends when

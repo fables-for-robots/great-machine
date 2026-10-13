@@ -19,10 +19,9 @@ import (
 	"testing"
 )
 
-// The test binary is the program of these tests three times over: it is
-// the tests; started with Arg it replaces itself, as great-machine does;
-// and started with childEnv set it is the program that a test started,
-// and says what it finds itself to be.
+// The test binary is the program of these tests twice over: it is the
+// tests, and started with childEnv set it is the program that a test
+// started, and says what it finds itself to be.
 const (
 	childEnv = "LAUNCHER_TEST_CHILD"
 	valueEnv = "LAUNCHER_TEST_VALUE"
@@ -30,9 +29,6 @@ const (
 )
 
 func TestMain(m *testing.M) {
-	if status, was := Replace(os.Args); was {
-		os.Exit(status)
-	}
 	if kind := os.Getenv(childEnv); kind != "" {
 		be, ok := children[kind]
 		if !ok {
@@ -93,7 +89,7 @@ func reportChild() int {
 
 var quiet = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-// newLauncher returns a launcher that is closed when the test ends.
+// newLauncher returns a launcher that logs nowhere, unless cfg says where.
 func newLauncher(t *testing.T, cfg Config) *Launcher {
 	t.Helper()
 	if cfg.Log == nil {
@@ -103,7 +99,6 @@ func newLauncher(t *testing.T, cfg Config) *Launcher {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	t.Cleanup(l.Close)
 	return l
 }
 
@@ -141,10 +136,10 @@ func run(t *testing.T, l *Launcher, cmd *exec.Cmd) (report, string, int) {
 	return r, errOut.String(), status
 }
 
-// A program started through a launcher is started as it would have been
-// without: its arguments, the first among them, its environment, its
-// working directory, its process group, its standard streams and its exit
-// status are those of the command.
+// A program started through a launcher that was given no user is started
+// as it is: its arguments, the first among them, its environment, its
+// working directory, its process group, its standard streams, its exit
+// status and its user are those of the command.
 func TestAProgramStartedThroughALauncher(t *testing.T) {
 	l := newLauncher(t, Config{})
 	dir, err := filepath.EvalSymlinks(t.TempDir())
@@ -188,12 +183,15 @@ func TestAProgramStartedThroughALauncher(t *testing.T) {
 	}
 }
 
-// What a launcher makes of a command, and that it starts it with what it
-// was given to start it with.
-func TestStartStartsTheProgramItselfAndReturnsWhatStartReturned(t *testing.T) {
+// Without a user a launcher changes nothing of a command: the program,
+// the arguments and the working directory are the command's own, and it
+// is started with what Start was given to start it with, whose error is
+// what Start returns.
+func TestWithoutAUserStartChangesNothingOfTheCommand(t *testing.T) {
 	l := newLauncher(t, Config{})
 	cmd := exec.Command("/bin/sh", "-c", "exit 0")
 	cmd.Args[0] = "sh"
+	cmd.Dir = "/some/directory"
 	failed := errors.New("it was not started")
 	calls := 0
 	err := l.Start(cmd, func() error {
@@ -203,61 +201,31 @@ func TestStartStartsTheProgramItselfAndReturnsWhatStartReturned(t *testing.T) {
 	if err != failed || calls != 1 {
 		t.Errorf("Start = %v after %d calls of start, want what start returned after one", err, calls)
 	}
-	if want := []string{"great-machine", Arg, "", "/bin/sh", "sh", "-c", "exit 0"}; !slices.Equal(cmd.Args, want) {
-		t.Errorf("the arguments of the command are %q, want %q", cmd.Args, want)
+	if want := []string{"sh", "-c", "exit 0"}; cmd.Path != "/bin/sh" || !slices.Equal(cmd.Args, want) || cmd.Dir != "/some/directory" {
+		t.Errorf("the command became %s %q in %q, want /bin/sh %q in /some/directory", cmd.Path, cmd.Args, cmd.Dir, want)
 	}
-	if cmd.Path == "/bin/sh" || !filepath.IsAbs(cmd.Path) {
-		t.Errorf("the command's program is %q, want the program itself", cmd.Path)
-	}
-
-	// The working directory is not the command's any more: what os/exec
-	// does with it, it does between the fork and the execution, where
-	// nothing may touch the store. The program that replaces itself
-	// changes to it.
-	in := exec.Command("/bin/sh", "-c", "exit 0")
-	in.Dir = "/some/directory"
-	if err := l.Start(in, func() error { return failed }); err != failed {
-		t.Errorf("Start = %v, want what start returned", err)
-	}
-	if want := []string{"great-machine", Arg, "/some/directory", "/bin/sh", "/bin/sh", "-c", "exit 0"}; !slices.Equal(in.Args, want) || in.Dir != "" {
-		t.Errorf("a command with a working directory became %q in %q, want %q in none", in.Args, in.Dir, want)
+	if cmd.Env != nil || cmd.SysProcAttr != nil {
+		t.Errorf("the command was given the environment %q and the attributes %+v, and had none", cmd.Env, cmd.SysProcAttr)
 	}
 }
 
-// A working directory that is not there is found out by the process that
-// was to change to it, as a program that is not there is: it says so and
-// ends with 126.
-func TestAWorkingDirectoryThatIsNotThere(t *testing.T) {
-	l := newLauncher(t, Config{})
-	cmd := reporting()
-	cmd.Dir = filepath.Join(t.TempDir(), "nothing")
-	r, errOut, status := run(t, l, cmd)
-	if status != 126 || r.Pid != 0 {
-		t.Errorf("the exit status is %d and the program reported %+v, want 126 and no program", status, r)
-	}
-	if !strings.Contains(errOut, "changing to the working directory "+cmd.Args[2]) || !strings.Contains(errOut, "no such file") {
-		t.Errorf("standard error does not say which directory could not be changed to and why: %q", errOut)
-	}
-}
-
-// A program that is not there is found out by the process that was to
-// become it: it says so and ends with 127.
+// A program that is not there is a start that failed: Start returns the
+// error, which says what is not there, and no process stands in for the
+// program to say so and end.
 func TestAProgramThatIsNotThere(t *testing.T) {
 	l := newLauncher(t, Config{})
 	path := filepath.Join(t.TempDir(), "nothing")
-	_, errOut, status := run(t, l, exec.Command(path))
-	if status != 127 {
-		t.Errorf("the exit status is %d, want 127", status)
+	cmd := exec.Command(path)
+	err := l.Start(cmd, cmd.Start)
+	if !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), path) {
+		t.Errorf("Start = %v, want an error that names %s and is os.ErrNotExist", err, path)
 	}
-	if !strings.Contains(errOut, "executing "+path) || !strings.Contains(errOut, "no such file") {
-		t.Errorf("standard error does not say what could not be executed and why: %q", errOut)
-	}
-	if strings.Contains(errOut, "interpreter") {
-		t.Errorf("standard error speaks of an interpreter, and the file is not there: %q", errOut)
+	if cmd.Process != nil {
+		t.Errorf("process %d was started for a program that is not there", cmd.Process.Pid)
 	}
 }
 
-// A file that is there and is no program ends with 126.
+// So is a file that is there and is no program.
 func TestAFileThatIsNoProgram(t *testing.T) {
 	l := newLauncher(t, Config{})
 	dir := t.TempDir()
@@ -271,49 +239,40 @@ func TestAFileThatIsNoProgram(t *testing.T) {
 	}
 	// Root is denied the first as well: no execute bit is set at all.
 	for path, why := range map[string]string{noBits: "permission denied", noFormat: "exec format error"} {
-		_, errOut, status := run(t, l, exec.Command(path))
-		if status != 126 {
-			t.Errorf("%s: the exit status is %d, want 126", filepath.Base(path), status)
+		cmd := exec.Command(path)
+		err := l.Start(cmd, cmd.Start)
+		if err == nil {
+			cmd.Wait()
+			t.Errorf("%s: Start = nil, want an error", filepath.Base(path))
+			continue
 		}
-		if !strings.Contains(errOut, "executing "+path) || !strings.Contains(errOut, why) {
-			t.Errorf("%s: standard error does not say %q: %q", filepath.Base(path), why, errOut)
+		if !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), why) {
+			t.Errorf("%s: Start = %v, want an error that names the file and says %q", filepath.Base(path), err, why)
 		}
 	}
 }
 
-// The kernel says "no such file" of a program whose interpreter is
-// missing, as a program of a store is when a store path of its closure is
-// not there. The process says which of the two it is.
-func TestAProgramWhoseInterpreterIsMissing(t *testing.T) {
+// And so is a working directory that is not there.
+func TestAWorkingDirectoryThatIsNotThere(t *testing.T) {
 	l := newLauncher(t, Config{})
-	path := filepath.Join(t.TempDir(), "script")
-	if err := os.WriteFile(path, []byte("#!/no/such/interpreter\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	_, errOut, status := run(t, l, exec.Command(path))
-	if status != 127 {
-		t.Errorf("the exit status is %d, want 127", status)
-	}
-	if !strings.Contains(errOut, "executing "+path) || !strings.Contains(errOut, "interpreter") {
-		t.Errorf("standard error does not say that the file is there and its interpreter is not: %q", errOut)
+	cmd := reporting()
+	cmd.Dir = filepath.Join(t.TempDir(), "nothing")
+	err := l.Start(cmd, cmd.Start)
+	if !errors.Is(err, os.ErrNotExist) || !strings.Contains(err.Error(), cmd.Dir) {
+		t.Errorf("Start = %v, want an error that names %s and is os.ErrNotExist", err, cmd.Dir)
 	}
 }
 
-// A command for a name that was not found has its error already, and
-// nothing is started for it.
-func TestACommandThatWasNotFoundIsNotStarted(t *testing.T) {
+// A command for a name that was not found has its error already, which
+// is what starting it returns.
+func TestACommandThatWasNotFound(t *testing.T) {
 	l := newLauncher(t, Config{})
 	cmd := exec.Command("no-program-of-this-name-anywhere")
 	if cmd.Err == nil {
 		t.Skip("there is a program of that name")
 	}
-	called := false
-	err := l.Start(cmd, func() error {
-		called = true
-		return cmd.Start()
-	})
-	if !errors.Is(err, exec.ErrNotFound) || called {
-		t.Errorf("Start = %v, start called: %v; want the error of the command and no start", err, called)
+	if err := l.Start(cmd, cmd.Start); !errors.Is(err, exec.ErrNotFound) {
+		t.Errorf("Start = %v, want the error of the command", err)
 	}
 }
 
@@ -353,24 +312,6 @@ func TestManyStartsAtOnce(t *testing.T) {
 	}
 }
 
-func TestNothingIsStartedOnceALauncherIsClosed(t *testing.T) {
-	l, err := New(Config{Log: quiet})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	l.Close()
-	l.Close()
-	cmd := reporting()
-	called := false
-	err = l.Start(cmd, func() error {
-		called = true
-		return cmd.Start()
-	})
-	if !errors.Is(err, ErrClosed) || called {
-		t.Errorf("Start after Close = %v, start called: %v; want ErrClosed and no start", err, called)
-	}
-}
-
 // Only root starts a process as another user. A launcher that could not
 // says so when it is made, and not when the service is to be started.
 func TestAnotherUserTakesRoot(t *testing.T) {
@@ -378,47 +319,20 @@ func TestAnotherUserTakesRoot(t *testing.T) {
 		t.Skip("this test is root")
 	}
 	uid, gid := uint32(os.Getuid()), uint32(os.Getgid())
-	if l, err := New(Config{User: &User{UID: uid + 1, GID: gid}, Log: quiet}); err == nil {
-		l.Close()
+	if _, err := New(Config{User: &User{UID: uid + 1, GID: gid}, Log: quiet}); err == nil {
 		t.Error("New with another user succeeded, and this process is not root")
 	} else if !strings.Contains(err.Error(), "root") {
 		t.Errorf("the error does not say that it takes root: %v", err)
 	}
-	// Its own user is no other.
+	// Its own user is no other, and nothing is set for it: to set the
+	// user of a process is to set its groups, which takes root as well.
 	l := newLauncher(t, Config{User: &User{UID: uid, GID: gid}})
-	if r, _, status := run(t, l, reporting()); status != 0 || r.Uid != int(uid) || r.Gid != int(gid) {
+	cmd := reporting()
+	r, _, status := run(t, l, cmd)
+	if status != 0 || r.Uid != int(uid) || r.Gid != int(gid) {
 		t.Errorf("as its own user the program ran as %d:%d and ended with %d", r.Uid, r.Gid, status)
 	}
-}
-
-// A command without an environment of its own is started with that of
-// this process, and with PWD naming its working directory, as os/exec
-// has it: the directory is changed to by the program that replaces
-// itself, and the variable is not left naming another.
-func TestAProgramWithoutAnEnvironmentOfItsOwnHasItsWorkingDirectoryInPWD(t *testing.T) {
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(childEnv, "report")
-	t.Setenv("PWD", "/somewhere/else")
-	l := newLauncher(t, Config{})
-	cmd := exec.Command(os.Args[0])
-	cmd.Dir = dir
-	r, errOut, status := run(t, l, cmd)
-	if status != 0 {
-		t.Fatalf("the child ended with %d: %s", status, errOut)
-	}
-	if r.Dir != dir {
-		t.Errorf("the working directory is %q, want %q", r.Dir, dir)
-	}
-	var pwd []string
-	for _, kv := range r.Environ {
-		if strings.HasPrefix(kv, "PWD=") {
-			pwd = append(pwd, kv)
-		}
-	}
-	if len(pwd) != 1 || pwd[0] != "PWD="+dir {
-		t.Errorf("PWD of the child is %q, want %q, once", pwd, "PWD="+dir)
+	if cmd.SysProcAttr != nil {
+		t.Errorf("the command of a process's own user was given the attributes %+v, and needs none", cmd.SysProcAttr)
 	}
 }

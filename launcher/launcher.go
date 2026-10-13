@@ -1,33 +1,18 @@
 // Package launcher starts the processes of a zathras: the service and the
 // shells.
 //
-// A zathras serves the store of its container itself, over NFS, and
-// mounts it, which takes CAP_SYS_ADMIN. Two things follow for whatever it
-// starts.
+// What it does to a process is --user. A Launcher that was given a user
+// starts every process as that user, with the group and no other, and
+// gives the pipes and the terminal the process is started on to that
+// user. One that was given none starts a process as it is.
 //
-// What it starts is not to have that capability. On Linux a Launcher has
-// a thread of its own that has given it up, and every process is started
-// from that thread: a child is a copy of the thread that started it.
-//
-// And nothing is executed from the store by the zathras itself. Go starts
-// a process with vfork: the thread that starts it stands still until the
-// child has executed its program, and until then the runtime cannot stop
-// the world, which every garbage collection begins with. A program in the
-// store is read through the NFS server of this same process, whose
-// goroutines a collection that begins meanwhile holds: the child waits
-// for the server, the server for the collection, the collection for the
-// child. So what a Launcher starts is the program itself, which is a file
-// of the image, with Arg: started so, it replaces itself with the program
-// that was meant (Replace), as a process of its own that holds nobody.
-// The same goes for the working directory of what is started, which
-// os/exec changes to between the fork and the execution: the process
-// that replaces itself changes to it.
-//
-// What is started is started as it would have been without a launcher,
-// with one difference besides: a signal that this process was itself
-// started ignoring, other than SIGHUP and SIGINT, is not ignored by what
-// a launcher starts. The Go program in between takes every other signal
-// for itself, and the execution sets what was taken back to its default.
+// A zathras mounts nothing and its container is given no capability, so
+// there is nothing to keep from what it starts: a process is started
+// from whichever thread starts it, and is the program that was meant
+// from the first. Whether it can gain privileges by executing a program
+// is the container's to say (allowPrivilegeEscalation), not the
+// launcher's. What a launcher still does about capabilities is warn: a
+// service that is root has every capability the container was given.
 package launcher
 
 import (
@@ -43,61 +28,6 @@ import (
 
 	"golang.org/x/term"
 )
-
-// Arg is the first argument of the program when it is started to replace
-// itself with another:
-//
-//	great-machine exec-in-place DIR PATH ARGV0 [ARG...]
-//
-// DIR is the working directory to change to first; empty, it stays where
-// it is.
-const Arg = "exec-in-place"
-
-// The exit status of a program that was to replace itself and could not,
-// as a shell has them.
-const (
-	statusNotExecuted = 126 // the program could not be executed
-	statusNotThere    = 127 // there is no such program
-)
-
-// Replace is called first thing in main, and in the TestMain of a test
-// that starts processes through a Launcher. When args are not those of
-// Arg it returns (0, false) at once. When they are, it changes to DIR,
-// unless that is empty, and replaces the process with the program at
-// PATH, with the arguments from ARGV0 on and the environment of the
-// process, and does not return; when that fails it says so on standard
-// error and returns the exit status, 127 for a program that is not there
-// and 126 for any other failure, and true.
-func Replace(args []string) (status int, was bool) {
-	if len(args) < 2 || args[1] != Arg {
-		return 0, false
-	}
-	if len(args) < 5 {
-		fmt.Fprintf(os.Stderr, "great-machine: %s is how a zathras starts a program: it takes DIR PATH ARGV0 [ARG...]\n", Arg)
-		return statusNotExecuted, true
-	}
-	dir, path := args[2], args[3]
-	if dir != "" {
-		if err := os.Chdir(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "great-machine: changing to the working directory %s: %v\n", dir, errors.Unwrap(err))
-			return statusNotExecuted, true
-		}
-	}
-	err := syscall.Exec(path, args[4:], os.Environ())
-	if !errors.Is(err, syscall.ENOENT) {
-		fmt.Fprintf(os.Stderr, "great-machine: executing %s: %v\n", path, err)
-		return statusNotExecuted, true
-	}
-	// The kernel says "no such file" also of a program that is there
-	// when what the program is to be loaded with is not: its interpreter,
-	// which for a program of a Nix store is in another store path.
-	if _, statErr := os.Stat(path); statErr == nil {
-		fmt.Fprintf(os.Stderr, "great-machine: executing %s: %v: the file is there, so what is missing is what it is loaded with, its interpreter\n", path, err)
-	} else {
-		fmt.Fprintf(os.Stderr, "great-machine: executing %s: %v\n", path, err)
-	}
-	return statusNotThere, true
-}
 
 // User is who a process runs as.
 type User struct{ UID, GID uint32 }
@@ -151,27 +81,21 @@ type Config struct {
 	Log *slog.Logger
 }
 
-// ErrClosed is what Start returns once the launcher was closed.
-var ErrClosed = errors.New("launcher: closed")
-
 // Launcher starts processes. Its methods may be called from any
 // goroutine.
 type Launcher struct {
 	user *User
 	log  *slog.Logger
-	// exe is the program itself, which is what every process is started
-	// as.
-	exe string
-	// thread is what a launcher is on Linux, and nothing elsewhere.
-	thread
 }
 
-// New returns a launcher. On Linux it starts the launcher's thread, which
-// drops CAP_SYS_ADMIN from its bounding set, takes it out of its
-// inheritable set, clears its ambient set and sets no_new_privs.
+// New returns a launcher.
 //
 // It fails when the processes are to run as another user and this
 // process is not root, which alone can start them so.
+//
+// It warns when the processes run as root and this process has
+// capabilities that a container does not have by default: they have
+// them too.
 func New(cfg Config) (*Launcher, error) {
 	l := &Launcher{user: cfg.User, log: cfg.Log}
 	if l.log == nil {
@@ -187,62 +111,52 @@ func New(cfg Config) (*Launcher, error) {
 		// would be to set its groups, which takes root as well.
 		l.user = nil
 	}
-	exe, err := self()
-	if err != nil {
-		return nil, fmt.Errorf("launcher: finding the program: %w", err)
-	}
-	l.exe = exe
-	if err := l.begin(); err != nil {
-		return nil, err
+	if asRoot(l.user, os.Geteuid()) {
+		bounding, err := boundingSet()
+		if err != nil {
+			// The warning is all the set is read for: a launcher that
+			// cannot warn starts processes all the same.
+			l.log.Warn("the capabilities of this process could not be read, so there is no saying whether the service and the shells, which run as root, have more than a container has by default", "error", err)
+		} else {
+			l.warn(bounding)
+		}
 	}
 	return l, nil
 }
 
-// Start starts cmd with start, which is cmd.Start or what calls it.
-// Before that it makes cmd the program itself, started with Arg to
-// change to the working directory of cmd and to replace itself with what
-// cmd was to run, and sets the user of Config. On Linux start runs on the
-// launcher's thread. Start returns what start returned.
-//
-// With a user, the standard streams of cmd that are pipes or terminals
-// are given to that user first, so that the program can open them anew
-// by their names, /dev/stdout or the terminal of its session, as it could
-// if it had made them. They have to be the command's when Start is
-// called: a terminal that start itself opens is not seen here.
-//
-// A program that cannot be executed, and a working directory that cannot
-// be changed to, are therefore no errors of Start: the process that was
-// to become the program says why on its standard error and ends, with
-// 127 for a program that is not there and 126 otherwise. A cmd whose Err
-// is set, for a name that was not found, is not started: Start returns
-// that error. Once the launcher is closed Start returns ErrClosed.
-func (l *Launcher) Start(cmd *exec.Cmd, start func() error) error {
-	if cmd.Err != nil {
-		return cmd.Err
+// asRoot says whether the processes of a launcher with user run as root,
+// in a process whose own user is euid.
+func asRoot(user *User, euid int) bool {
+	if user != nil {
+		return user.UID == 0
 	}
-	l.rewrite(cmd)
-	return l.run(start)
+	return euid == 0
 }
 
-// rewrite makes cmd the program itself, which is to change to the working
-// directory of cmd and to replace itself with the program of cmd, and
-// gives it the user of the launcher.
-func (l *Launcher) rewrite(cmd *exec.Cmd) {
-	argv := cmd.Args
-	if len(argv) == 0 {
-		// As os/exec has it for a command without arguments.
-		argv = []string{cmd.Path}
+// warn says which capabilities of bounding, the bounding set of this
+// process, a container does not have by default, when there are any: a
+// process that root starts has them. It is for a launcher whose
+// processes run as root.
+func (l *Launcher) warn(bounding uint64) {
+	if beyond := beyondDefault(bounding); len(beyond) > 0 {
+		l.log.Warn("the service and the shells run as root with capabilities that a container does not have by default, "+
+			"as in a privileged container: --user runs them as a user that has none",
+			"capabilities", strings.Join(beyond, " "))
 	}
-	args := make([]string, 0, 4+len(argv))
-	args = append(args, "great-machine", Arg, cmd.Dir, cmd.Path)
-	// os/exec gives a command that has a working directory and no
-	// environment of its own the environment of this process, with PWD
-	// naming the directory. The directory is no longer the command's
-	// when os/exec starts it, so that is done here.
-	if cmd.Env == nil && cmd.Dir != "" {
-		cmd.Env = cmd.Environ()
-	}
-	cmd.Path, cmd.Args, cmd.Dir = l.exe, append(args, argv...), ""
+}
+
+// Start starts cmd with start, which is cmd.Start or what calls it, and
+// returns what start returned.
+//
+// With a user, cmd is first given that user and the group, and no other
+// group, and the standard streams of cmd that are pipes or terminals are
+// given to that user, so that the program can open them anew by their
+// names, /dev/stdout or the terminal of its session, as it could if it
+// had made them. They have to be the command's when Start is called: a
+// terminal that start itself opens is not seen here.
+//
+// Without a user nothing of cmd is changed.
+func (l *Launcher) Start(cmd *exec.Cmd, start func() error) error {
 	if l.user != nil {
 		if cmd.SysProcAttr == nil {
 			cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -255,6 +169,7 @@ func (l *Launcher) rewrite(cmd *exec.Cmd) {
 			}
 		}
 	}
+	return start()
 }
 
 // give makes the user of the launcher the owner of f, when f is a pipe or
@@ -288,10 +203,4 @@ func isTerminal(f *os.File) bool {
 	is := false
 	raw.Control(func(fd uintptr) { is = term.IsTerminal(int(fd)) })
 	return is
-}
-
-// Close ends the launcher's thread. No Start may follow: one that does
-// returns ErrClosed. Close may be called more than once.
-func (l *Launcher) Close() {
-	l.end()
 }

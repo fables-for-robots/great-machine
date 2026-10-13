@@ -260,7 +260,7 @@ func TestRunZathrasRunsItsServiceThroughItsLauncherAndStopsItsStoreAfterIt(t *te
 				t.Fatalf("Shell: %v", err)
 			}
 			defer sh.Close()
-			if _, err := sh.Write([]byte("echo \"user=$(id -u).\"; grep NoNewPrivs /proc/self/status; exit\n")); err != nil {
+			if _, err := sh.Write([]byte("echo \"user=$(id -u).\"; exit\n")); err != nil {
 				t.Fatalf("writing to the shell: %v", err)
 			}
 			said, _ := io.ReadAll(sh)
@@ -273,19 +273,14 @@ func TestRunZathrasRunsItsServiceThroughItsLauncherAndStopsItsStoreAfterIt(t *te
 				t.Errorf("the shell does not run as user %d:\n%s", uid, said)
 			}
 			if asRoot {
-				// What was started through the launcher cannot gain
-				// privileges, and runs as the user that was asked for.
-				// What it has of capabilities is the launcher's own to
-				// test: here it is that the launcher is what starts.
+				// What was started through the launcher runs as the user
+				// that was asked for: with another user, that is what
+				// shows that the launcher is what starts. Whether a
+				// process can gain privileges is the container's to say,
+				// and not the launcher's any more.
 				status := statusOfProcess(t, z.State.PID)
-				if status["NoNewPrivs"] != "1" {
-					t.Errorf("NoNewPrivs of the service is %q, want 1: it was not started by the launcher", status["NoNewPrivs"])
-				}
 				if ids := strings.Fields(status["Uid"]); len(ids) == 0 || ids[0] != strconv.Itoa(uid) {
 					t.Errorf("the service runs as user %q, want %d", status["Uid"], uid)
-				}
-				if !strings.Contains(string(said), "NoNewPrivs:\t1") {
-					t.Errorf("the shell was not started by the launcher: it can gain privileges:\n%s", said)
 				}
 			}
 

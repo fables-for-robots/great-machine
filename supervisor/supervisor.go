@@ -36,9 +36,8 @@ type Config struct {
 	// returned. It is (*launcher.Launcher).Start. nil: the process is
 	// started as it is.
 	//
-	// Through a launcher a binary that cannot be executed is no failure
-	// to start: the process that was to become it ends with 127 or 126,
-	// having said why where the service writes.
+	// Its error is that of a binary that could not be started, as the
+	// error of cmd.Start is: a service that ended at once.
 	Start func(cmd *exec.Cmd, start func() error) error
 }
 

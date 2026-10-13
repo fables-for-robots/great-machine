@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/fables-for-robots/great-machine/launcher"
 )
 
 // program builds great-machine into a directory of the test and returns
@@ -43,48 +41,20 @@ func run(t *testing.T, program string, args ...string) (string, string, int) {
 	return out.String(), errOut.String(), status
 }
 
-// A zathras starts the service and the shells as the program itself with
-// exec-in-place, and the program then becomes what was meant: before it
-// reads a command, a flag or the environment.
-func TestTheProgramReplacesItself(t *testing.T) {
+// The program is its commands and nothing before them. exec-in-place, by
+// which a zathras had the program replace itself with a service or a
+// shell up to stage 4, is no command of it: a zathras starts what it
+// starts itself.
+func TestTheProgramIsItsCommands(t *testing.T) {
 	gm := program(t)
 
-	// The first argument of the program that was meant is the one given,
-	// and its exit status is the program's.
-	out, errOut, status := run(t, gm, launcher.Arg, "", "/bin/sh", "the-shell", "-c", `echo "$0"; exit 7`)
-	if out != "the-shell\n" || errOut != "" || status != 7 {
-		t.Errorf("as /bin/sh the program wrote %q and %q and ended with %d; want the shell's name, nothing and 7", out, errOut, status)
-	}
-	// What follows is the other program's: no flag of it is read here.
-	out, errOut, status = run(t, gm, launcher.Arg, "", "/bin/sh", "sh", "-c", `echo "$1 $2"`, "zero", "--data", "--help")
-	if out != "--data --help\n" || errOut != "" || status != 0 {
-		t.Errorf("with flags for /bin/sh the program wrote %q and %q and ended with %d; want the flags, nothing and 0", out, errOut, status)
-	}
-
-	// The working directory comes first, and is changed to before the
-	// program is executed: a path of the program that is not absolute is
-	// one in that directory.
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "here"), []byte("#!/bin/sh\npwd\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	out, errOut, status = run(t, gm, launcher.Arg, dir, "./here", "here")
-	if out != dir+"\n" || errOut != "" || status != 0 {
-		t.Errorf("in %s the program wrote %q and %q and ended with %d; want the directory, nothing and 0", dir, out, errOut, status)
-	}
-
-	nothing := filepath.Join(t.TempDir(), "nothing")
-	out, errOut, status = run(t, gm, launcher.Arg, "", nothing, "nothing")
-	if status != 127 || out != "" || !strings.Contains(errOut, "executing "+nothing) || !strings.Contains(errOut, "no such file") {
-		t.Errorf("as a program that is not there it wrote %q and %q and ended with %d; want the reason on standard error and 127", out, errOut, status)
-	}
-
-	// Without the argument it is the program it always was.
-	out, _, status = run(t, gm, "version")
+	out, _, status := run(t, gm, "version")
 	if status != 0 || strings.TrimSpace(out) == "" {
 		t.Errorf("version wrote %q and ended with %d", out, status)
+	}
+
+	out, errOut, status := run(t, gm, "exec-in-place", "", "/bin/sh", "sh", "-c", "echo the shell ran")
+	if status != 2 || strings.Contains(out+errOut, "the shell ran") || !strings.Contains(errOut, `unknown command "exec-in-place"`) {
+		t.Errorf("exec-in-place wrote %q and %q and ended with %d; want no shell, the refusal of an unknown command and 2", out, errOut, status)
 	}
 }

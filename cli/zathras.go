@@ -151,13 +151,12 @@ func readZathras(c *cli.Context) (zathrasConfig, error) {
 // nil.
 func runZathras(ctx context.Context, cfg zathrasConfig, log *slog.Logger) (err error) {
 	// What the service and the shells are started with comes first: a
-	// zathras that cannot keep the capability it mounts with from what it
-	// starts does not mount.
+	// zathras that cannot start them as the user of --user ends here,
+	// before anything of it is there.
 	starter, err := launcher.New(launcher.Config{User: cfg.user, Log: log})
 	if err != nil {
 		return err
 	}
-	defer starter.Close()
 
 	// The store, before anything that could use it. It is not dialed yet:
 	// draal is needed when a store path is first named.

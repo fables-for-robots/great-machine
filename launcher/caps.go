@@ -2,10 +2,6 @@ package launcher
 
 import "fmt"
 
-// capSysAdmin is CAP_SYS_ADMIN, which a zathras mounts its store with and
-// which nothing it starts is to have.
-const capSysAdmin = 21
-
 // capNames are the capabilities of Linux by their numbers.
 var capNames = [...]string{
 	0:  "CAP_CHOWN",
@@ -73,17 +69,4 @@ func beyondDefault(bounding uint64) []string {
 		}
 	}
 	return names
-}
-
-// refusalOf returns why a launcher cannot be when CAP_SYS_ADMIN was to be
-// dropped from the bounding set of its thread and dropErr came of it, and
-// nil when it can be: the capability was dropped, or the processes do not
-// run as root, and then have no capability whatever the set holds.
-func refusalOf(dropErr error, asRoot bool) error {
-	if dropErr == nil || !asRoot {
-		return nil
-	}
-	return fmt.Errorf("launcher: the service and the shells would have CAP_SYS_ADMIN, which this process mounts with: "+
-		"it could not be dropped from what they are started with (%w), which takes CAP_SETPCAP. "+
-		"Give the container CAP_SETPCAP, which it has unless it was taken away, or run them as a user that is not root, with --user", dropErr)
 }
