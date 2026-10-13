@@ -170,6 +170,24 @@ func await(t *testing.T, done <-chan attached) attached {
 	}
 }
 
+// buffer is a bytes.Buffer that a test may read while Attach writes it.
+type buffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (b *buffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *buffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
+}
+
 // pipe returns a pipe that is closed with the test.
 func pipe(t *testing.T) (r, w *os.File) {
 	t.Helper()
@@ -413,7 +431,7 @@ func TestAttachTerminal(t *testing.T) {
 	}
 	cooked := mode(t, tty)
 	s := newFakeSession(0)
-	var out bytes.Buffer
+	var out buffer
 	a := newAttachment(tty, &out, s)
 	done := start(context.Background(), a)
 
@@ -444,7 +462,12 @@ func TestAttachTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "what was typed", func() bool { return s.got() == "ls\r\x03" })
+
+	// What the session writes reaches out. It is waited for before the
+	// detach: once Attach has returned nothing is written to out, so what
+	// the session had written and Attach had not copied by then is dropped.
 	s.out <- []byte("file\r\n")
+	waitFor(t, "what the session wrote", func() bool { return out.String() == "file\r\n" })
 
 	// Ctrl-] ends Attach and is not sent, nor is what follows it.
 	if _, err := master.Write([]byte("x\x1dy")); err != nil {
