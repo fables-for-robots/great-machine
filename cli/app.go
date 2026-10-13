@@ -59,6 +59,7 @@ func commands() []*cli.Command {
 		shellCommand(),
 		accessCommand(),
 		tuiCommand(tuiDeps{in: os.Stdin, out: os.Stdout, run: tui.Run}),
+		webCommand(),
 		versionCommand(),
 	}
 }

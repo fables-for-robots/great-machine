@@ -128,6 +128,27 @@ func TestInvalidCommandLines(t *testing.T) {
 			[]string{"draal", "--data", d, "--s3-bucket", "packs", "--web-addr", "127.0.0.1:8080"}, "flag provided but not defined: -web-addr"},
 		{"draal: an argument", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "now"}, `draal takes no argument, got "now"`},
 
+		// web.
+		{"web: no --draal", nil, []string{"web", "--key", d + "/operator.key"}, "--draal is required: give it, or set GREAT_MACHINE_DRAAL"},
+		{"web: a bad --draal", nil, []string{"web", "--draal", "nonsense", "--key", d + "/operator.key"}, `--draal: "nonsense"`},
+		{"web: an --addr that is no address", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "--addr", "8080"},
+			`--addr: "8080" is not an address to listen on: want HOST:PORT, such as 127.0.0.1:8080`},
+		{"web: no --addr at all", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "--addr", ""},
+			`--addr: "" is not an address to listen on`},
+		// The page acts with the operator's key: it listens on loopback
+		// alone.
+		{"web: every address", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "--addr", ":8080"},
+			`--addr: ":8080" is not a loopback address: the page acts with the operator's key, and listens on this machine alone`},
+		{"web: every address of IPv4", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "--addr", "0.0.0.0:8080"},
+			`--addr: "0.0.0.0:8080" is not a loopback address`},
+		{"web: an address of the network", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "--addr", "10.1.2.3:8080"},
+			`--addr: "10.1.2.3:8080" is not a loopback address`},
+		{"web: a name that is not this machine's", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "--addr", "draal.example.com:8080"},
+			`--addr: "draal.example.com:8080" is not a loopback address`},
+		{"web: the variable stands in for --addr", map[string]string{"GREAT_MACHINE_WEB_ADDR": "[::]:8080"},
+			[]string{"web", "--draal", idA, "--key", d + "/operator.key"}, `--addr: "[::]:8080" is not a loopback address`},
+		{"web: an argument", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "now"}, `web takes no argument, got "now"`},
+
 		// zathras.
 		{"zathras: no --draal", nil, []string{"zathras", "--service", "web"}, "--draal is required: give it, or set GREAT_MACHINE_DRAAL"},
 		{"zathras: a bad --draal", nil, []string{"zathras", "--draal", "nonsense", "--service", "web"}, `--draal: "nonsense"`},
@@ -271,6 +292,45 @@ func TestParseSize(t *testing.T) {
 		if got, err := parseSize(text); err == nil {
 			t.Errorf("parseSize(%q) = %d, want an error", text, got)
 		}
+	}
+}
+
+// TestReadWeb: --addr has a default, its variable stands in for it, the
+// flag wins, and every loopback address is taken; --draal and --key are
+// those of every operator command.
+func TestReadWeb(t *testing.T) {
+	cleanEnvironment(t)
+	var got webConfig
+	reader := func(c *cli.Context) (err error) {
+		got, err = readWeb(c)
+		return err
+	}
+	args := []string{"--draal", idA, "--key", "operator.key"}
+	with := func(more ...string) []string { return append(append([]string{}, args...), more...) }
+
+	read(t, webCommand(), reader, args...)
+	if got.addr != "127.0.0.1:8080" || got.operator.draal != wire.ID(idA) || got.operator.key != "operator.key" {
+		t.Errorf("the defaults: got %+v, want 127.0.0.1:8080 and the draal and the key that were given", got)
+	}
+	for _, addr := range []string{"localhost:9000", "127.0.0.1:0", "[::1]:9000", "127.9.9.9:80"} {
+		read(t, webCommand(), reader, with("--addr", addr)...)
+		if got.addr != addr {
+			t.Errorf("--addr %s: got %q", addr, got.addr)
+		}
+	}
+	read(t, webCommand(), reader, with("--addr", " [::1]:9000 ")...)
+	if got.addr != "[::1]:9000" {
+		t.Errorf("an address with blanks around it: got %q, want [::1]:9000", got.addr)
+	}
+
+	t.Setenv("GREAT_MACHINE_WEB_ADDR", "localhost:8081")
+	read(t, webCommand(), reader, args...)
+	if got.addr != "localhost:8081" {
+		t.Errorf("the variable: got %q, want localhost:8081", got.addr)
+	}
+	read(t, webCommand(), reader, with("--addr", "127.0.0.1:8082")...)
+	if got.addr != "127.0.0.1:8082" {
+		t.Errorf("the flag over the variable: got %q, want 127.0.0.1:8082", got.addr)
 	}
 }
 

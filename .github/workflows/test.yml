@@ -73,7 +73,8 @@ jobs:
         run: |
           nix build --option allow-unsafe-native-code-during-evaluation true
           ./result/bin/great-machine version
-          # The program that Nix built has the page: its draal is asked for it.
+          # The program that Nix built has the page: its `web` is asked
+          # for it, with the link it prints.
           scripts/test-page.sh ./result/bin/great-machine
       # The image as a release builds it, and what a pod asks of it: that
       # it has an empty /nix/store for the store of the pod, and runs with
@@ -87,5 +88,5 @@ jobs:
             -c 'test -d /nix/store && test -z "$(ls -A /nix/store)" && test -d /var/cache/great-machine'
           docker run --rm --tmpfs /nix/store --entrypoint sh ghcr.io/fables-for-robots/great-machine:nix \
             -c 'test -d /tmp && test -s /etc/ssl/certs/ca-certificates.crt'
-          # The draal of the image has the page.
+          # The program of the image has the page.
           scripts/test-page.sh --image ghcr.io/fables-for-robots/great-machine:nix
