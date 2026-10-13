@@ -23,7 +23,8 @@ type fakeDraal struct {
 	gone   bool             // the watch ends after the last fleet, as when draal goes away
 	lines  []wire.LogLine   // what logs is answered
 	answer wire.RolloutInfo // what rollout and rollback are answered
-	refuse error            // or this, if it is set
+	refuse error            // or this, if it is set; a grant and a revocation are refused with it too
+	grants []wire.Grant     // what grants is answered
 
 	mu       sync.Mutex
 	requests []wire.Request
@@ -96,6 +97,17 @@ func (f *fakeDraal) serve(s node.Stream) {
 		if !f.gone {
 			hold()
 			return
+		}
+	case req.Grants != nil:
+		wire.Write(s, &wire.Response{Grants: &wire.GrantList{Grants: f.grants}})
+	case req.Grant != nil || req.Revoke != nil:
+		switch {
+		case f.refuse != nil:
+			wire.WriteError(s, f.refuse)
+		case req.Grant != nil:
+			wire.Write(s, &wire.Response{Granted: &wire.Granted{}})
+		default:
+			wire.Write(s, &wire.Response{Revoked: &wire.Revoked{}})
 		}
 	case req.Logs != nil:
 		for i := range f.lines {
@@ -193,7 +205,7 @@ var variables = []string{
 	"GREAT_MACHINE_DRAAL", "GREAT_MACHINE_SERVICE", "GREAT_MACHINE_NAME",
 	"GREAT_MACHINE_SHELL", "GREAT_MACHINE_STOP_TIMEOUT", "GREAT_MACHINE_HEALTH_ADDR",
 	"GREAT_MACHINE_KEY", "GREAT_MACHINE_PARALLEL", "GREAT_MACHINE_DETACH", "GREAT_MACHINE_JOBS",
-	"GREAT_MACHINE_TEMP_DIR", "GREAT_MACHINE_FOLLOW", "GREAT_MACHINE_ROLE_KEY",
+	"GREAT_MACHINE_TEMP_DIR", "GREAT_MACHINE_FOLLOW", "GREAT_MACHINE_ROLE_KEY", "GREAT_MACHINE_ADMINS",
 	"GREAT_MACHINE_STORE_CACHE", "GREAT_MACHINE_NO_STORE", "GREAT_MACHINE_USER",
 }
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -90,9 +91,23 @@ func arguments(c *cli.Context, min int, names ...string) ([]string, error) {
 		return nil, usageError("%s: unexpected argument %q", c.Command.Name, args[len(names)])
 	}
 	if len(args) < min {
-		return nil, usageError("%s: %s is missing; usage: great-machine %s %s", c.Command.Name, names[len(args)], c.Command.Name, c.Command.ArgsUsage)
+		return nil, usageError("%s: %s is missing; usage: %s %s", c.Command.Name, names[len(args)], commandPath(c), c.Command.ArgsUsage)
 	}
 	return args, nil
+}
+
+// commandPath returns the command of c as it is typed, with the name of
+// the program before it: "great-machine access grant" for the grant of
+// access.
+func commandPath(c *cli.Context) string {
+	var names []string
+	for _, ctx := range c.Lineage() {
+		if ctx.Command != nil && ctx.Command.Name != "" {
+			names = append(names, ctx.Command.Name)
+		}
+	}
+	slices.Reverse(names)
+	return strings.Join(names, " ")
 }
 
 // noArguments refuses any argument, for a command that takes none.

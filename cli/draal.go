@@ -46,8 +46,11 @@ func draalCommand() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "data", EnvVars: []string{"GREAT_MACHINE_DATA"},
 				Usage: "`DIR`ectory of draal: its key (created on first run) and its database (required)"},
-			&cli.StringSliceFlag{Name: "operator", EnvVars: []string{"GREAT_MACHINE_OPERATORS"},
-				Usage: "endpoint `ID` that may act as an operator, as `great-machine id` prints it; may be repeated, and the variable takes several with commas between them"},
+			&cli.StringSliceFlag{Name: "admin", EnvVars: []string{"GREAT_MACHINE_ADMINS"},
+				Usage: "endpoint `ID` of an admin, as `great-machine id` prints it: an admin whatever was granted, whom no request revokes; may be repeated, and the variable takes several with commas between them. The flag was --operator and the variable GREAT_MACHINE_OPERATORS, and both are still taken"},
+			// The name the flag had up to v0.3.0: who was an operator is
+			// an admin.
+			&cli.StringSliceFlag{Name: "operator", EnvVars: []string{"GREAT_MACHINE_OPERATORS"}, Hidden: true},
 			&cli.StringFlag{Name: "s3-bucket", EnvVars: []string{"GREAT_MACHINE_S3_BUCKET"},
 				Usage: "`NAME` of the bucket the store keeps its packs in (required)"},
 			&cli.StringFlag{Name: "s3-prefix", EnvVars: []string{"GREAT_MACHINE_S3_PREFIX"},
@@ -125,15 +128,17 @@ func readDraal(c *cli.Context) (draalConfig, error) {
 	}
 	// The library has cut the values at their commas already. What is
 	// left empty by a comma too many, or by a space, is not an ID.
-	for _, text := range c.StringSlice("operator") {
-		if text = strings.TrimSpace(text); text == "" {
-			continue
+	for _, flag := range []string{"admin", "operator"} {
+		for _, text := range c.StringSlice(flag) {
+			if text = strings.TrimSpace(text); text == "" {
+				continue
+			}
+			id, err := node.ParseID(text)
+			if err != nil {
+				return draalConfig{}, usageError("--%s: %q is not an endpoint ID, as `great-machine id` prints one: %w", flag, text, err)
+			}
+			cfg.operators = append(cfg.operators, id)
 		}
-		id, err := node.ParseID(text)
-		if err != nil {
-			return draalConfig{}, usageError("--operator: %q is not an endpoint ID, as `great-machine id` prints one: %w", text, err)
-		}
-		cfg.operators = append(cfg.operators, id)
 	}
 	if cfg.store, err = readStore(c); err != nil {
 		return draalConfig{}, err
