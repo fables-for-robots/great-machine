@@ -103,7 +103,9 @@ func TestAccessCommandLines(t *testing.T) {
 		{"an admin of a service", []string{"access", "grant", "--draal", idA, "--service", "web", "admin", idB}, "an admin is of every service: --service is for a deployer and a zathras"},
 		{"a service that is none", []string{"access", "revoke", "--draal", idA, "--service", "Web", "deployer", idB}, `"Web" is not the name of a service`},
 		{"an argument too many", []string{"access", "revoke", "--draal", idA, "deployer", idB, "web"}, `revoke: unexpected argument "web"`},
-		{"a flag behind the arguments", []string{"access", "grant", "--draal", idA, "deployer", idB, "--service", "web"}, "the flag --service has to come before ROLE"},
+		{"a flag behind the arguments that is none of a grant", []string{"access", "grant", "deployer", idB, "--draal", idA}, "the flag --draal has to come before ROLE"},
+		{"a flag behind the arguments with no value", []string{"access", "grant", "--draal", idA, "deployer", idB, "--service"}, "grant: the flag --service takes a value"},
+		{"an admin of a service, named behind", []string{"access", "grant", "--draal", idA, "admin", idB, "--service", "web"}, "an admin is of every service: --service is for a deployer and a zathras"},
 		{"list with an argument", []string{"access", "list", "--draal", idA, "all"}, `list takes no argument, got "all"`},
 		{"no draal", []string{"access", "list"}, "--draal is required"},
 	} {
@@ -116,6 +118,55 @@ func TestAccessCommandLines(t *testing.T) {
 			}
 			if stdout.Len() != 0 {
 				t.Errorf("stdout is %q, want nothing", stdout.String())
+			}
+		})
+	}
+}
+
+// A grant is written with its service and its note behind the role and
+// the ID, as draal's refusals, the page and the README write it, and the
+// two may as well come before them, as the flags of every other command
+// do.
+func TestAccessGrantWithItsFlagsBehindTheArguments(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		want grantLine
+	}{
+		{"behind", []string{"grant", "--draal", idA, "zathras", idB, "--service", "web", "--note", "the pods of web"},
+			grantLine{id: wire.ID(idB), role: wire.RoleZathras, service: "web", note: "the pods of web"}},
+		{"behind, with =", []string{"grant", "--draal", idA, "deployer", idB, "--service=web", "--note=ci"},
+			grantLine{id: wire.ID(idB), role: wire.RoleDeployer, service: "web", note: "ci"}},
+		{"before", []string{"grant", "--draal", idA, "--service", "web", "--note", "ci", "deployer", idB},
+			grantLine{id: wire.ID(idB), role: wire.RoleDeployer, service: "web", note: "ci"}},
+		{"one before and one behind", []string{"grant", "--draal", idA, "--note", "ci", "deployer", idB, "--service", "api"},
+			grantLine{id: wire.ID(idB), role: wire.RoleDeployer, service: "api", note: "ci"}},
+		{"behind wins over before", []string{"grant", "--draal", idA, "--service", "web", "deployer", idB, "--service", "api"},
+			grantLine{id: wire.ID(idB), role: wire.RoleDeployer, service: "api"}},
+		{"none", []string{"grant", "--draal", idA, "deployer", idB},
+			grantLine{id: wire.ID(idB), role: wire.RoleDeployer}},
+		{"a revocation, behind", []string{"revoke", "--draal", idA, "zathras", idB, "--service", "web"},
+			grantLine{id: wire.ID(idB), role: wire.RoleZathras, service: "web"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cleanEnvironment(t)
+			var got grantLine
+			cmd := accessCommand()
+			for _, sub := range cmd.Subcommands {
+				sub.Action = func(c *cli.Context) error {
+					var err error
+					got, err = readGrant(c)
+					return err
+				}
+			}
+			var stdout, stderr bytes.Buffer
+			app := newApp(&stdout, &stderr)
+			app.Commands = []*cli.Command{cmd}
+			if status := run(context.Background(), app, append([]string{"great-machine", "access"}, tt.args...)); status != 0 {
+				t.Fatalf("the exit status is %d, stderr: %s", status, stderr.String())
+			}
+			if got != tt.want {
+				t.Errorf("read %+v, want %+v", got, tt.want)
 			}
 		})
 	}

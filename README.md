@@ -205,7 +205,9 @@ great-machine access list
 | `great-machine version` | prints the version of the program |
 
 Every flag has an environment variable, and a flag wins over its variable.
-Flags come before the arguments. A command ends with 0, with 1 when it
+Flags come before the arguments; the `--service` and the `--note` of
+`access grant` and `access revoke` may also follow them, as they are
+written here. A command ends with 0, with 1 when it
 failed, and with 2 when its command line was not valid.
 
 `ZATHRAS` is a name or the beginning of one, or the beginning of an

@@ -52,7 +52,7 @@ func accessCommand() *cli.Command {
 				Flags: operatorFlags(service(),
 					&cli.StringFlag{Name: "note", Usage: "`TEXT` that is kept beside the grant, such as whose key it is"}),
 				Action: func(c *cli.Context) error {
-					id, role, of, err := readGrant(c)
+					g, err := readGrant(c)
 					if err != nil {
 						return err
 					}
@@ -61,7 +61,7 @@ func accessCommand() *cli.Command {
 						return err
 					}
 					defer client.Close()
-					return runAccessGrant(c.Context, client, wire.GrantRequest{ID: id, Role: role, Service: of, Note: c.String("note")}, c.App.Writer)
+					return runAccessGrant(c.Context, client, wire.GrantRequest{ID: g.id, Role: g.role, Service: g.service, Note: g.note}, c.App.Writer)
 				},
 			},
 			{
@@ -70,7 +70,7 @@ func accessCommand() *cli.Command {
 				ArgsUsage: "ROLE ID",
 				Flags:     operatorFlags(service()),
 				Action: func(c *cli.Context) error {
-					id, role, of, err := readGrant(c)
+					g, err := readGrant(c)
 					if err != nil {
 						return err
 					}
@@ -79,41 +79,66 @@ func accessCommand() *cli.Command {
 						return err
 					}
 					defer client.Close()
-					return runAccessRevoke(c.Context, client, wire.RevokeRequest{ID: id, Role: role, Service: of}, c.App.Writer)
+					return runAccessRevoke(c.Context, client, wire.RevokeRequest{ID: g.id, Role: g.role, Service: g.service}, c.App.Writer)
 				},
 			},
 		},
 	}
 }
 
-// readGrant reads ROLE, ID and --service of grant and of revoke, and
-// --draal with them, before anything is dialed.
-func readGrant(c *cli.Context) (wire.ID, wire.Role, string, error) {
-	args, err := arguments(c, 2, "ROLE", "ID")
-	if err != nil {
-		return "", "", "", err
-	}
-	role := wire.Role(args[0])
-	if err := wire.ValidRole(role); err != nil {
-		return "", "", "", usageError("%s", err.(*wire.Error).Message)
-	}
-	id, err := node.ParseID(args[1])
-	if err != nil {
-		return "", "", "", usageError("%q is not an endpoint ID, as `great-machine id` prints one: %w", args[1], err)
-	}
-	of := c.String("service")
-	if of != "" {
-		if role == wire.RoleAdmin {
-			return "", "", "", usageError("an admin is of every service: --service is for a deployer and a zathras")
+// grantLine is what the command line of grant and of revoke says.
+type grantLine struct {
+	id      wire.ID
+	role    wire.Role
+	service string // "": every service
+	note    string // of a grant alone
+}
+
+// readGrant reads ROLE, ID, --service and --note of grant and of revoke,
+// and --draal with them, before anything is dialed. The service and the
+// note may come behind ROLE and ID, which is how a grant is written by
+// draal's refusals, by the page and by the README: what comes behind
+// wins over what came before.
+func readGrant(c *cli.Context) (grantLine, error) {
+	var flags []string
+	for _, f := range c.Command.Flags {
+		if name := f.Names()[0]; name == "service" || name == "note" {
+			flags = append(flags, name)
 		}
-		if of, err = service(of); err != nil {
-			return "", "", "", err
+	}
+	rest, values, err := behind(c, flags...)
+	if err != nil {
+		return grantLine{}, err
+	}
+	args, err := argumentsOf(c, rest, 2, "ROLE", "ID")
+	if err != nil {
+		return grantLine{}, err
+	}
+	g := grantLine{role: wire.Role(args[0]), service: c.String("service"), note: c.String("note")}
+	if value, ok := values["service"]; ok {
+		g.service = value
+	}
+	if value, ok := values["note"]; ok {
+		g.note = value
+	}
+	if err := wire.ValidRole(g.role); err != nil {
+		return grantLine{}, usageError("%s", err.(*wire.Error).Message)
+	}
+	if g.id, err = node.ParseID(args[1]); err != nil {
+		return grantLine{}, usageError("%q is not an endpoint ID, as `great-machine id` prints one: %w", args[1], err)
+	}
+	if g.service != "" {
+		if g.role == wire.RoleAdmin {
+			return grantLine{}, usageError("an admin is of every service: --service is for a deployer and a zathras")
+		}
+		if g.service, err = service(g.service); err != nil {
+			return grantLine{}, err
 		}
 	}
 	if _, err := draalID(c); err != nil {
-		return "", "", "", err
+		return grantLine{}, err
 	}
-	return id, role, of, nil
+	return g, nil
 }
 
 // shortID is the beginning of an endpoint ID, as the tables have it.
