@@ -140,6 +140,86 @@ export interface LogLine {
   lost?: number;
 }
 
+/** What a key was granted. An admin does everything; a deployer pushes
+ *  and rolls out, and looks at what it rolled out; the grant of a zathras
+ *  is held by a role key, which signs for the pods of a service. */
+export type Role = "admin" | "deployer" | "zathras";
+
+/** A role that a key was given, for a service or for every service. A
+ *  key has as many grants as it was given. */
+export interface Grant {
+  id: ID;
+  /** One of the three roles. draal sends no other; the type of the
+   *  sender has no guard, so the page writes one it does not know as it
+   *  came. */
+  role: Role | string;
+  /** The service the role is of; absent for every service, which an
+   *  admin always is of. */
+  service?: string;
+  /** What a person wrote beside the grant. */
+  note?: string;
+  /** The admin who granted it; absent for an admin of draal's command
+   *  line. */
+  by?: ID;
+  /** When it was granted; the zero time for an admin of the command
+   *  line. */
+  at: Time;
+  /** An admin of draal's command line, which no request revokes. */
+  fixed?: boolean;
+}
+
+/** The answer of /api/grants: the admins of the command line first, then
+ *  the grants by role, service and ID. */
+export interface GrantList {
+  grants: Grant[];
+}
+
+/** The answer of /api/me: the endpoint ID of the key the page asks draal
+ *  with, and what it was granted. */
+export interface Identity {
+  id: ID;
+  grants: Grant[];
+}
+
+/** What is sent to /api/grants to grant a role. No service is every
+ *  service. */
+export interface GrantRequest {
+  id: ID;
+  role: Role;
+  service?: string;
+  note?: string;
+}
+
+/** The roles, in the order the page names them. */
+export const ROLES: readonly Role[] = ["admin", "deployer", "zathras"];
+
+/** Says whether r is one of the three roles. */
+export function isRole(r: unknown): r is Role {
+  return r === "admin" || r === "deployer" || r === "zathras";
+}
+
+/** The grants of an answer as a list: null and what is no list are an
+ *  empty one, and what is no grant (it has no ID or no role) is left
+ *  out. */
+export function normaliseGrants(v: unknown): Grant[] {
+  if (!Array.isArray(v)) {
+    return [];
+  }
+  return v.filter((g): g is Grant => {
+    if (typeof g !== "object" || g === null) {
+      return false;
+    }
+    const { id, role } = g as { id?: unknown; role?: unknown };
+    return typeof id === "string" && typeof role === "string";
+  });
+}
+
+/** Who a key is, of an answer of /api/me, with its grants a list. */
+export function normaliseIdentity(v: unknown): Identity {
+  const raw = typeof v === "object" && v !== null ? (v as { id?: unknown; grants?: unknown }) : {};
+  return { id: typeof raw.id === "string" ? raw.id : "", grants: normaliseGrants(raw.grants) };
+}
+
 /** A refusal: the body of an HTTP answer that is one, and the last
  *  message of a socket that ends with one. */
 export interface Refusal {

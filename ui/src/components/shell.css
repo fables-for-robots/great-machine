@@ -39,46 +39,6 @@
   overflow-wrap: anywhere;
 }
 
-/* The button of the design system: blocky, black on white or white on
-   black, a pixel up when the pointer is on it. */
-.button {
-  font-family: var(--ffr-font-display);
-  font-weight: 700;
-  font-size: 13px;
-  padding: 8px 16px;
-  border-radius: var(--ffr-radius-sm);
-  border: 1.5px solid var(--fg);
-  background: var(--fg);
-  color: var(--bg);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: transform var(--ffr-duration-fast) var(--ffr-ease-standard);
-}
-
-.button:hover:not(:disabled) {
-  transform: translateY(-1px);
-}
-
-.button.quiet {
-  background: transparent;
-  color: var(--fg);
-  padding: 5px 12px;
-  font-size: 12px;
-}
-
-.button:disabled {
-  background: var(--surface-strong);
-  border-color: var(--border);
-  color: var(--fg-subtle);
-  cursor: not-allowed;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .button {
-    transition: none;
-  }
-}
-
 .shell-box {
   height: 440px;
   border: 1px solid var(--border);
