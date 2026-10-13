@@ -285,9 +285,9 @@ with its own environment and working directory, and:
   the pack cache, `packs/` under `--store-cache`, written out, and moved
   to its name when all of it is on disk. A store path under its name
   in `/nix/store` is whole, and one that is there is not fetched again.
-  While it is written it is `/nix/store/.great-machine-partial-NAME`,
-  beside its name; what a zathras was writing when it ended is removed
-  when it next starts.
+  While it is written it is beside its name, as
+  `/nix/store/.great-machine-partial-` and a number; what a zathras was
+  writing when it ended is removed when it next starts.
 - **What is written out is what a Nix store holds**: directories and
   the files that can be executed with mode `0555`, every other file with
   `0444`, symbolic links as they are, all of it owned by zathras. A

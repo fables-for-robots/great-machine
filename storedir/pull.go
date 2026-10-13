@@ -116,15 +116,19 @@ func (s *Store) pull(ctx context.Context, name string) (client.PullResult, error
 // attempt pulls the reference of name once, in AttemptTimeout at the
 // most. A failure costs the connection it happened on, unless it is an
 // answer of the store, that it has no such reference or one that cannot
-// be written out, or the end of ctx.
+// be written out, or the end of ctx: an attempt that took too long has
+// failed like any other.
 func (s *Store) attempt(ctx context.Context, name string) (client.PullResult, error) {
-	c, gen, err := s.connect()
+	c, gen, err := s.connect(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return client.PullResult{}, ctx.Err()
+		}
 		return client.PullResult{}, fmt.Errorf("dialing the store: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(ctx, s.cfg.AttemptTimeout)
+	limited, cancel := context.WithTimeout(ctx, s.cfg.AttemptTimeout)
 	defer cancel()
-	res, err := c.Pull(ctx, s.objects, s.prefix+name, client.PullOptions{
+	res, err := c.Pull(limited, s.objects, s.prefix+name, client.PullOptions{
 		// Asked before anything is downloaded.
 		Accept: func(root key.Key) error {
 			if err := accept(root); err != nil {
@@ -140,54 +144,71 @@ func (s *Store) attempt(ctx context.Context, name string) (client.PullResult, er
 	return res, err
 }
 
-// enter notes a fetch that is about to pull, and leave one that has: the
-// connection is closed when no fetch has it or may get it.
-func (s *Store) enter() {
-	s.mu.Lock()
-	s.pulling++
-	s.mu.Unlock()
+// dial is one dial of the store, which everybody who needs the connection
+// meanwhile waits for: its failure is theirs as its connection is.
+type dial struct {
+	done chan struct{} // closed when the dial has ended
+	conn conn          // read after done
+	gen  uint64
+	err  error
 }
 
-func (s *Store) leave() {
+// connect returns the connection to the store, and which of the
+// connections that were dialed it is. When there is none it waits for the
+// dial that is under way, which it begins if none is, and gives up with
+// ctx; the dial goes on for the others.
+func (s *Store) connect(ctx context.Context) (conn, uint64, error) {
 	s.mu.Lock()
-	s.pulling--
-	var c conn
-	if s.pulling == 0 {
-		c, s.conn = s.conn, nil
-	}
-	s.mu.Unlock()
-	if c != nil {
-		c.Close()
-	}
-}
-
-// connect returns the connection to the store, dialing it if there is
-// none, and which of the connections that were dialed it is. The dial has
-// DialTimeout, and ends with the store: one pull that is ended does not
-// end the dial the others wait for.
-func (s *Store) connect() (conn, uint64, error) {
-	s.dialing.Lock()
-	defer s.dialing.Unlock()
-	s.mu.Lock()
-	c, gen := s.conn, s.connGen
-	s.mu.Unlock()
-	if c != nil {
+	if s.conn != nil {
+		c, gen := s.conn, s.connGen
+		s.mu.Unlock()
 		return c, gen, nil
 	}
+	d := s.dialing
+	if d == nil {
+		d = &dial{done: make(chan struct{})}
+		s.dialing = d
+		// Counted with the fetches, of which the caller is one: Close
+		// waits for it.
+		s.running.Add(1)
+		go s.dialOnce(d)
+	}
+	s.mu.Unlock()
+	select {
+	case <-d.done:
+		return d.conn, d.gen, d.err
+	case <-ctx.Done():
+		return nil, 0, ctx.Err()
+	}
+}
+
+// dialOnce dials the store for d, in DialTimeout at the most. The dial
+// ends with the store and with nothing else: one fetch that is ended does
+// not end the dial the others wait for.
+func (s *Store) dialOnce(d *dial) {
+	defer s.running.Done()
 	ctx, cancel := context.WithTimeout(s.ctx, s.cfg.DialTimeout)
 	defer cancel()
 	c, err := s.dial(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	if c == nil {
-		return nil, 0, errors.New("no connection and no error")
+	if err == nil && c == nil {
+		err = errors.New("no connection and no error")
 	}
 	s.mu.Lock()
-	s.connGen++
-	s.conn, gen = c, s.connGen
+	s.dialing = nil
+	// Every fetch that waited has given up, or the store is closed:
+	// nobody is left to use the connection, or to close it.
+	unwanted := err == nil && (len(s.fetches) == 0 || s.closed)
+	if err == nil && !unwanted {
+		s.connGen++
+		s.conn, d.conn, d.gen = c, c, s.connGen
+	}
 	s.mu.Unlock()
-	return c, gen, nil
+	if unwanted {
+		c.Close()
+		err = errClosed
+	}
+	d.err = err
+	close(d.done)
 }
 
 // drop closes the connection a pull failed on, unless it is gone already:

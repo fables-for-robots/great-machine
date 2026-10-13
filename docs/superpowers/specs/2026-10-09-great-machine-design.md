@@ -606,7 +606,7 @@ every address: the kubelet asks at the address of the pod, not on loopback.
   that zathras fills, and nothing is mounted on it. A store path is
   pulled from draal's store, by a key of the store directory's own, and
   written out beside its name, as
-  `/nix/store/.great-machine-partial-NAME`. It is moved to
+  `/nix/store/.great-machine-partial-` and a number. It is moved to
   `/nix/store/NAME` when all of it is on disk: a store path under its
   name is a store path that is whole. Whatever in `/nix/store` begins
   with `.great-machine-partial-` is what an earlier run was writing when

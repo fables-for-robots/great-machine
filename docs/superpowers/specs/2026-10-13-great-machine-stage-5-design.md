@@ -90,12 +90,14 @@ The mount of stage 4 is gone, and the word with it.
 |---|---|
 | `packs/` under `--store-cache` | the pack cache: every object that was pulled, for as long as the directory lives |
 | `/nix/store/NAME` | a store path, written out |
-| `/nix/store/.great-machine-partial-NAME` | a store path that is being written |
+| `/nix/store/.great-machine-partial-N` | a store path that is being written, `N` a number |
 
 - **A name in the store directory is a store path that is whole.** A
-  store path is written beside its name, as `.great-machine-partial-NAME`,
-  and moved to its name when all of it is on disk (§3.3). The move is
-  the record: there is no list of what was fetched.
+  store path is written beside its name, as `.great-machine-partial-`
+  and a number, and moved to its name when all of it is on disk (§3.3).
+  The move is the record: there is no list of what was fetched. It is a
+  number and not the name of the store path, which may be as long as a
+  name can be.
 - **What is being written is beside its name, and in no directory of its
   own.** A directory nobody may write to can be moved within its
   directory; into another only root moves it, since that move writes its
@@ -185,7 +187,10 @@ A reference has a root, which is a tree or the content of one file.
   as it is written), the tree is moved to `/nix/store/NAME`, and the
   store directory is synced. A pod's volume outlives a node that lost
   its power, and a name in the store directory must not be a tree whose
-  files did not reach the disk.
+  files did not reach the disk. A store directory that cannot be synced
+  fails the fetch, with what the disk said, and leaves the store path
+  under its name: it is whole, and was on disk before it was moved.
+  Nothing is ever removed under the name of a store path.
 - A directory is given its mode and its time when what is in it is
   written, so that a directory that cannot be written to does not stand
   in the way of its own content.
@@ -202,7 +207,10 @@ A reference has a root, which is a tree or the content of one file.
 - **One connection serves every pull.** It is dialed when a pull first
   needs it, with 30 seconds for the dial, and closed when no fetch is
   under way. A pull that fails costs the connection it failed on; the
-  next attempt dials again.
+  next attempt dials again. A dial that fails has failed for every fetch
+  that waited for it: a store that cannot be reached is not dialed once
+  for each of them, one after another. A fetch that was ended does not
+  wait for a dial.
 - **A pull downloads what the pack cache lacks.** The store names the
   pack of the reference and that pack's parent. jaccard-store's client
   downloads nothing when the cache holds every object of the reference,
@@ -220,8 +228,9 @@ A reference has a root, which is a tree or the content of one file.
   rollouts of that service have pushed. It is not tried again.
 - **Any other failure is tried again**: after 1 second, then after twice
   as long each time up to 15 seconds, until 2 minutes have passed since
-  the first failure. One attempt has an hour. Then the fetch fails with
-  what the last attempt said. These are the times of the mount, and
+  the first failure. One attempt has an hour, and one that took longer
+  has failed like any other. Then the fetch fails with what the last
+  attempt said. These are the times of the mount, and
   values of the package that the tests make short.
 
 ### 3.5 Start and end

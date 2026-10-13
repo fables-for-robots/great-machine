@@ -154,10 +154,18 @@ func (s *Store) run(name string, f *fetch) {
 		err = errClosed
 	}
 	// The fetch leaves the table before those who waited are answered:
-	// whoever then finds the store path missing begins a new one.
+	// whoever then finds the store path missing begins a new one. With
+	// the last fetch goes the connection to the store.
 	s.mu.Lock()
 	delete(s.fetches, name)
+	var c conn
+	if len(s.fetches) == 0 {
+		c, s.conn = s.conn, nil
+	}
 	s.mu.Unlock()
+	if c != nil {
+		c.Close()
+	}
 	f.err = err
 	f.cancel()
 	close(f.done)
@@ -180,19 +188,14 @@ func (s *Store) fetch(ctx context.Context, name string) error {
 	dest := filepath.Join(s.dir, name)
 	began := time.Now()
 
-	s.enter()
 	res, err := s.pull(ctx, name)
-	s.leave()
 	if err != nil {
 		return err
 	}
 
-	partial := filepath.Join(s.dir, partialPrefix+name)
-	// Nothing is there: a fetch removes what it wrote when it fails, and
-	// Open what a run left. This is for what neither saw.
-	if err := removeTree(partial); err != nil {
-		return fmt.Errorf("%s could not be written out: %w", dest, err)
-	}
+	// A name of its own for every store path that is written: nothing is
+	// there, since Open removed what an earlier run left.
+	partial := filepath.Join(s.dir, fmt.Sprintf("%s%d", partialPrefix, s.partials.Add(1)))
 	if err := writeOut(ctx, s.objects.Get, res.Root, partial); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -202,10 +205,15 @@ func (s *Store) fetch(ctx context.Context, name string) error {
 	if err := os.Rename(partial, dest); err != nil {
 		return errors.Join(fmt.Errorf("%s could not be written out: %w", dest, err), removeTree(partial))
 	}
-	if err := syncDir(s.dir); err != nil {
-		// The move may not be on disk, so the store path does not count,
-		// and is not left where the next run would take it for whole.
-		return errors.Join(fmt.Errorf("%s could not be written out: %w", dest, err), removeTree(dest))
+	if err := s.cfg.syncDir(s.dir); err != nil {
+		// The store path is whole and was on disk before it was moved:
+		// what may not be on disk is the move, without which the next
+		// run finds a name that begins with partialPrefix, and removes
+		// it. So the store path stays where it is, and is found there
+		// when it is asked for again. It is not removed under its name:
+		// a removal that is cut short would leave half a store path
+		// where a whole one is expected.
+		return fmt.Errorf("%s was written out, and the move to its name may not outlast a loss of power: %w", dest, err)
 	}
 	s.log.Info("fetched", "path", dest, "packs", res.Packs, "objects", res.Objects, "bytes", res.Bytes,
 		"took", time.Since(began).Round(time.Millisecond))

@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -41,10 +42,12 @@ const (
 	// packsDir is the pack cache, in the cache directory.
 	packsDir = "packs"
 	// partialPrefix begins the name a store path is written under, beside
-	// the name it is moved to when it is whole. It is beside it, and in
-	// no directory of its own, because a directory nobody may write to
-	// can be moved within its directory and not out of it: the move to
-	// another directory writes its "..", which only root may then. No
+	// the name it is moved to when it is whole: the prefix and a number.
+	// It is beside it, and in no directory of its own, because a
+	// directory nobody may write to can be moved within its directory and
+	// not out of it: the move to another directory writes its "..",
+	// which only root may then. It is a number and not the name of the
+	// store path, because that name may be as long as a name can be. No
 	// store path has a name that begins with a dot.
 	partialPrefix = ".great-machine-partial-"
 )
@@ -81,6 +84,9 @@ type Config struct {
 	// wrapDial is for tests: it is given what dials the store and returns
 	// what the store dials with.
 	wrapDial func(func(context.Context) (conn, error)) func(context.Context) (conn, error)
+	// syncDir is for tests: what syncs the store directory when a store
+	// path was moved to its name. nil: syncDir.
+	syncDir func(dir string) error
 }
 
 // withDefaults returns cfg with every zero value replaced by its default.
@@ -108,6 +114,9 @@ func (cfg Config) withDefaults() Config {
 	}
 	if cfg.Log == nil {
 		cfg.Log = slog.Default()
+	}
+	if cfg.syncDir == nil {
+		cfg.syncDir = syncDir
 	}
 	return cfg
 }
@@ -172,11 +181,15 @@ type Store struct {
 	fetches map[string]*fetch // by the name of the store path
 	running sync.WaitGroup    // the fetches
 
-	// dialing is held while the store is dialed: one dial at a time.
-	dialing sync.Mutex
+	// The connection to the store, under mu. It is there while a fetch
+	// is under way, from the first that needs it, and closed when the
+	// last has ended.
 	conn    conn   // nil: none
 	connGen uint64 // which of the connections that were dialed conn is
-	pulling int    // the fetches that have or may get the connection
+	dialing *dial  // the dial under way; nil: none
+
+	// partials numbers what is written to the store directory.
+	partials atomic.Uint64
 
 	close    sync.Once
 	closeErr error

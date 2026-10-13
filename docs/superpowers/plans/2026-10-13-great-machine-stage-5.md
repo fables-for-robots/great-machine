@@ -18,7 +18,7 @@ This plan is shorter than those of stages 1 to 4, which spelled every line out f
 - **Versions**: Go 1.27.1, jaccard-store v0.7.0, Core v0.10.0, go-iroh v0.3.0, all as now. jaccard-nfs-nix-store leaves `go.mod`.
 - **Nothing is pushed, tagged or released without the human partner's word.** This stage ends in a pull request and a release, v0.3.0: both are asked for.
 - **draal, the protocol, the store in draal and the push are not changed.** A diff that touches `draal/`, `wire/`, `storeserver/`, `push/`, `authz/` or `node/` is a mistake.
-- **The names**: the package is `storedir`; the pack cache is `packs/` under `--store-cache`; what is being written is `.great-machine-partial-NAME` in the store directory, beside its name; no flag is added or taken away, and `--store-cache` and `--no-store` keep their variables.
+- **The names**: the package is `storedir`; the pack cache is `packs/` under `--store-cache`; what is being written is `.great-machine-partial-` and a number in the store directory, beside its name; no flag is added or taken away, and `--store-cache` and `--no-store` keep their variables.
 - **The times of a pull** are those of the spec's §3.4: 30 seconds for a dial, 1 second before a second attempt and twice as long each time up to 15 seconds, 2 minutes from the first failure, 1 hour for one attempt; twenty fetches at a time.
 - **What is written out** is what the table of the spec's §3.3 says, letter for letter: `0555` for a directory, for a file with the execute bit of its owner and for a root that is the content of a file, `0444` for any other file, the user and the group of zathras, no setuid, setgid or sticky bit.
 - **A container is never privileged and is given no capability** in a test or in `deploy/`.

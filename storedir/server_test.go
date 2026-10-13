@@ -2,6 +2,7 @@ package storedir
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -104,6 +105,8 @@ type tap struct {
 	mu        sync.Mutex
 	dials     int
 	failDials int                          // how many of the next dials fail
+	closes    int                          // connections that were closed
+	failPulls int                          // how many of the next pulls fail, on the connection they are asked on
 	pulls     map[string]int               // by the name of the reference
 	results   map[string]client.PullResult // of the pulls that worked
 	running   int                          // pulls under way
@@ -117,6 +120,9 @@ type tap struct {
 	started chan string
 	// linger is how long a pull takes at the least.
 	linger time.Duration
+	// blockDials makes every dial wait for the end of its context, and
+	// fail with it: a store that does not answer.
+	blockDials bool
 }
 
 func newTap() *tap {
@@ -132,7 +138,12 @@ func (tp *tap) wrap(dial func(context.Context) (conn, error)) func(context.Conte
 		if fail {
 			tp.failDials--
 		}
+		block := tp.blockDials
 		tp.mu.Unlock()
+		if block {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
 		if fail {
 			return nil, os.ErrDeadlineExceeded
 		}
@@ -158,10 +169,24 @@ func (tp *tap) dialed() int {
 	return tp.dials
 }
 
+// closed returns how many connections were closed.
+func (tp *tap) closed() int {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	return tp.closes
+}
+
 // tapped is a connection that tells its tap what is asked of it.
 type tapped struct {
 	conn
 	tp *tap
+}
+
+func (c *tapped) Close() error {
+	c.tp.mu.Lock()
+	c.tp.closes++
+	c.tp.mu.Unlock()
+	return c.conn.Close()
 }
 
 func (c *tapped) Pull(ctx context.Context, objects *packstore.Store, name string, opts client.PullOptions) (client.PullResult, error) {
@@ -171,6 +196,10 @@ func (c *tapped) Pull(ctx context.Context, objects *packstore.Store, name string
 	tp.running++
 	tp.most = max(tp.most, tp.running)
 	gate, linger := tp.gate, tp.linger
+	fail := tp.failPulls > 0
+	if fail {
+		tp.failPulls--
+	}
 	tp.mu.Unlock()
 	defer func() {
 		tp.mu.Lock()
@@ -193,6 +222,9 @@ func (c *tapped) Pull(ctx context.Context, objects *packstore.Store, name string
 	}
 	if linger > 0 {
 		time.Sleep(linger)
+	}
+	if fail {
+		return client.PullResult{}, errors.New("the bucket is away")
 	}
 	res, err := c.conn.Pull(ctx, objects, name, opts)
 	if err == nil {
