@@ -2,6 +2,14 @@
 
 2026-10-11
 
+**Its §4 and §5 are replaced.**
+[The design of stage 5](2026-10-13-great-machine-stage-5-design.md) took
+the mount out of zathras. What this document says of the mount and its
+cache, of `CAP_SYS_ADMIN`, of the launcher's thread and of
+`exec-in-place`, in §4 and §5 and wherever else it speaks of them, held
+up to v0.2.0 and holds no longer. What it says of the store in draal
+(§3) stands.
+
 This is a change to the design of
 [`2026-10-09-great-machine-design.md`](2026-10-09-great-machine-design.md).
 What it does not mention stays as that document says. A section of that
