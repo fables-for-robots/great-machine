@@ -928,8 +928,20 @@ terminationGracePeriodSeconds: 150   # longer than --stop-timeout
 - **The store decides for a service**: the one whose prefix a reference
   is under. A push and a listing are a deployer's of that service, a
   fetch also a zathras's that is registered for it, a removal an admin's
-  alone. The prefixes keep the stores of the services apart: a deployer
-  or a zathras of `web` is given nothing of `api`.
+  alone. A deployer or a zathras of `web` is given no reference of
+  `api`, and cannot change one.
+- **The store keeps no closure secret from whoever may push.** The
+  prefixes keep the names of the services apart, and not what the store
+  holds: its packs are shared between the services, which is why a store
+  path that two services run is uploaded once. A deployer of `web` that
+  names the content of a store path of `api` is given a reference to it
+  under `web`, without uploading it, and the store's answer to a push
+  names the packs nearest to what is pushed, whoever's they are. A
+  zathras of `web` is handed the packs that the references of `web` lean
+  on. What a role bounds is what its key may do to a service: roll out
+  to it, read its logs, open a shell in it, change its references. Put
+  nothing into a store path that a deployer of another service is not to
+  read.
 - **The app container is given no capability** beyond a container's
   own, and has `no_new_privs`: zathras mounts nothing (see [Pod](#pod)).
   The service and the shells are started with what the container has. As

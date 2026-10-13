@@ -1087,6 +1087,41 @@ func TestARequestIsOfTheServiceItsNameIsUnder(t *testing.T) {
 	}
 }
 
+// The prefixes keep the names of the services apart, and not what the
+// store holds. Its packs are shared between the services, which is what
+// lets a store path that two services run be uploaded once; and so a
+// deployer of one service that names the root of a store path of another
+// is given a reference to it of its own, without having a byte of it, and
+// pulls it. The README says so under Security: a role bounds what its key
+// may do to a service, and keeps no closure secret from whoever may push.
+// A store that kept its packs apart by service would show here.
+func TestThePacksOfTheStoreAreSharedBetweenTheServices(t *testing.T) {
+	w := start(t, nil)
+	const apiRef, mine = "/services/api/nix/store/abc-api", "/services/web/nix/store/abc-api"
+	root, err := pushDir(t, w.dial(w.operator), storePath(t, "abc-api", "the program of api"), apiRef)
+	if err != nil {
+		t.Fatalf("the push of an admin: %v", err)
+	}
+	deployer := newKey(t)
+	w.authority.Replace([]wire.Grant{{ID: deployer.ID(), Role: wire.RoleDeployer, Service: "web"}})
+	conn := w.dial(deployer)
+
+	// The name of api's is refused a deployer of web.
+	if _, err := pull(t, conn, apiRef); err == nil || !strings.Contains(err.Error(), "unauthorized: ") {
+		t.Errorf("the pull of api's reference by a deployer of web: %v, want it refused as unauthorized", err)
+	}
+	// What the name of api's points at is not: named by its root, under
+	// a name of web's, it is there already. The sketch says what a push
+	// is made of, and is not looked at for a root the store has.
+	resp, err := ask(t, conn, jswire.Request{Op: jswire.OpPushStart, Name: mine, Root: root[:], Sketch: [][]byte{root[:]}})
+	if err != nil || resp.Error != nil || !resp.Stored {
+		t.Fatalf("the start of a push of api's root under a name of web's = %+v, %v; want it stored already", resp, err)
+	}
+	if got, err := pull(t, conn, mine); err != nil || got != root {
+		t.Errorf("the pull of it under the name of web's = %s, %v; want the root of api's store path, %s", got, err, root)
+	}
+}
+
 // Drop ends the connections a peer has to the store, and no other's: it
 // is what a revocation does.
 func TestDropEndsTheConnectionsOfAPeer(t *testing.T) {

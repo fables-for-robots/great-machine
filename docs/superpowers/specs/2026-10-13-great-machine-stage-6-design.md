@@ -255,6 +255,19 @@ prefix (`/services/SERVICE/nix/store/`) the reference is under.
   endpoint began, and no other.
 - A refusal is an error of the store's protocol whose message begins
   with `unauthorized`, as before.
+- **What this keeps apart is the names, and not the packs.** The store
+  shares its packs between the services (stage 4): a push that names a
+  root the store has is given a reference to it without an upload, the
+  answer to the start of a push names the packs nearest to what is
+  pushed, whoever's, and a reference that leans on a pack is pulled with
+  that pack. So whoever may push for any service can read what any other
+  service's references hold, and a zathras is handed what its service's
+  references lean on. A role bounds what a key may do to a service, and
+  keeps no closure secret from a deployer. Keeping the packs apart by
+  service would take the store itself to know of services, which
+  jaccard-store does not; it was found in the review of this stage, and
+  is not done in it (`TestThePacksOfTheStoreAreSharedBetweenTheServices`
+  holds what the store does).
 
 ## 6. Operators
 
