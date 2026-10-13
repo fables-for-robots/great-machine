@@ -15,28 +15,28 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fables-for-robots/great-machine/storemount"
+	"github.com/fables-for-robots/great-machine/storedir"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
 // fakeStore is the store of a zathras as a test has it: it says what it
-// was started with, and counts how often it was stopped.
+// was opened with, and counts how often it was closed.
 type fakeStore struct {
-	err     error                  // what the start fails with; nil: it starts
-	started chan storemount.Config // gets what the store was started with
-	stops   atomic.Int64
-	onStop  func() // called by Stop, if set
+	err     error                // what the opening fails with; nil: it opens
+	opened  chan storedir.Config // gets what the store was opened with
+	closes  atomic.Int64
+	onClose func() // called by Close, if set
 
 	mu    sync.Mutex
 	asked []string // the names it was asked to fetch
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{started: make(chan storemount.Config, 4)}
+	return &fakeStore{opened: make(chan storedir.Config, 4)}
 }
 
-func (f *fakeStore) start(cfg storemount.Config) (zathrasStore, error) {
-	f.started <- cfg
+func (f *fakeStore) open(cfg storedir.Config) (zathrasStore, error) {
+	f.opened <- cfg
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -57,10 +57,10 @@ func (f *fakeStore) fetched() []string {
 	return slices.Clone(f.asked)
 }
 
-func (f *fakeStore) Stop() error {
-	f.stops.Add(1)
-	if f.onStop != nil {
-		f.onStop()
+func (f *fakeStore) Close() error {
+	f.closes.Add(1)
+	if f.onClose != nil {
+		f.onClose()
 	}
 	return nil
 }
@@ -130,16 +130,16 @@ func returned(t *testing.T, done <-chan error, logged *buffer) error {
 	}
 }
 
-// A zathras starts its store before anything else that could use it, with
-// the endpoint ID of draal as the store's and its own service, and stops
+// A zathras opens its store before anything else that could use it, with
+// the endpoint ID of draal as the store's and its own service, and closes
 // it last of what runs from it: when the agent and the supervisor have
 // ended, and while the health check still answers.
-func TestRunZathrasStartsItsStoreAndStopsItLast(t *testing.T) {
+func TestRunZathrasOpensItsStoreAndClosesItLast(t *testing.T) {
 	cfg := aZathras(t)
 	store := newFakeStore()
-	cfg.startStore = store.start
+	cfg.openStore = store.open
 	var healthAtStop atomic.Int64
-	store.onStop = func() { healthAtStop.Store(int64(healthz(cfg.healthAddr))) }
+	store.onClose = func() { healthAtStop.Store(int64(healthz(cfg.healthAddr))) }
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -147,33 +147,33 @@ func TestRunZathrasStartsItsStoreAndStopsItLast(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- runZathras(ctx, cfg, quietLog(&logged)) }()
 
-	var got storemount.Config
+	var got storedir.Config
 	select {
-	case got = <-store.started:
+	case got = <-store.opened:
 	case err := <-done:
-		t.Fatalf("runZathras returned before it started its store: %v\n%s", err, logged.String())
+		t.Fatalf("runZathras returned before it opened its store: %v\n%s", err, logged.String())
 	case <-time.After(20 * time.Second):
-		t.Fatalf("the store was not started\n%s", logged.String())
+		t.Fatalf("the store was not opened\n%s", logged.String())
 	}
-	want := storemount.Config{Server: cfg.draal, Addrs: cfg.addrs, Service: "web", Cache: cfg.storeCache}
+	want := storedir.Config{Server: cfg.draal, Addrs: cfg.addrs, Service: "web", Cache: cfg.storeCache}
 	got.Log = nil
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("the store was started with %+v, want %+v", got, want)
+		t.Errorf("the store was opened with %+v, want %+v", got, want)
 	}
 	answering(t, cfg.healthAddr)
-	if n := store.stops.Load(); n != 0 {
-		t.Fatalf("the store was stopped %d times while the zathras runs", n)
+	if n := store.closes.Load(); n != 0 {
+		t.Fatalf("the store was closed %d times while the zathras runs", n)
 	}
 
 	stop()
 	if err := returned(t, done, &logged); err != nil {
 		t.Errorf("runZathras returned %v, want nil\n%s", err, logged.String())
 	}
-	if n := store.stops.Load(); n != 1 {
-		t.Errorf("the store was stopped %d times, want once", n)
+	if n := store.closes.Load(); n != 1 {
+		t.Errorf("the store was closed %d times, want once", n)
 	}
 	if got := healthAtStop.Load(); got != http.StatusServiceUnavailable {
-		t.Errorf("while the store was stopped the health check answered %d, want 503: it is shut down last", got)
+		t.Errorf("while the store was closed the health check answered %d, want 503: it is shut down last", got)
 	}
 	if got := healthz(cfg.healthAddr); got != 0 {
 		t.Errorf("the health check answers %d after runZathras has returned", got)
@@ -184,8 +184,8 @@ func TestRunZathrasStartsItsStoreAndStopsItLast(t *testing.T) {
 func TestRunZathrasWithoutAStore(t *testing.T) {
 	cfg := aZathras(t)
 	cfg.noStore = true
-	cfg.startStore = func(storemount.Config) (zathrasStore, error) {
-		t.Error("a store was started, and the zathras was told to have none")
+	cfg.openStore = func(storedir.Config) (zathrasStore, error) {
+		t.Error("a store was opened, and the zathras was told to have none")
 		return nil, errors.New("no store")
 	}
 	ctx, stop := context.WithCancel(context.Background())
@@ -203,14 +203,14 @@ func TestRunZathrasWithoutAStore(t *testing.T) {
 	}
 }
 
-// A store that cannot be started ends the zathras at once, with what the
+// A store that cannot be opened ends the zathras at once, with what the
 // store said, and before anything listens: without a store nothing can
 // run, and the kubelet starts the container again.
-func TestRunZathrasWhoseStoreCannotBeStarted(t *testing.T) {
+func TestRunZathrasWhoseStoreCannotBeOpened(t *testing.T) {
 	cfg := aZathras(t)
 	store := newFakeStore()
-	store.err = errors.New("storemount: mounting: operation not permitted: the container of a zathras has to let it mount")
-	cfg.startStore = store.start
+	store.err = errors.New("storedir: /nix/store has to be the zathras's alone to write to, and cannot be made so: read-only file system")
+	cfg.openStore = store.open
 	var logged buffer
 	done := make(chan error, 1)
 	go func() { done <- runZathras(context.Background(), cfg, quietLog(&logged)) }()
@@ -218,8 +218,8 @@ func TestRunZathrasWhoseStoreCannotBeStarted(t *testing.T) {
 	if err == nil || !errors.Is(err, store.err) || !strings.Contains(err.Error(), "the store of the zathras") {
 		t.Errorf("runZathras returned %v, want the error of the store, said to be the store's", err)
 	}
-	if n := store.stops.Load(); n != 0 {
-		t.Errorf("a store that was not started was stopped %d times", n)
+	if n := store.closes.Load(); n != 0 {
+		t.Errorf("a store that was not opened was closed %d times", n)
 	}
 	l, err := net.Listen("tcp", cfg.healthAddr)
 	if err != nil {
@@ -228,9 +228,10 @@ func TestRunZathrasWhoseStoreCannotBeStarted(t *testing.T) {
 	l.Close()
 }
 
-// Every way out after the store was started stops the store: a mount is
-// not left behind by a zathras that ends for another reason.
-func TestRunZathrasStopsItsStoreWhenItCannotGoOn(t *testing.T) {
+// Every way out after the store was opened closes the store: its fetches
+// and its pack cache are not left open by a zathras that ends for another
+// reason.
+func TestRunZathrasClosesItsStoreWhenItCannotGoOn(t *testing.T) {
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -239,14 +240,14 @@ func TestRunZathrasStopsItsStoreWhenItCannotGoOn(t *testing.T) {
 	cfg := aZathras(t)
 	cfg.healthAddr = taken.Addr().String()
 	store := newFakeStore()
-	cfg.startStore = store.start
+	cfg.openStore = store.open
 	var logged buffer
 	done := make(chan error, 1)
 	go func() { done <- runZathras(context.Background(), cfg, quietLog(&logged)) }()
 	if err := returned(t, done, &logged); err == nil || !strings.Contains(err.Error(), "the health check: listen tcp") {
 		t.Errorf("runZathras returned %v, want the failure of the health check to listen", err)
 	}
-	if n := store.stops.Load(); n != 1 {
-		t.Errorf("the store was stopped %d times, want once", n)
+	if n := store.closes.Load(); n != 1 {
+		t.Errorf("the store was closed %d times, want once", n)
 	}
 }

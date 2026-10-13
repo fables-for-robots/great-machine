@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fables-for-robots/great-machine/storemount"
+	"github.com/fables-for-robots/great-machine/storedir"
 	"github.com/fables-for-robots/great-machine/testservice/build"
 	"github.com/fables-for-robots/great-machine/wire"
 )
@@ -126,7 +126,7 @@ func TestPrepareIsReportedWhileItRuns(t *testing.T) {
 // service is what the operator has to read: the reason of the failure
 // names the path and the service, as the store said it.
 func TestPrepareOfAStorePathTheStoreDoesNotHave(t *testing.T) {
-	missing := &storemount.NotFoundError{Path: "/nix/store/2sm7dby7g2sfp4cjr3537zhwkgmq3f3b-nginx-1.24.0", Service: "web"}
+	missing := &storedir.NotFoundError{Path: "/nix/store/2sm7dby7g2sfp4cjr3537zhwkgmq3f3b-nginx-1.24.0", Service: "web"}
 	w := newWorld(t, setup{store: newStore(missing, false)})
 	l := w.accept()
 

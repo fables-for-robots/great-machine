@@ -54,12 +54,13 @@ jobs:
         run: go test -count=1 ./web/... ./cli/ ./e2e/
       - name: pid1
         run: scripts/test-pid1.sh
-      # The tests that need root and the kernel: the store of a zathras
-      # mounted with the kernel's NFS client, and what the launcher drops.
-      # They run in a container that is not privileged and has
-      # CAP_SYS_ADMIN and no AppArmor profile, which is what a pod's
-      # container has (deploy/pod.yaml): that this is enough to mount is
-      # part of what the step shows.
+      # The tests that need root and the kernel: a service and a shell
+      # started as another user (--user), and given the pipes and the
+      # terminal they are started on. They run in a container that is
+      # given nothing, no capability beyond Docker's defaults and
+      # Docker's own AppArmor profile, which is what a pod's container
+      # has (deploy/pod.yaml): that this is enough is part of what the
+      # step shows.
       - name: linux, as root
         run: scripts/test-linux.sh
       # Steps that test more are added above this line. The last steps
@@ -75,8 +76,8 @@ jobs:
           # The program that Nix built has the page: its draal is asked for it.
           scripts/test-page.sh ./result/bin/great-machine
       # The image as a release builds it, and what a pod asks of it: that
-      # it has a /nix/store to mount the store on, and runs with a store
-      # mounted there.
+      # it has an empty /nix/store for the store of the pod, and runs with
+      # a volume put over it.
       - name: image
         run: |
           nix build .#image --option allow-unsafe-native-code-during-evaluation true

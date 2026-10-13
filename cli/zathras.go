@@ -19,7 +19,7 @@ import (
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/ptyshell"
 	"github.com/fables-for-robots/great-machine/stats"
-	"github.com/fables-for-robots/great-machine/storemount"
+	"github.com/fables-for-robots/great-machine/storedir"
 	"github.com/fables-for-robots/great-machine/supervisor"
 	"github.com/fables-for-robots/great-machine/wire"
 	"github.com/fables-for-robots/great-machine/zathras"
@@ -37,9 +37,9 @@ func zathrasCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "zathras",
 		Usage: "the init of an app container: runs the service draal tells it to run",
-		Description: "It serves the store of its service itself and mounts it on /nix/store,\n" +
-			"for which its container needs CAP_SYS_ADMIN; the service and the shells\n" +
-			"are started without that capability.\n\n" +
+		Description: "It keeps the store of its service itself: what draal has it prepare it\n" +
+			"fetches from draal's store and writes out under /nix/store, as files.\n" +
+			"It mounts nothing, and its container needs no capability for it.\n\n" +
 			"The health check, GET /healthz on --health-addr, passes while the service\n" +
 			"runs and at no other time. It is a readiness probe, not a liveness probe.",
 		Flags: []cli.Flag{
@@ -49,9 +49,9 @@ func zathrasCommand() *cli.Command {
 			&cli.StringFlag{Name: "name", EnvVars: []string{"GREAT_MACHINE_NAME"},
 				Usage: "`NAME` the operator sees (default: the host name, which in a pod is the pod's name)"},
 			&cli.StringFlag{Name: "store-cache", EnvVars: []string{"GREAT_MACHINE_STORE_CACHE"}, Value: "/var/cache/great-machine",
-				Usage: "`DIR`ectory of what the store has fetched; it is of one draal and one service"},
+				Usage: "`DIR`ectory the pack cache is kept in: what was pulled from the store, so that a store path costs less the next time"},
 			&cli.BoolFlag{Name: "no-store", EnvVars: []string{"GREAT_MACHINE_NO_STORE"},
-				Usage: "serve and mount no store: /nix/store is what the container has, and nothing is fetched"},
+				Usage: "fetch nothing: /nix/store is what the machine has, and a prepare checks the binary alone"},
 			&cli.StringFlag{Name: "user", EnvVars: []string{"GREAT_MACHINE_USER"},
 				Usage: "`UID[:GID]` the service and the shells run as, with that group and no other (default: the user of zathras)"},
 			&cli.StringFlag{Name: "shell", EnvVars: []string{"GREAT_MACHINE_SHELL"}, Value: "/bin/sh",
@@ -71,12 +71,12 @@ func zathrasCommand() *cli.Command {
 	}
 }
 
-// zathrasStore is the store of a zathras, which it serves and mounts
-// itself: *storemount.Mount.
+// zathrasStore is the store of a zathras, which it keeps itself:
+// *storedir.Store.
 type zathrasStore interface {
 	zathras.Preloader
-	// Stop takes the mount away and stops the server.
-	Stop() error
+	// Close ends the fetches and closes the pack cache.
+	Close() error
 }
 
 // zathrasConfig is what the command line of zathras says.
@@ -87,18 +87,18 @@ type zathrasConfig struct {
 	shell       string
 	stopTimeout time.Duration
 	healthAddr  string         // "" for no health check
-	storeCache  string         // what the store has fetched
-	noStore     bool           // no store of its own
+	storeCache  string         // where the pack cache is kept
+	noStore     bool           // no store of its own: nothing is fetched
 	user        *launcher.User // who the service and the shells run as; nil: the user of zathras
 	// addrs is for tests: draal, and with it the store, is dialed at these
 	// addresses, without a relay and without a lookup. No flag sets it.
 	addrs []netip.AddrPort
-	// storeDir is for tests: the directory the store is mounted on. "":
-	// /nix/store. No flag sets it.
+	// storeDir is for tests: the store directory. "": /nix/store. No flag
+	// sets it.
 	storeDir string
-	// startStore is for tests: what starts the store. nil:
-	// storemount.Start. No flag sets it.
-	startStore func(storemount.Config) (zathrasStore, error)
+	// openStore is for tests: what opens the store. nil: storedir.Open.
+	// No flag sets it.
+	openStore func(storedir.Config) (zathrasStore, error)
 }
 
 // readZathras reads the command line of zathras.
@@ -136,7 +136,7 @@ func readZathras(c *cli.Context) (zathrasConfig, error) {
 		cfg.user = &user
 	}
 	if !cfg.noStore && cfg.storeCache == "" {
-		return zathrasConfig{}, usageError("--store-cache: the store needs a directory for what it fetches; --no-store is a zathras without a store of its own")
+		return zathrasConfig{}, usageError("--store-cache: the store needs a directory for its pack cache; --no-store is a zathras without a store of its own")
 	}
 	if cfg.name == "" {
 		if cfg.name, err = os.Hostname(); err != nil {
@@ -147,29 +147,28 @@ func readZathras(c *cli.Context) (zathrasConfig, error) {
 }
 
 // runZathras is zathras until ctx is done, which SIGINT and SIGTERM do:
-// it then stops the service, ends the shells, stops its store and returns
+// it then stops the service, ends the shells, closes its store and returns
 // nil.
 func runZathras(ctx context.Context, cfg zathrasConfig, log *slog.Logger) (err error) {
 	// What the service and the shells are started with comes first: a
-	// zathras that cannot keep the capability it mounts with from what it
-	// starts does not mount.
+	// zathras that cannot start them as the user of --user ends here,
+	// before anything of it is there.
 	starter, err := launcher.New(launcher.Config{User: cfg.user, Log: log})
 	if err != nil {
 		return err
 	}
-	defer starter.Close()
 
 	// The store, before anything that could use it. It is not dialed yet:
-	// draal is needed when a store path is first named.
+	// draal is needed when a store path is asked for that is not there.
 	var store zathrasStore
 	if cfg.noStore {
-		log.Info("no store of its own (--no-store): /nix/store is what the container has, and a prepare fetches nothing")
+		log.Info("no store of its own (--no-store): /nix/store is what the machine has, and a prepare fetches nothing")
 	} else {
-		start := cfg.startStore
-		if start == nil {
-			start = func(c storemount.Config) (zathrasStore, error) { return storemount.Start(c) }
+		open := cfg.openStore
+		if open == nil {
+			open = func(c storedir.Config) (zathrasStore, error) { return storedir.Open(c) }
 		}
-		store, err = start(storemount.Config{
+		store, err = open(storedir.Config{
 			Server: cfg.draal, Addrs: cfg.addrs, Service: cfg.service,
 			Cache: cfg.storeCache, Dir: cfg.storeDir, Log: log,
 		})
@@ -177,21 +176,21 @@ func runZathras(ctx context.Context, cfg zathrasConfig, log *slog.Logger) (err e
 			return fmt.Errorf("the store of the zathras: %w", err)
 		}
 	}
-	// Every way out from here stops the store, once: at the end, when
+	// Every way out from here closes the store, once: at the end, when
 	// what ran from it has ended, and on the ways out before that.
-	var stopping sync.Once
-	stopStore := func() {
+	var closing sync.Once
+	closeStore := func() {
 		if store == nil {
 			return
 		}
-		stopping.Do(func() {
-			if serr := store.Stop(); serr != nil {
-				log.Error("stopping the store", "error", serr)
-				err = errors.Join(err, fmt.Errorf("stopping the store of the zathras: %w", serr))
+		closing.Do(func() {
+			if cerr := store.Close(); cerr != nil {
+				log.Error("closing the store", "error", cerr)
+				err = errors.Join(err, fmt.Errorf("closing the store of the zathras: %w", cerr))
 			}
 		})
 	}
-	defer stopStore()
+	defer closeStore()
 
 	// The health check listens before anything is started or draal has
 	// heard of this zathras: an address that is taken ends the command
@@ -282,14 +281,15 @@ func runZathras(ctx context.Context, cfg zathrasConfig, log *slog.Logger) (err e
 	//  1. The agent ends the shells and what it prepares, and leaves
 	//     draal, and the supervisor stops the service: SIGTERM, and
 	//     SIGKILL after --stop-timeout. Both are waited for here.
-	//  2. The store is stopped: nothing runs from it any more. The mount
-	//     goes, and then its server.
+	//  2. The store is closed: its fetches are ended, and its connection
+	//     and its pack cache closed. Nothing runs from it any more, and
+	//     nothing is unmounted: the store directory stays as it is.
 	//  3. The health check is shut down last. While the service is being
 	//     stopped it goes on answering, with 503 as the phase is no longer
 	//     running, so that the pod is taken out of its Service by an
 	//     answer and not by a connection that is refused.
 	wg.Wait()
-	stopStore()
+	closeStore()
 	if web != nil {
 		shutdown, done := context.WithTimeout(context.Background(), 5*time.Second)
 		defer done()

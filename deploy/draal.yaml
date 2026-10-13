@@ -79,10 +79,10 @@ spec:
         - name: draal
           # The same tag as the pods' app containers: draal and every
           # zathras are kept on one tag, because a draal and a zathras of
-          # different versions may not speak the same protocol. v0.2.0 is
-          # the first release that keeps the store in draal, which exists
-          # once it has been tagged.
-          image: ghcr.io/fables-for-robots/great-machine:v0.2.0
+          # different versions may not speak the same protocol. v0.3.0 is
+          # the release whose pods mount nothing, which exists once it has
+          # been tagged.
+          image: ghcr.io/fables-for-robots/great-machine:v0.3.0
           # The image's entrypoint is great-machine.
           args: ["draal"]
           env:

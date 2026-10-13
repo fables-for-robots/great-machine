@@ -7,10 +7,9 @@
 //
 // A test that asks for it has draal's store as well, over a bucket in
 // memory and under draal's own endpoint ID (store_test.go). And one test
-// has no stand-in at all: on Linux, as root, the store of its zathras is
-// mounted over that directory and fetched from draal's store, and its
-// service is started by a launcher (mount_linux_test.go). The test binary
-// is therefore its own exec-in-place (main_test.go).
+// has no stand-in at all: the store of its zathras is that directory,
+// which it fills from draal's store, and its service is started from
+// what was written out, by a launcher (storedir_test.go).
 //
 // The package has no code but its tests.
 package e2e

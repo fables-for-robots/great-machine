@@ -76,10 +76,11 @@
             nixpkgs.legacyPackages.${builtins.currentSystem}
           else
             null;
-          # Buildbarn's packages, of which the mount of a zathras is
-          # made, need Go 1.27, which is not yet the Go of this nixpkgs.
-          # The Go that resolves the packages while Nix evaluates has to
-          # be the same one.
+          # go.mod asks for Go 1.27, which is not yet the Go of this
+          # nixpkgs: Buildbarn's packages needed it, of which the mount
+          # of a zathras was made up to stage 4, and nothing is gained by
+          # going back. The Go that resolves the packages while Nix
+          # evaluates has to be the same one.
           goEnv = gonixgo.lib.mkGoEnv {
             inherit pkgs evalPkgs;
             go = pkgs.buildPackages.go_1_27;
@@ -109,7 +110,7 @@
           # The one program: draal, zathras and the operator's commands.
           # Without cgo it is linked statically on Linux, and runs in an
           # image that has no libc and whose /nix/store is the one zathras
-          # mounts.
+          # fills.
           great-machine = goEnv.buildGoApplication {
             pname = "great-machine";
             inherit src;
@@ -129,14 +130,16 @@
           # The image of the app container of a pod, and of draal:
           #   nix build .#image && docker load < result
           #
-          # Nothing it needs lives in /nix/store, because zathras mounts
-          # the store of its service there: the program, busybox and the
-          # certificates are copied to where an image has them. That
-          # works because all three are files that need no other.
+          # Nothing it needs lives in /nix/store, because the store of a
+          # pod is there, a volume over whatever the image has: the
+          # program, busybox and the certificates are copied to where an
+          # image has them. That works because all three are files that
+          # need no other.
           #
-          # And nothing at all is in its /nix/store, which zathras
-          # refuses to mount over otherwise. Left to itself Nix puts
-          # there what the copies name: busybox names itself, and the
+          # And nothing at all is in its /nix/store: what zathras finds
+          # under a name there it takes for that store path, and without
+          # a volume the image's own would be among it. Left to itself
+          # Nix puts there what the copies name: busybox names itself, and the
           # Go of nixpkgs writes into every program where it would look
           # for the time zones, the MIME types and the names of
           # protocols and ports when the machine has none (tzdata,
@@ -150,8 +153,9 @@
               mkdir -p bin etc/ssl/certs root
               mkdir -m 1777 tmp
 
-              # What zathras mounts the store on, and where it keeps
-              # what it fetched unless a volume is put there.
+              # The store directory of a zathras, and where it keeps
+              # its pack cache: both are there for a pod that puts no
+              # volume on them.
               mkdir -p nix/store var/cache/great-machine
 
               cp ${great-machine}/bin/great-machine bin/great-machine

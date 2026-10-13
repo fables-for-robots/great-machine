@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -20,15 +19,6 @@ import (
 	"github.com/fables-for-robots/great-machine/testservice/build"
 	"github.com/fables-for-robots/great-machine/wire"
 )
-
-// The tests that start the service through a launcher start this binary,
-// which then replaces itself with the service, as great-machine does.
-func TestMain(m *testing.M) {
-	if status, was := launcher.Replace(os.Args); was {
-		os.Exit(status)
-	}
-	os.Exit(m.Run())
-}
 
 // Start, if set, is what starts the service: it is given the command as
 // the supervisor made it, and what starts it.
@@ -94,13 +84,11 @@ func throughALauncher(t *testing.T, cfg Config) Config {
 	if err != nil {
 		t.Fatalf("launcher.New: %v", err)
 	}
-	t.Cleanup(l.Close)
 	cfg.Start = l.Start
 	return cfg
 }
 
-// Through a launcher the service is the program itself first, which then
-// becomes the service. To the supervisor nothing has changed: the
+// Through a launcher the service runs as it does without one: the
 // arguments, the output, the process and its group, how it is stopped
 // and what it exited with.
 func TestThroughALauncherTheServiceRunsAsBefore(t *testing.T) {
@@ -142,9 +130,9 @@ func TestThroughALauncherTheServiceRunsAsBefore(t *testing.T) {
 }
 
 // A binary that is gone when it is started was a file the supervisor took
-// (Activate has looked). Through a launcher it is the process that was to
-// become it that finds out: it says so, where the service writes, and
-// ends with 127, and the supervisor has a service that ended at once.
+// (Activate has looked). Through a launcher, as without one, that is a
+// start that failed: a service that ended at once, whose last exit has
+// the error and no status of a process, for there was none.
 func TestThroughALauncherABinaryThatIsGone(t *testing.T) {
 	h := run(t, throughALauncher(t, Config{}))
 	path := script(t, "exit 0\n")
@@ -158,31 +146,21 @@ func TestThroughALauncherABinaryThatIsGone(t *testing.T) {
 	}
 	eventually(t, "a start that found no program", func() bool {
 		exit := h.State().LastExit
-		return exit != nil && exit.Status == 127
+		return exit != nil && exit.Status == -1
 	})
 	exit := h.State().LastExit
-	if exit.Error != "" || exit.Signal != "" || exit.Generation != 1 {
-		t.Errorf("LastExit is %+v, want an exit with status 127 and nothing else", exit)
-	}
-	said := false
-	for _, text := range h.lines(logring.Stderr) {
-		said = said || strings.Contains(text, "executing "+path) && strings.Contains(text, "no such file")
-	}
-	if !said {
-		t.Errorf("standard error of the service does not say what could not be executed: %q", h.lines(logring.Stderr))
+	if !strings.Contains(exit.Error, path) || !strings.Contains(exit.Error, "no such file") || exit.Signal != "" || exit.Generation != 1 {
+		t.Errorf("LastExit is %+v, want status -1 and an error that names the binary and says that it is not there", exit)
 	}
 	// It is started again like any service that ended at once: later
 	// each time, up to the most.
 	eventually(t, "a wait of the longest delay after a start that found no program", func() bool {
-		lines := h.matching(`^generation 1 exited with status 127 after .*; starting it again in 80ms$`)
+		lines := h.matching(`^generation 1 could not be started: .*no such file.*; starting it again in 80ms$`)
 		return len(lines) >= 2
 	})
-	if got := h.matching(`could not be started`); len(got) != 0 {
-		t.Errorf("lines of a binary that could not be started, and the program itself was: %q", got)
-	}
 }
 
-// A file that is no program ends with 126 and the reason.
+// A file that is no program is a start that failed too, with the reason.
 func TestThroughALauncherAFileThatIsNoProgram(t *testing.T) {
 	noProgram := filepath.Join(t.TempDir(), "no-program")
 	if err := os.WriteFile(noProgram, []byte("this is no program\n"), 0o755); err != nil {
@@ -192,9 +170,9 @@ func TestThroughALauncherAFileThatIsNoProgram(t *testing.T) {
 	h.activate(1, noProgram)
 	eventually(t, "a start that could not execute the file", func() bool {
 		exit := h.State().LastExit
-		return exit != nil && exit.Status == 126
+		return exit != nil && exit.Status == -1
 	})
-	if !regexp.MustCompile(`executing \S+no-program: exec format error`).MatchString(strings.Join(h.lines(logring.Stderr), "\n")) {
-		t.Errorf("standard error of the service does not say why: %q", h.lines(logring.Stderr))
+	if exit := h.State().LastExit; !strings.Contains(exit.Error, noProgram) || !strings.Contains(exit.Error, "exec format error") {
+		t.Errorf("LastExit is %+v, want an error that names the file and says why it could not be executed", exit)
 	}
 }

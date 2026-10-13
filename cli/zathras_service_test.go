@@ -166,12 +166,11 @@ func statusOfProcess(t *testing.T, pid int) map[string]string {
 // have to be put together rightly: the launcher is what starts the service
 // and the shells, with the user of --user; the store is asked for the
 // closure before the service is started; and at the end the store is
-// stopped when the service has ended, and not before, for the service
-// runs from it.
+// closed when the service has ended, and not before.
 //
 // The service ignores SIGTERM, so that it runs on for the stop timeout: a
-// store that is stopped too early is stopped under a service that runs.
-func TestRunZathrasRunsItsServiceThroughItsLauncherAndStopsItsStoreAfterIt(t *testing.T) {
+// store that is closed too early is closed under a service that runs.
+func TestRunZathrasRunsItsServiceThroughItsLauncherAndClosesItsStoreAfterIt(t *testing.T) {
 	asRoot := runtime.GOOS == "linux" && os.Geteuid() == 0
 	users := map[string]*launcher.User{"as the user of zathras": nil}
 	if asRoot {
@@ -213,10 +212,10 @@ func TestRunZathrasRunsItsServiceThroughItsLauncherAndStopsItsStoreAfterIt(t *te
 			cfg.stopTimeout = time.Second
 			cfg.user = user
 			store := newFakeStore()
-			cfg.startStore = store.start
+			cfg.openStore = store.open
 			var pid atomic.Int64
 			var ranAtStop atomic.Bool
-			store.onStop = func() { ranAtStop.Store(processAlive(int(pid.Load()))) }
+			store.onClose = func() { ranAtStop.Store(processAlive(int(pid.Load()))) }
 
 			ctx, stop := context.WithCancel(context.Background())
 			defer stop()
@@ -260,7 +259,7 @@ func TestRunZathrasRunsItsServiceThroughItsLauncherAndStopsItsStoreAfterIt(t *te
 				t.Fatalf("Shell: %v", err)
 			}
 			defer sh.Close()
-			if _, err := sh.Write([]byte("echo \"user=$(id -u).\"; grep NoNewPrivs /proc/self/status; exit\n")); err != nil {
+			if _, err := sh.Write([]byte("echo \"user=$(id -u).\"; exit\n")); err != nil {
 				t.Fatalf("writing to the shell: %v", err)
 			}
 			said, _ := io.ReadAll(sh)
@@ -273,19 +272,14 @@ func TestRunZathrasRunsItsServiceThroughItsLauncherAndStopsItsStoreAfterIt(t *te
 				t.Errorf("the shell does not run as user %d:\n%s", uid, said)
 			}
 			if asRoot {
-				// What was started through the launcher cannot gain
-				// privileges, and runs as the user that was asked for.
-				// What it has of capabilities is the launcher's own to
-				// test: here it is that the launcher is what starts.
+				// What was started through the launcher runs as the user
+				// that was asked for: with another user, that is what
+				// shows that the launcher is what starts. Whether a
+				// process can gain privileges is the container's to say,
+				// and not the launcher's any more.
 				status := statusOfProcess(t, z.State.PID)
-				if status["NoNewPrivs"] != "1" {
-					t.Errorf("NoNewPrivs of the service is %q, want 1: it was not started by the launcher", status["NoNewPrivs"])
-				}
 				if ids := strings.Fields(status["Uid"]); len(ids) == 0 || ids[0] != strconv.Itoa(uid) {
 					t.Errorf("the service runs as user %q, want %d", status["Uid"], uid)
-				}
-				if !strings.Contains(string(said), "NoNewPrivs:\t1") {
-					t.Errorf("the shell was not started by the launcher: it can gain privileges:\n%s", said)
 				}
 			}
 
@@ -299,11 +293,11 @@ func TestRunZathrasRunsItsServiceThroughItsLauncherAndStopsItsStoreAfterIt(t *te
 			if took := time.Since(stopping); took < cfg.stopTimeout {
 				t.Errorf("runZathras returned after %s, and the service ignores SIGTERM: it had no stop timeout of %s\n%s", took, cfg.stopTimeout, logged.String())
 			}
-			if n := store.stops.Load(); n != 1 {
-				t.Errorf("the store was stopped %d times, want once", n)
+			if n := store.closes.Load(); n != 1 {
+				t.Errorf("the store was closed %d times, want once", n)
 			}
 			if ranAtStop.Load() {
-				t.Error("the store was stopped while the service still ran from it")
+				t.Error("the store was closed while the service still ran from it")
 			}
 			if processAlive(z.State.PID) {
 				t.Errorf("the service, process %d, runs on after runZathras has returned", z.State.PID)

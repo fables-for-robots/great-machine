@@ -21,7 +21,6 @@ func TestAShellOfAnotherUserCanOpenItsTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launcher.New: %v", err)
 	}
-	t.Cleanup(l.Close)
 	s, out := start(t, Config{Start: l.Start})
 	typeIn(t, s, `t=$(tty); if : > "$t"; then echo "opened-$((6*7)) by $(id -u)"; else echo "denied-$((6*7)) to $(id -u)"; fi`)
 	out.waitFor(t, "opened-42 by 65534")

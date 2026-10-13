@@ -23,7 +23,6 @@ func TestAServiceOfAnotherUserCanOpenItsStandardStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launcher.New: %v", err)
 	}
-	t.Cleanup(l.Close)
 	h := run(t, Config{QuickExit: time.Hour, Start: l.Start})
 	h.activate(1, "/bin/sh", "-c", `echo "to standard output, as $(id -u)" > /dev/stdout; echo to standard error > /dev/stderr; sleep 1000`)
 	h.wrote(logring.Stdout, "to standard output, as 65534")
