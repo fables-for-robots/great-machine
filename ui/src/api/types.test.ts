@@ -1,5 +1,41 @@
 import { describe, expect, test } from "vitest";
-import { isID, isRefusal, isZeroTime, normaliseFleet, parseTime, underWay } from "./types";
+import {
+  isID,
+  isRefusal,
+  isRole,
+  isZeroTime,
+  normaliseFleet,
+  normaliseGrants,
+  normaliseIdentity,
+  parseTime,
+  underWay,
+} from "./types";
+
+describe("grants", () => {
+  test("the three roles are roles, and nothing else is", () => {
+    expect(["admin", "deployer", "zathras"].every(isRole)).toBe(true);
+    expect(["", "operator", "Admin", "root"].some(isRole)).toBe(false);
+  });
+
+  test("a list of grants is a list, whatever stands for an empty one", () => {
+    expect(normaliseGrants(null)).toEqual([]);
+    expect(normaliseGrants(undefined)).toEqual([]);
+    expect(normaliseGrants("grants")).toEqual([]);
+    const g = { id: "a".repeat(64), role: "deployer", service: "web", at: "2026-10-13T09:00:00Z" };
+    expect(normaliseGrants([g])).toEqual([g]);
+  });
+
+  test("what is no grant is left out of a list", () => {
+    const g = { id: "a".repeat(64), role: "admin", at: "0001-01-01T00:00:00Z", fixed: true };
+    expect(normaliseGrants([null, 7, {}, { id: 1, role: "admin" }, { id: "x" }, g])).toEqual([g]);
+  });
+
+  test("who a key is has an ID and a list", () => {
+    expect(normaliseIdentity({ id: "ab", grants: null })).toEqual({ id: "ab", grants: [] });
+    expect(normaliseIdentity(null)).toEqual({ id: "", grants: [] });
+    expect(normaliseIdentity({ id: 7 })).toEqual({ id: "", grants: [] });
+  });
+});
 
 describe("times", () => {
   test("the zero time is none", () => {

@@ -15,11 +15,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/fables-for-robots/great-machine/draal"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
-// fakeShell is a draal.Shell of a test: it prints what the test puts
+// fakeShell is a Shell of a test: it prints what the test puts
 // into out, and hands the test what was typed and the sizes it was told.
 type fakeShell struct {
 	out    chan []byte       // what the shell prints; closed when the shell has ended
@@ -139,8 +138,8 @@ func (f *fakeShell) wasSized(t *testing.T) wire.WinSize {
 
 // shells is a fake's Shell that hands out sh and hands the test every
 // request.
-func shells(sh *fakeShell, asked chan<- wire.ShellRequest) func(context.Context, wire.ID, wire.ShellRequest) (draal.Shell, error) {
-	return func(_ context.Context, id wire.ID, req wire.ShellRequest) (draal.Shell, error) {
+func shells(sh *fakeShell, asked chan<- wire.ShellRequest) func(context.Context, wire.ID, wire.ShellRequest) (Shell, error) {
+	return func(_ context.Context, id wire.ID, req wire.ShellRequest) (Shell, error) {
 		if req.Zathras != id {
 			return nil, wire.Errorf(wire.CodeInternal, "the request names %q, and the zathras is %s", req.Zathras, id)
 		}
@@ -157,7 +156,7 @@ func TestShellRoundTrip(t *testing.T) {
 	sh := newFakeShell()
 	sh.status = 3
 	asked := make(chan wire.ShellRequest, 1)
-	srv := serveSockets(t, Config{Controller: &fake{shell: shells(sh, asked)}})
+	srv := serveSockets(t, Config{Client: &fake{shell: shells(sh, asked)}})
 	c := dial(t, srv, shellPath+"?cols=120&rows=40&term=xterm-kitty")
 	if req := <-asked; req != (wire.ShellRequest{Zathras: zathrasA, Cols: 120, Rows: 40, Term: "xterm-kitty"}) {
 		t.Fatalf("the shell was asked for with %+v", req)
@@ -216,7 +215,7 @@ func TestShellRoundTrip(t *testing.T) {
 func TestShellHasDefaultsForItsTerminal(t *testing.T) {
 	sh := newFakeShell()
 	asked := make(chan wire.ShellRequest, 1)
-	srv := serveSockets(t, Config{Controller: &fake{shell: shells(sh, asked)}})
+	srv := serveSockets(t, Config{Client: &fake{shell: shells(sh, asked)}})
 	for _, query := range []string{"", "?cols=&rows=&term="} {
 		c := dial(t, srv, shellPath+query)
 		if req := <-asked; req != (wire.ShellRequest{Zathras: zathrasA, Cols: 80, Rows: 24, Term: "xterm-256color"}) {
@@ -227,7 +226,7 @@ func TestShellHasDefaultsForItsTerminal(t *testing.T) {
 }
 
 func TestShellWithATerminalThatCannotBeIsRefusedBeforeTheUpgrade(t *testing.T) {
-	srv := serveSockets(t, Config{Controller: &fake{shell: func(context.Context, wire.ID, wire.ShellRequest) (draal.Shell, error) {
+	srv := serveSockets(t, Config{Client: &fake{shell: func(context.Context, wire.ID, wire.ShellRequest) (Shell, error) {
 		t.Error("the controller was asked for a shell")
 		return nil, unset
 	}}})
@@ -251,7 +250,7 @@ func TestShellWithATerminalThatCannotBeIsRefusedBeforeTheUpgrade(t *testing.T) {
 }
 
 func TestShellThatDraalRefuses(t *testing.T) {
-	srv := serveSockets(t, Config{Controller: &fake{shell: func(_ context.Context, id wire.ID, _ wire.ShellRequest) (draal.Shell, error) {
+	srv := serveSockets(t, Config{Client: &fake{shell: func(_ context.Context, id wire.ID, _ wire.ShellRequest) (Shell, error) {
 		return nil, wire.Errorf(wire.CodeUnavailable, "zathras %s is not connected", id)
 	}}})
 	if msg := wantError(t, dial(t, srv, shellPath), wire.CodeUnavailable); msg != "zathras "+string(zathrasA)+" is not connected" {
@@ -262,7 +261,7 @@ func TestShellThatDraalRefuses(t *testing.T) {
 func TestShellIsClosedWhenThePageClosesTheSocket(t *testing.T) {
 	for _, how := range []string{"with a close", "by going"} {
 		sh := newFakeShell()
-		srv := serveSockets(t, Config{Controller: &fake{shell: shells(sh, nil)}})
+		srv := serveSockets(t, Config{Client: &fake{shell: shells(sh, nil)}})
 		c := dial(t, srv, shellPath)
 		sh.out <- []byte("$ ")
 		next(t, c)
@@ -279,7 +278,7 @@ func TestShellIsClosedWhenThePageClosesTheSocket(t *testing.T) {
 // session ends with the reason, after what the shell had printed.
 func TestShellOfAZathrasThatGoesEndsWithTheReason(t *testing.T) {
 	sh := newFakeShell()
-	srv := serveSockets(t, Config{Controller: &fake{shell: shells(sh, nil)}})
+	srv := serveSockets(t, Config{Client: &fake{shell: shells(sh, nil)}})
 	c := dial(t, srv, shellPath)
 	sh.out <- []byte("working")
 	next(t, c)
@@ -296,7 +295,7 @@ func TestShellOfAZathrasThatGoesEndsWithTheReason(t *testing.T) {
 
 func TestShellDropsATextMessageThatIsNoChangeOfSize(t *testing.T) {
 	sh := newFakeShell()
-	srv := serveSockets(t, Config{Controller: &fake{shell: shells(sh, nil)}})
+	srv := serveSockets(t, Config{Client: &fake{shell: shells(sh, nil)}})
 	c := dial(t, srv, shellPath)
 	bg := context.Background()
 	for _, message := range []string{
@@ -337,7 +336,7 @@ func TestShellDropsATextMessageThatIsNoChangeOfSize(t *testing.T) {
 func TestShellGetsWhatWasSentWhileItWasStarted(t *testing.T) {
 	sh := newFakeShell()
 	begun, release := make(chan struct{}), make(chan struct{})
-	srv := serveSockets(t, Config{Controller: &fake{shell: func(ctx context.Context, _ wire.ID, _ wire.ShellRequest) (draal.Shell, error) {
+	srv := serveSockets(t, Config{Client: &fake{shell: func(ctx context.Context, _ wire.ID, _ wire.ShellRequest) (Shell, error) {
 		close(begun)
 		select {
 		case <-release:
@@ -386,7 +385,7 @@ func TestShellGetsWhatWasSentWhileItWasStarted(t *testing.T) {
 
 func TestShellStartEndsWhenThePageGoes(t *testing.T) {
 	begun := make(chan context.Context, 1)
-	srv := serveSockets(t, Config{Controller: &fake{shell: func(ctx context.Context, _ wire.ID, _ wire.ShellRequest) (draal.Shell, error) {
+	srv := serveSockets(t, Config{Client: &fake{shell: func(ctx context.Context, _ wire.ID, _ wire.ShellRequest) (Shell, error) {
 		begun <- ctx
 		<-ctx.Done()
 		return nil, context.Cause(ctx)
@@ -403,7 +402,7 @@ func TestShellStartEndsWhenThePageGoes(t *testing.T) {
 // while, its pings are answered, and what was typed waits, in its order.
 func TestShellThatDoesNotTakeInputKeepsItsSocket(t *testing.T) {
 	sh := newFakeShell()
-	srv := serveSockets(t, Config{Controller: &fake{shell: shells(sh, nil)}, PingEvery: 10 * time.Millisecond})
+	srv := serveSockets(t, Config{Client: &fake{shell: shells(sh, nil)}, PingEvery: 10 * time.Millisecond})
 	var pings atomic.Int32
 	c, _ := dialWith(t, srv, shellPath, &websocket.DialOptions{
 		OnPingReceived: func(context.Context, []byte) bool { pings.Add(1); return true },
@@ -473,7 +472,7 @@ func typing(n int) []byte {
 func TestPasteArrivesWholeAtThePaceTheShellTakesIt(t *testing.T) {
 	const piece = 16 << 10
 	sh := newFakeShell()
-	srv := serveSockets(t, Config{Controller: &fake{shell: shells(sh, nil)}, PingEvery: 20 * time.Millisecond})
+	srv := serveSockets(t, Config{Client: &fake{shell: shells(sh, nil)}, PingEvery: 20 * time.Millisecond})
 	c := dial(t, srv, shellPath)
 	pasted := typing(4 << 20)
 	sent := make(chan error, 1)
@@ -525,7 +524,7 @@ func TestPasteArrivesWholeAtThePaceTheShellTakesIt(t *testing.T) {
 // and however it is taken out, and nothing of it is lost or out of its
 // order.
 func TestShellInputNeverHoldsMoreThanItsBound(t *testing.T) {
-	h := New(Config{Controller: &fake{}, Dist: testDist(), Log: quiet}).(*handler)
+	h := New(Config{Client: &fake{}, Dist: testDist(), Log: quiet}).(*handler)
 	in := newShellInput(h)
 	defer in.end()
 	typed := typing(8 << 20)
@@ -567,7 +566,7 @@ func TestShellInputNeverHoldsMoreThanItsBound(t *testing.T) {
 // was typed is taken: what comes after the hole must not reach the shell,
 // which would get the beginning and the end without the middle.
 func TestShellInputTakesNothingAfterItGaveAMessageUp(t *testing.T) {
-	h := New(Config{Controller: &fake{}, Dist: testDist(), Log: quiet, WriteWait: 100 * time.Millisecond}).(*handler)
+	h := New(Config{Client: &fake{}, Dist: testDist(), Log: quiet, WriteWait: 100 * time.Millisecond}).(*handler)
 	in := newShellInput(h)
 	defer in.end()
 	in.message(websocket.MessageBinary, make([]byte, readLimit-10))
@@ -593,7 +592,7 @@ func TestShellInputTakesNothingAfterItGaveAMessageUp(t *testing.T) {
 func TestShellThatTakesNoInputForWriteWaitEndsTheSession(t *testing.T) {
 	const writeWait = 500 * time.Millisecond
 	sh := newFakeShell()
-	srv := serveSockets(t, Config{Controller: &fake{shell: shells(sh, nil)}, WriteWait: writeWait})
+	srv := serveSockets(t, Config{Client: &fake{shell: shells(sh, nil)}, WriteWait: writeWait})
 	h := srv.Config.Handler.(*handler)
 	c := dial(t, srv, shellPath)
 	bg := context.Background()
@@ -647,7 +646,7 @@ func TestShellThatTakesNoInputForWriteWaitEndsTheSession(t *testing.T) {
 func TestInputWhileTheShellIsStartedIsKeptWholeOrTheSessionEnds(t *testing.T) {
 	sh := newFakeShell()
 	begun := make(chan context.Context, 1)
-	srv := serveSockets(t, Config{WriteWait: 300 * time.Millisecond, Controller: &fake{shell: func(ctx context.Context, _ wire.ID, _ wire.ShellRequest) (draal.Shell, error) {
+	srv := serveSockets(t, Config{WriteWait: 300 * time.Millisecond, Client: &fake{shell: func(ctx context.Context, _ wire.ID, _ wire.ShellRequest) (Shell, error) {
 		begun <- ctx
 		<-ctx.Done() // a start that takes its time
 		return nil, context.Cause(ctx)
@@ -676,7 +675,7 @@ func TestInputWhileTheShellIsStartedIsKeptWholeOrTheSessionEnds(t *testing.T) {
 	}
 }
 
-// stubbornShell is a draal.Shell whose Write waits and is not ended by
+// stubbornShell is a Shell whose Write waits and is not ended by
 // Close, as the Write of a stream is not that waits for the other side
 // to take what was written; its Read does end at Close.
 type stubbornShell struct {
@@ -729,8 +728,8 @@ func TestShellHandlerReturnsThoughAWriteToTheShellNeverDoes(t *testing.T) {
 		sh := newStubbornShell(t)
 		base, shutDown := context.WithCancel(context.Background())
 		inner := New(Config{
-			Controller: &fake{shell: func(context.Context, wire.ID, wire.ShellRequest) (draal.Shell, error) { return sh, nil }},
-			Dist:       testDist(), Log: quiet,
+			Client: &fake{shell: func(context.Context, wire.ID, wire.ShellRequest) (Shell, error) { return sh, nil }},
+			Dist:   testDist(), Log: quiet,
 			PingEvery: 20 * time.Millisecond, WriteWait: time.Second,
 		})
 		returned := make(chan struct{})
@@ -784,7 +783,7 @@ func TestShellOutputIsReadOnlyAsFastAsThePageTakesIt(t *testing.T) {
 	// kilobytes on a Mac and some megabytes on Linux.
 	const most = 32 << 20
 	sh := newFakeShell()
-	srv := serveSockets(t, Config{Controller: &fake{shell: shells(sh, nil)}, WriteWait: 200 * time.Millisecond})
+	srv := serveSockets(t, Config{Client: &fake{shell: shells(sh, nil)}, WriteWait: 200 * time.Millisecond})
 	dial(t, srv, shellPath) // never reads
 	chunk := make([]byte, shellChunk)
 	sent := 0

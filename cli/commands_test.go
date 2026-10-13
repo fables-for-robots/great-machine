@@ -124,10 +124,30 @@ func TestInvalidCommandLines(t *testing.T) {
 		{"draal: the variable stands in for --operator", map[string]string{"GREAT_MACHINE_OPERATORS": idA + ",bob"},
 			[]string{"draal", "--data", d, "--s3-bucket", "packs"}, `--operator: "bob" is not an endpoint ID`},
 		{"draal: a bad --bind", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--bind", "4433"}, `--bind: "4433" is not an address to bind`},
-		{"draal: a bad --web-addr", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "--web-addr", "8080"}, `--web-addr: "8080" is not an address to listen on`},
-		{"draal: the variable stands in for --web-addr", map[string]string{"GREAT_MACHINE_WEB_ADDR": "localhost"},
-			[]string{"draal", "--data", d, "--s3-bucket", "packs"}, `--web-addr: "localhost" is not an address to listen on`},
+		{"draal: the flag of the web page, which draal serves no more", nil,
+			[]string{"draal", "--data", d, "--s3-bucket", "packs", "--web-addr", "127.0.0.1:8080"}, "flag provided but not defined: -web-addr"},
 		{"draal: an argument", nil, []string{"draal", "--data", d, "--s3-bucket", "packs", "now"}, `draal takes no argument, got "now"`},
+
+		// web.
+		{"web: no --draal", nil, []string{"web", "--key", d + "/operator.key"}, "--draal is required: give it, or set GREAT_MACHINE_DRAAL"},
+		{"web: a bad --draal", nil, []string{"web", "--draal", "nonsense", "--key", d + "/operator.key"}, `--draal: "nonsense"`},
+		{"web: an --addr that is no address", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "--addr", "8080"},
+			`--addr: "8080" is not an address to listen on: want HOST:PORT, such as 127.0.0.1:8080`},
+		{"web: no --addr at all", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "--addr", ""},
+			`--addr: "" is not an address to listen on`},
+		// The page acts with the operator's key: it listens on loopback
+		// alone.
+		{"web: every address", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "--addr", ":8080"},
+			`--addr: ":8080" is not a loopback address: the page acts with the operator's key, and listens on this machine alone`},
+		{"web: every address of IPv4", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "--addr", "0.0.0.0:8080"},
+			`--addr: "0.0.0.0:8080" is not a loopback address`},
+		{"web: an address of the network", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "--addr", "10.1.2.3:8080"},
+			`--addr: "10.1.2.3:8080" is not a loopback address`},
+		{"web: a name that is not this machine's", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "--addr", "draal.example.com:8080"},
+			`--addr: "draal.example.com:8080" is not a loopback address`},
+		{"web: the variable stands in for --addr", map[string]string{"GREAT_MACHINE_WEB_ADDR": "[::]:8080"},
+			[]string{"web", "--draal", idA, "--key", d + "/operator.key"}, `--addr: "[::]:8080" is not a loopback address`},
+		{"web: an argument", nil, []string{"web", "--draal", idA, "--key", d + "/operator.key", "now"}, `web takes no argument, got "now"`},
 
 		// zathras.
 		{"zathras: no --draal", nil, []string{"zathras", "--service", "web"}, "--draal is required: give it, or set GREAT_MACHINE_DRAAL"},
@@ -186,9 +206,8 @@ func TestReadDraal(t *testing.T) {
 	// store has its defaults.
 	read(t, draalCommand(), reader, "--data", "data", "--s3-bucket", "packs")
 	want := draalConfig{
-		data:    "data",
-		store:   storeConfig{bucket: bucket.Config{Bucket: "packs"}, verifyJobs: 2, maxPackBytes: 16 << 30},
-		webAddr: "127.0.0.1:8080",
+		data:  "data",
+		store: storeConfig{bucket: bucket.Config{Bucket: "packs"}, verifyJobs: 2, maxPackBytes: 16 << 30},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the least: got %+v, want %+v", got, want)
@@ -209,8 +228,8 @@ func TestReadDraal(t *testing.T) {
 	t.Setenv("GREAT_MACHINE_STORE_NO_VERIFY", "true")
 	read(t, draalCommand(), reader)
 	want = draalConfig{
-		data:      "/var/lib/draal",
-		operators: []wire.ID{wire.ID(idA), wire.ID(idB)},
+		data:   "/var/lib/draal",
+		admins: []wire.ID{wire.ID(idA), wire.ID(idB)},
 		store: storeConfig{
 			bucket:       bucket.Config{Bucket: "packs", Prefix: "great-machine", Endpoint: "http://rustfs.storage:9000", Region: "eu-central-1", PathStyle: true},
 			scratch:      "/scratch",
@@ -218,7 +237,6 @@ func TestReadDraal(t *testing.T) {
 			maxPackBytes: 64 << 20,
 			noVerify:     true,
 		},
-		webAddr: "127.0.0.1:8080",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("from the variables: got %+v, want %+v", got, want)
@@ -241,16 +259,15 @@ func TestReadDraal(t *testing.T) {
 		"--s3-bucket", "other", "--s3-prefix", "", "--s3-endpoint", "https://s3.example.com", "--s3-region", "auto", "--s3-path-style=false",
 		"--store-scratch", "scratch", "--store-verify-jobs", "1", "--store-max-pack-size", "1073741824", "--store-no-verify=false")
 	want = draalConfig{
-		data:      "data",
-		operators: []wire.ID{wire.ID(idC), wire.ID(idA)},
+		data:   "data",
+		admins: []wire.ID{wire.ID(idC), wire.ID(idA)},
 		store: storeConfig{
 			bucket:       bucket.Config{Bucket: "other", Endpoint: "https://s3.example.com", Region: "auto"},
 			scratch:      "scratch",
 			verifyJobs:   1,
 			maxPackBytes: 1 << 30,
 		},
-		webAddr: "127.0.0.1:8080",
-		bind:    netip.MustParseAddrPort("0.0.0.0:4433"),
+		bind: netip.MustParseAddrPort("0.0.0.0:4433"),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("from the flags: got %+v, want %+v", got, want)
@@ -278,44 +295,42 @@ func TestParseSize(t *testing.T) {
 	}
 }
 
-// TestReadDraalWebAddr: --web-addr has a default, its variable stands in
-// for it, the flag wins, and an empty value is no web page.
-func TestReadDraalWebAddr(t *testing.T) {
+// TestReadWeb: --addr has a default, its variable stands in for it, the
+// flag wins, and every loopback address is taken; --draal and --key are
+// those of every operator command.
+func TestReadWeb(t *testing.T) {
 	cleanEnvironment(t)
-	var got draalConfig
+	var got webConfig
 	reader := func(c *cli.Context) (err error) {
-		got, err = readDraal(c)
+		got, err = readWeb(c)
 		return err
 	}
-	args := []string{"--data", "d", "--s3-bucket", "packs"}
+	args := []string{"--draal", idA, "--key", "operator.key"}
 	with := func(more ...string) []string { return append(append([]string{}, args...), more...) }
 
-	read(t, draalCommand(), reader, args...)
-	if got.webAddr != "127.0.0.1:8080" {
-		t.Errorf("the default: got %q, want 127.0.0.1:8080", got.webAddr)
+	read(t, webCommand(), reader, args...)
+	if got.addr != "127.0.0.1:8080" || got.operator.draal != wire.ID(idA) || got.operator.key != "operator.key" {
+		t.Errorf("the defaults: got %+v, want 127.0.0.1:8080 and the draal and the key that were given", got)
 	}
-	read(t, draalCommand(), reader, with("--web-addr", "")...)
-	if got.webAddr != "" {
-		t.Errorf("an empty flag: got %q, want no web page", got.webAddr)
+	for _, addr := range []string{"localhost:9000", "127.0.0.1:0", "[::1]:9000", "127.9.9.9:80"} {
+		read(t, webCommand(), reader, with("--addr", addr)...)
+		if got.addr != addr {
+			t.Errorf("--addr %s: got %q", addr, got.addr)
+		}
 	}
-	read(t, draalCommand(), reader, with("--web-addr", " [::1]:9000 ")...)
-	if got.webAddr != "[::1]:9000" {
-		t.Errorf("the flag: got %q, want [::1]:9000", got.webAddr)
+	read(t, webCommand(), reader, with("--addr", " [::1]:9000 ")...)
+	if got.addr != "[::1]:9000" {
+		t.Errorf("an address with blanks around it: got %q, want [::1]:9000", got.addr)
 	}
 
 	t.Setenv("GREAT_MACHINE_WEB_ADDR", "localhost:8081")
-	read(t, draalCommand(), reader, args...)
-	if got.webAddr != "localhost:8081" {
-		t.Errorf("the variable: got %q, want localhost:8081", got.webAddr)
+	read(t, webCommand(), reader, args...)
+	if got.addr != "localhost:8081" {
+		t.Errorf("the variable: got %q, want localhost:8081", got.addr)
 	}
-	read(t, draalCommand(), reader, with("--web-addr", ":8082")...)
-	if got.webAddr != ":8082" {
-		t.Errorf("the flag over the variable: got %q, want :8082", got.webAddr)
-	}
-	t.Setenv("GREAT_MACHINE_WEB_ADDR", "")
-	read(t, draalCommand(), reader, args...)
-	if got.webAddr != "" {
-		t.Errorf("an empty variable: got %q, want no web page", got.webAddr)
+	read(t, webCommand(), reader, with("--addr", "127.0.0.1:8082")...)
+	if got.addr != "127.0.0.1:8082" {
+		t.Errorf("the flag over the variable: got %q, want 127.0.0.1:8082", got.addr)
 	}
 }
 
@@ -332,7 +347,7 @@ func TestReadZathras(t *testing.T) {
 	}
 
 	// The defaults of the design.
-	read(t, zathrasCommand(), reader, "--draal", idA, "--service", "web")
+	read(t, zathrasCommand(), reader, "--draal", idA, "--service", "web", "--role-key", "/keys/web.key")
 	want := zathrasConfig{
 		draal:       wire.ID(idA),
 		service:     "web",
@@ -341,6 +356,7 @@ func TestReadZathras(t *testing.T) {
 		stopTimeout: 2 * time.Minute,
 		healthAddr:  ":9890",
 		storeCache:  "/var/cache/great-machine",
+		roleKey:     "/keys/web.key",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the defaults: got %+v, want %+v", got, want)
@@ -357,6 +373,7 @@ func TestReadZathras(t *testing.T) {
 	t.Setenv("GREAT_MACHINE_STORE_CACHE", "/cache")
 	t.Setenv("GREAT_MACHINE_NO_STORE", "true")
 	t.Setenv("GREAT_MACHINE_USER", "1000:100")
+	t.Setenv("GREAT_MACHINE_ROLE_KEY", "/run/secrets/api.key")
 	read(t, zathrasCommand(), reader, "--name", "api-1", "--health-addr", "")
 	want = zathrasConfig{
 		draal:       wire.ID(idB),
@@ -368,6 +385,7 @@ func TestReadZathras(t *testing.T) {
 		storeCache:  "/cache",
 		noStore:     true,
 		user:        &launcher.User{UID: 1000, GID: 100},
+		roleKey:     "/run/secrets/api.key",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the variables: got %+v (user %+v), want %+v (user %+v)", got, got.user, want, want.user)
@@ -394,7 +412,7 @@ func TestZathrasHealthAddressTaken(t *testing.T) {
 	defer taken.Close()
 	var stdout, stderr bytes.Buffer
 	got := run(context.Background(), newApp(&stdout, &stderr),
-		[]string{"great-machine", "zathras", "--draal", idA, "--service", "web", "--no-store", "--health-addr", taken.Addr().String()})
+		[]string{"great-machine", "zathras", "--draal", idA, "--service", "web", "--no-store", "--health-addr", taken.Addr().String(), "--role-key", aRoleKey(t)})
 	if got != 1 || !strings.Contains(stderr.String(), "great-machine: the health check: listen tcp") {
 		t.Errorf("the exit status is %d and stderr %q, want 1 and the failure to listen", got, stderr.String())
 	}

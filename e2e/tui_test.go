@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fables-for-robots/great-machine/human"
+	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/operator"
 	"github.com/fables-for-robots/great-machine/tui"
 	"github.com/fables-for-robots/great-machine/tui/tuitest"
@@ -58,6 +59,12 @@ type ui struct {
 // listens at that time, each time it dials. It is ended with the test.
 func (h *harness) startUI() *ui {
 	h.t.Helper()
+	return h.startUIAs(h.opKey)
+}
+
+// startUIAs is startUI with the key given.
+func (h *harness) startUIAs(key node.Key) *ui {
+	h.t.Helper()
 	h.t.Setenv("TERM", "xterm-256color")
 	term := tuitest.Open(h.t, 100, 30)
 	ctx, stop := context.WithCancel(context.Background())
@@ -68,7 +75,7 @@ func (h *harness) startUI() *ui {
 			// up, and tried again where draal is then.
 			ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			defer cancel()
-			conn, err := h.dial(ctx, h.opKey)
+			conn, err := h.dial(ctx, key)
 			if err != nil {
 				return nil, err
 			}

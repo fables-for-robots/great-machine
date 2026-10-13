@@ -126,8 +126,8 @@ func draalWithOperator(t *testing.T, operators ...wire.ID) (wire.ID, netip.AddrP
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	var logged buffer
-	cfg := draalForTest(t, "")
-	cfg.operators = operators
+	cfg := draalForTest(t)
+	cfg.admins = operators
 	done := make(chan error, 1)
 	go func() { done <- runDraal(ctx, cfg, quietLog(&logged)) }()
 	t.Cleanup(func() {
@@ -203,10 +203,10 @@ func TestTUIAgainstDraal(t *testing.T) {
 		}
 		term.Restored()
 	})
-	t.Run("an operator that is not on the allowlist", func(t *testing.T) {
+	t.Run("a key that was granted nothing", func(t *testing.T) {
 		term, stderr, status := start(t, context.Background(), strangerFile)
 		got := ended(t, status)
-		if got != 1 || !strings.HasPrefix(stderr.String(), "great-machine: ") || !strings.Contains(stderr.String(), "unauthorized") || !strings.Contains(stderr.String(), "is no operator") || strings.Count(stderr.String(), "\n") != 1 {
+		if got != 1 || !strings.HasPrefix(stderr.String(), "great-machine: ") || !strings.Contains(stderr.String(), "unauthorized") || !strings.Contains(stderr.String(), "is no deployer of any service") || strings.Count(stderr.String(), "\n") != 1 {
 			t.Errorf("the exit status is %d and stderr %q, want 1 and draal's refusal in one line", got, stderr.String())
 		}
 		term.Restored()

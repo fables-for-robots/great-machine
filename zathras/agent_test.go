@@ -60,6 +60,8 @@ type setup struct {
 	stats *stats.Reader // nil: no samples
 	shell string        // the program of a shell; "": /bin/sh
 	deaf  bool          // nobody listens as draal until the test does
+	// statement is what the agent registers with; nil: none
+	statement *wire.Statement
 }
 
 // world is an agent that runs, its supervisor, which runs too, and the
@@ -102,6 +104,7 @@ func newWorld(t *testing.T, s setup) *world {
 		Ring:       w.ring,
 		Stats:      s.stats,
 		Preload:    s.store,
+		Statement:  s.statement,
 		Shell: ptyshell.Config{
 			Shell: s.shell,
 			Env:   []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "PS1=$ "},
@@ -451,4 +454,26 @@ func TestRunEndsWhileItWaitsToDial(t *testing.T) {
 	w := newWorld(t, setup{deaf: true})
 	eventually(t, "the agent to have dialed", func() bool { return w.dials.Load() >= 1 })
 	w.stop()
+}
+
+// A zathras registers with the statement of its role key, every time it
+// registers: it is what draal lets it in by.
+func TestRegistersWithItsStatement(t *testing.T) {
+	statement := &wire.Statement{By: nodetest.ID(40), Signature: []byte("sixty-four bytes of a signature, which this test does not verify")}
+	w := newWorld(t, setup{statement: statement})
+	l := w.accept()
+	if got := l.register.Statement; got == nil || got.By != statement.By || string(got.Signature) != string(statement.Signature) {
+		t.Fatalf("registered with the statement %+v, want %+v", got, statement)
+	}
+	// And again when it comes back.
+	l.conn.Close()
+	again := w.accept()
+	if got := again.register.Statement; got == nil || got.By != statement.By {
+		t.Errorf("registered again with the statement %+v, want %+v", got, statement)
+	}
+
+	none := newWorld(t, setup{})
+	if got := none.accept().register.Statement; got != nil {
+		t.Errorf("an agent that was given no statement registered with %+v", got)
+	}
 }

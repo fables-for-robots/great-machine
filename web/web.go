@@ -1,17 +1,21 @@
-// Package web is the HTTP API in front of a draal.Controller, and the web
-// page that is built into the program. It is the second way in beside the
-// iroh protocol, and can show what that one can show; it can roll nothing
-// out and nothing back.
+// Package web is the HTTP API in front of an operator's client, and the
+// web page that is built into the program. `great-machine web` serves it
+// on the operator's machine, and the client asks draal with the
+// operator's key: the page can do what that key may, which draal decides,
+// and can roll nothing out and nothing back.
 //
-// The page has no authentication, and the handler answers under every
-// host name, on every address: whoever can reach its port has a shell in
-// every container. What there is: draal listens on loopback unless it is
-// told otherwise, and a WebSocket is refused to a page that was not
-// loaded from the host it opens the socket on, which keeps a page of
-// another site in the same browser from opening one directly. That does
-// not hold against a site that points a name of its own at draal's
-// address (DNS rebinding): its page is then of the origin it asks. This
-// is known and was decided so; the spec's section 4 records it.
+// Who may ask the handler is a matter of its ticket (ticket.go): the
+// command prints a link with a ticket in it, the page that is opened
+// with it is given a cookie, and without the cookie nothing is answered.
+// A request under a host name that is not this machine's is refused, so
+// that a site which points a name of its own at the loopback address is
+// not answered, and a request that changes something, like every
+// WebSocket, has to come from the page itself: a cookie is sent to every
+// port of a host, and a page of another program on the same machine
+// would otherwise act with it.
+//
+// A handler that is given no ticket has no guard, and answers under
+// every host name: the demo, and the tests of the API.
 package web
 
 import (
@@ -21,9 +25,6 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
-
-	"github.com/fables-for-robots/great-machine/draal"
-	"github.com/fables-for-robots/great-machine/wire"
 )
 
 // embedded is the build of the page, as it was in web/dist when the
@@ -51,14 +52,18 @@ const contentSecurityPolicy = "default-src 'self'; " +
 
 // Config configures the handler.
 type Config struct {
-	// Controller is what the API answers from: a *draal.Draal.
-	Controller draal.Controller
+	// Client is what the API answers from: the client of an operator.
+	Client Client
 	// Dist is the build of the page. nil: the one that is embedded.
 	Dist fs.FS
-	// Store is the page of the store, served under /store/ and asked
-	// with that part of the path taken off: jaccard-store's admin page,
-	// which is read-only. nil: there is none.
-	Store http.Handler
+	// Ticket, Secret and Port are the guard of the page (ticket.go): the
+	// ticket that is in the link of the page, what the cookie holds that
+	// the ticket is traded for, and the port the page listens on, which
+	// is in the name of the cookie and in the hosts that are answered.
+	// With no ticket there is no guard.
+	Ticket string
+	Secret string
+	Port   int
 	// Each of these has a default when it is zero:
 	PingEvery time.Duration // how often an idle socket is pinged; 30 seconds
 	WriteWait time.Duration // how long one message to a browser may take; 10 seconds
@@ -135,31 +140,22 @@ func New(cfg Config) http.Handler {
 	h.mux.HandleFunc("/api/watch", h.get(h.watch))
 	h.mux.HandleFunc("/api/zathras/{id}/logs", h.get(h.logs))
 	h.mux.HandleFunc("/api/zathras/{id}/shell", h.get(h.shell))
+	h.mux.HandleFunc("/api/me", h.get(h.me))
+	h.mux.HandleFunc("/api/grants", h.grants)
 	h.mux.HandleFunc("/api/", h.noSuchPath)
 	// The page of the store asks for what it shows by paths beside its
 	// own, so it is asked for with the slash: without it those paths
 	// would be beside /store.
-	h.mux.HandleFunc("/store", h.store(http.RedirectHandler("/store/", http.StatusMovedPermanently)))
-	h.mux.HandleFunc("/store/", h.store(http.StripPrefix("/store", cfg.Store)))
+	h.mux.Handle("/store", http.RedirectHandler("/store/", http.StatusMovedPermanently))
+	h.mux.HandleFunc("/store/", h.get(h.store))
 	h.mux.HandleFunc("/", h.page)
 	return h
 }
 
-// store returns next for a draal that has a page of the store, and a
-// refusal for one that has none: the page of the fleet, which answers
-// every path it does not know, is not the answer to /store.
-func (h *handler) store(next http.Handler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if h.cfg.Store == nil {
-			h.refuse(w, r, wire.Errorf(wire.CodeNotFound, "this draal has no page of the store"))
-			return
-		}
-		next.ServeHTTP(w, r)
-	}
-}
-
-// ServeHTTP answers a request, under whatever host name it was asked:
-// with the headers every answer has, and within the time an answer has.
+// ServeHTTP answers a request with the headers every answer has, and
+// within the time an answer has. With a ticket it answers who has the
+// cookie alone, and under no host name but this machine's (ticket.go);
+// without one, under whatever host name it was asked.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// A connection that becomes a WebSocket has this deadline taken off.
 	// A ResponseWriter that has no deadlines is one of a test.
@@ -169,5 +165,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	header.Set("X-Content-Type-Options", "nosniff")
 	header.Set("X-Frame-Options", "DENY")
 	header.Set("Referrer-Policy", "no-referrer")
+	if h.cfg.Ticket != "" && !h.admit(w, r) {
+		return
+	}
 	h.mux.ServeHTTP(w, r)
 }

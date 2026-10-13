@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/fables-for-robots/great-machine/operator"
 	"github.com/fables-for-robots/great-machine/web"
 	"github.com/fables-for-robots/great-machine/wire"
 )
@@ -23,33 +25,62 @@ import (
 // absent is an endpoint ID that no zathras of a harness has.
 const absent = wire.ID("00000000000000000000000000000000000000000000000000000000000000aa")
 
-// page is the web page's side of a harness: the HTTP API in front of
-// its draal, as draal serves it, and a client of it.
+// page is the web page's side of a harness: the HTTP API in front of the
+// operator's client of its draal, as `great-machine web` serves it, and a
+// browser of it.
 type page struct {
 	t      *testing.T
 	srv    *httptest.Server
 	client *http.Client
 }
 
-// web serves the HTTP API of the draal that runs now. The server and the
-// connections of its client are closed when the test ends.
+// pageClient is the operator's client of the harness as the handler of
+// the page asks for one. The two differ in the type of a shell.
+type pageClient struct{ *operator.Client }
+
+// A pageClient is a web.Client.
+var _ web.Client = pageClient{}
+
+func (c pageClient) Shell(ctx context.Context, zathras wire.ID, req wire.ShellRequest) (web.Shell, error) {
+	sh, err := c.Client.Shell(ctx, zathras, req)
+	if err != nil {
+		return nil, err
+	}
+	return sh, nil
+}
+
+// web serves the HTTP API in front of the operator of the harness, which
+// asks the draal that runs now. The server and the connections of its
+// client are closed when the test ends.
 func (h *harness) web() *page {
 	h.t.Helper()
 	return h.webWith(web.Config{})
 }
 
 // webWith is web with the times of cfg, for a test that needs another
-// than the handler's own; its controller and its logger are the
-// harness's.
+// than the handler's own, with its guard, for a test that gives it a
+// ticket, and with its client, for a test whose page is another key's;
+// without one its client is the operator of the harness, and its logger
+// is the harness's. A handler with a ticket is told the port it listens
+// on, as the command tells it.
 func (h *harness) webWith(cfg web.Config) *page {
 	h.t.Helper()
-	h.mu.Lock()
-	cfg.Controller = h.draal
-	h.mu.Unlock()
+	if cfg.Client == nil {
+		cfg.Client = pageClient{h.op}
+	}
 	cfg.Log = quiet
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		h.t.Fatalf("listening for the page: %v", err)
+	}
+	cfg.Port = l.Addr().(*net.TCPAddr).Port
+	srv := httptest.NewUnstartedServer(web.New(cfg))
+	srv.Listener.Close()
+	srv.Listener = l
+	srv.Start()
 	p := &page{
 		t:      h.t,
-		srv:    httptest.NewServer(web.New(cfg)),
+		srv:    srv,
 		client: &http.Client{Transport: &http.Transport{}, Timeout: deadline},
 	}
 	h.t.Cleanup(func() {
@@ -80,6 +111,39 @@ func (p *page) get(path, host string) (int, []byte) {
 		p.t.Fatalf("GET %s: reading the answer: %v", path, err)
 	}
 	return resp.StatusCode, body
+}
+
+// ask asks for a path with the method given as the page does, with the
+// origin of the page and with body as JSON if there is one, and returns
+// the status and the body of the answer.
+func (p *page) ask(method, path string, body any) (int, []byte) {
+	p.t.Helper()
+	var sent io.Reader
+	if body != nil {
+		text, err := json.Marshal(body)
+		if err != nil {
+			p.t.Fatal(err)
+		}
+		sent = bytes.NewReader(text)
+	}
+	req, err := http.NewRequest(method, p.srv.URL+path, sent)
+	if err != nil {
+		p.t.Fatalf("NewRequest %s %s: %v", method, path, err)
+	}
+	req.Header.Set("Origin", p.srv.URL)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		p.t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	answer, err := io.ReadAll(resp.Body)
+	if err != nil {
+		p.t.Fatalf("%s %s: reading the answer: %v", method, path, err)
+	}
+	return resp.StatusCode, answer
 }
 
 // socket opens a WebSocket as the page does: with the origin of the page.
@@ -319,32 +383,60 @@ func TestHTTPOfAZathrasThatIsNotConnected(t *testing.T) {
 	refused(t, "the shell", p.socket("/api/zathras/"+string(absent)+"/shell"), wire.CodeUnavailable)
 }
 
-// Review Focus 1: the page reached under another name, as through a
-// tunnel or a proxy that keeps the outside host name. It works as under
-// localhost, its sockets included, when the page was loaded from the
-// host it asks; a page of another origin still gets no socket.
-func TestHTTPUnderAnotherHostName(t *testing.T) {
+// The page as `great-machine web` serves it, with a ticket. Without the
+// cookie that the ticket is traded for nothing is answered. With it the
+// page reads the fleet and has a shell. Under a host name that is not
+// this machine's, as a site has it that points a name of its own at the
+// loopback address, nothing is answered though the cookie is there. And
+// a page of another origin that has the cookie, as one of another
+// program on this machine has, gets no socket.
+func TestHTTPWithATicket(t *testing.T) {
 	t.Parallel()
 	h := start(t, options{zathrases: 1})
-	p := h.web()
-	const name = "draal.example.com"
-	for _, path := range []string{"/api/services/" + service + "/rollouts", "/api/zathras/" + string(h.pods[0].id) + "/history"} {
-		if status, body := p.get(path, name); status != http.StatusOK {
-			t.Errorf("GET %s as %s = %d %q, want 200", path, name, status, body)
-		}
-	}
-	// The page itself: built into the program or not, it is not refused.
-	if status, body := p.get("/", name); status != http.StatusOK && status != http.StatusNotImplemented {
-		t.Errorf("GET / as %s = %d %q, want the page, or that it was not built", name, status, body)
-	}
+	const ticket, secret = "the-ticket-of-the-test", "the-secret-of-the-test"
+	p := h.webWith(web.Config{Ticket: ticket, Secret: secret})
+	port := strconv.Itoa(p.srv.Listener.Addr().(*net.TCPAddr).Port)
+	cookie := &http.Cookie{Name: "great-machine-" + port, Value: secret}
+	history := "/api/zathras/" + string(h.pods[0].id) + "/history"
+	shell := "/api/zathras/" + string(h.pods[0].id) + "/shell?term=dumb"
+	const name = "attacker.example"
 
-	dial := func(path, origin string) (*websocket.Conn, int) {
+	// ask asks for a path as a browser that follows no redirect, with
+	// the cookie or without, under the host given if it is not empty.
+	ask := func(path, host string, with bool) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, p.srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if host != "" {
+			req.Host = host
+		}
+		if with {
+			req.AddCookie(cookie)
+		}
+		client := &http.Client{Transport: p.client.Transport, Timeout: deadline,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp
+	}
+	dial := func(path, host, origin string, with bool) (*websocket.Conn, int) {
+		t.Helper()
 		ctx, cancel := context.WithTimeout(t.Context(), deadline)
 		defer cancel()
+		header := http.Header{"Origin": {origin}}
+		if with {
+			header.Set("Cookie", cookie.String())
+		}
 		c, resp, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(p.srv.URL, "http")+path, &websocket.DialOptions{
 			HTTPClient: p.client,
-			Host:       name,
-			HTTPHeader: http.Header{"Origin": {origin}},
+			Host:       host,
+			HTTPHeader: header,
 		})
 		if err != nil {
 			if resp == nil {
@@ -356,19 +448,41 @@ func TestHTTPUnderAnotherHostName(t *testing.T) {
 		t.Cleanup(func() { c.CloseNow() })
 		return c, http.StatusSwitchingProtocols
 	}
-	// The page of that name reads the fleet and has a shell.
-	watch, status := dial("/api/watch", "https://"+name)
+
+	// Without the cookie: nothing, and no socket.
+	for _, path := range []string{"/", history} {
+		if resp := ask(path, "", false); resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("GET %s without the cookie = %d, want 401", path, resp.StatusCode)
+		}
+	}
+	for _, path := range []string{"/api/watch", shell} {
+		if c, status := dial(path, "", p.srv.URL, false); c != nil || status != http.StatusUnauthorized {
+			t.Errorf("%s without the cookie was answered %d, want 401", path, status)
+		}
+	}
+	// The link of the page gives the cookie, and leads to the page.
+	resp := ask("/?ticket="+ticket, "", false)
+	if set := resp.Cookies(); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/" ||
+		len(set) != 1 || set[0].Name != cookie.Name || set[0].Value != secret {
+		t.Fatalf("the link of the page was answered %d to %q with the cookies %v, want 303 to / with the cookie of the page",
+			resp.StatusCode, resp.Header.Get("Location"), resp.Cookies())
+	}
+
+	// With it: the API, the fleet and a shell.
+	if resp := ask(history, "", true); resp.StatusCode != http.StatusOK {
+		t.Errorf("GET %s with the cookie = %d, want 200", history, resp.StatusCode)
+	}
+	watch, status := dial("/api/watch", "", p.srv.URL, true)
 	if watch == nil {
-		t.Fatalf("the fleet as the page of %s was refused with %d", name, status)
+		t.Fatalf("the fleet of the page was refused with %d", status)
 	}
 	var f wire.Fleet
 	if m := read(watch); m.err != nil || json.Unmarshal(m.data, &f) != nil || len(zathrasesOf(f)) != 1 {
-		t.Errorf("the page of %s was sent %q (%v), want the fleet", name, m.data, m.err)
+		t.Errorf("the page was sent %q (%v), want the fleet", m.data, m.err)
 	}
-	shell := "/api/zathras/" + string(h.pods[0].id) + "/shell?term=dumb"
-	sh, status := dial(shell, "https://"+name)
+	sh, status := dial(shell, "", p.srv.URL, true)
 	if sh == nil {
-		t.Fatalf("a shell as the page of %s was refused with %d", name, status)
+		t.Fatalf("a shell of the page was refused with %d", status)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), deadline)
 	defer cancel()
@@ -387,10 +501,25 @@ func TestHTTPUnderAnotherHostName(t *testing.T) {
 			break
 		}
 	}
-	// A page of another site, in the same browser, gets neither.
+
+	// Under a name that is not this machine's: nothing, with the cookie
+	// and as the page of that name.
+	rebound := name + ":" + port
+	for _, path := range []string{"/", history} {
+		if resp := ask(path, rebound, true); resp.StatusCode != http.StatusForbidden {
+			t.Errorf("GET %s as %s = %d, want 403", path, rebound, resp.StatusCode)
+		}
+	}
 	for _, path := range []string{"/api/watch", shell} {
-		if c, status := dial(path, "https://evil.example"); c != nil || status != http.StatusForbidden {
-			t.Errorf("%s as a page of another site was answered %d, want 403", path, status)
+		if c, status := dial(path, rebound, "http://"+rebound, true); c != nil || status != http.StatusForbidden {
+			t.Errorf("%s as the page of %s was answered %d, want 403", path, rebound, status)
+		}
+	}
+	// A page of another program on this machine has the cookie, which is
+	// sent to every port of a host, and gets no socket.
+	for _, path := range []string{"/api/watch", shell} {
+		if c, status := dial(path, "", "http://127.0.0.1:1", true); c != nil || status != http.StatusForbidden {
+			t.Errorf("%s as a page of another origin was answered %d, want 403", path, status)
 		}
 	}
 }

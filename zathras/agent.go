@@ -44,6 +44,10 @@ type Config struct {
 	Version string // of the program
 	// Dial dials draal. Its context bounds the dial alone.
 	Dial func(ctx context.Context) (node.Conn, error)
+	// Statement is what the role key of the service signed for this
+	// zathras: draal lets no zathras register without one. nil: the
+	// zathras registers with none.
+	Statement *wire.Statement
 	// Supervisor runs the service. The caller runs it; the agent calls
 	// Activate, State and Changes.
 	Supervisor *supervisor.Supervisor
@@ -247,10 +251,11 @@ func (a *Agent) register(ctx context.Context, conn node.Conn) (node.Stream, erro
 	}
 	a.takeSample()
 	resp, err := wire.Call(s, &wire.Request{Register: &wire.Register{
-		Service: a.cfg.Service,
-		Name:    a.cfg.Name,
-		Version: a.cfg.Version,
-		State:   a.State(),
+		Service:   a.cfg.Service,
+		Name:      a.cfg.Name,
+		Version:   a.cfg.Version,
+		State:     a.State(),
+		Statement: a.cfg.Statement,
 	}})
 	if err == nil && resp.Registered == nil {
 		err = fmt.Errorf("draal answered something else than registered")

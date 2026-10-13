@@ -5,11 +5,13 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/fables-for-robots/great-machine/authz"
 	"github.com/fables-for-robots/great-machine/db"
+	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/node/nodetest"
 	"github.com/fables-for-robots/great-machine/wire"
 )
@@ -48,13 +50,37 @@ func openDB(t *testing.T, path string) *db.DB {
 	return database
 }
 
+// theRole is the role key of the tests: it holds zathras for every
+// service, so that the zathrases of the tests register as whatever they
+// are of.
+var theRole = sync.OnceValue(func() node.Key {
+	k, err := node.NewKey()
+	if err != nil {
+		panic(err)
+	}
+	return k
+})
+
+// anAuthority is who the draal of a test asks: the operator of the tests
+// is an admin of the command line, and the role key signs for every
+// service.
+func anAuthority(more ...wire.Grant) *authz.Authority {
+	return authz.New(authz.Config{Admins: []wire.ID{operatorID}}, append([]wire.Grant{{ID: theRole().ID(), Role: wire.RoleZathras}}, more...))
+}
+
+// statementOf returns what the role key by signed for the zathras at
+// the draal: what the zathras registers with.
+func statementOf(by node.Key, draal, zathras wire.ID) *wire.Statement {
+	return &wire.Statement{By: by.ID(), Signature: by.Sign(wire.StatementText(draal, zathras))}
+}
+
 // testConfig returns a Config with a database of the test, the operator
 // of the tests and short durations.
 func testConfig(t *testing.T) Config {
 	t.Helper()
 	return Config{
 		DB:             openDB(t, filepath.Join(t.TempDir(), "draal.sqlite")),
-		Authz:          authz.NewAllowlist([]wire.ID{operatorID}),
+		Authz:          anAuthority(),
 		ID:             nodetest.ID(99),
 		Settle:         time.Millisecond,
 		StableAfter:    50 * time.Millisecond,

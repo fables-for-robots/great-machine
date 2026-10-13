@@ -8,23 +8,26 @@
 // bucket, put together as jaccard-stored puts them together. Its own
 // Serve is not used, because it takes a whole endpoint: a connection is
 // given to ServeConn instead, and every stream of it is one request, which
-// is authorized before the server sees it. A pull is every peer's, since
-// the mount of a zathras pulls with a key of its own that draal does not
-// know, and since what the store holds is what the pods run. Everything
-// else, pushing, listing and deleting, is an operator's.
+// is authorized before the server sees it, for the service whose prefix
+// the name of its reference is under: a pull is a deployer's of that
+// service and a zathras's that is registered for it, a push and a listing
+// a deployer's, and a deletion an admin's. Nothing is anybody's.
 //
 // Nothing of a pack passes through here: a client moves the bytes between
 // itself and the bucket through URLs the server signs.
 package storeserver
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,8 +81,8 @@ type Config struct {
 	// NoVerify records a pack without reading its data, as
 	// jaccard-store's --no-verify does.
 	NoVerify bool
-	// Authz decides who may do what: a pull is asked as
-	// authz.OpStorePull, everything else as authz.OpStoreWrite.
+	// Authz decides who may do what: every request is asked as its
+	// operation of the store, for the service its name is under.
 	Authz       authz.Authorizer
 	RequestWait time.Duration // 0: 5 seconds, for the request of a stream
 	AnswerWait  time.Duration // 0: 2 seconds, for the peer to end a stream that was answered
@@ -342,31 +345,59 @@ func (s *Store) serveStream(conn node.Conn, st node.Stream) {
 	}
 }
 
-// operation returns what Authorize is asked for an operation of
-// jaccard-store's protocol, and false for one the store does not answer.
-func operation(op jswire.Op) (authz.Operation, bool) {
-	switch op {
+// operation returns what Authorize is asked for a request of
+// jaccard-store's protocol, and for which service: the one whose prefix
+// in the store the name of the reference, or the prefix of a listing, is
+// under. It returns false for an operation the store does not answer.
+//
+// A name that is under no service's prefix is of no service, a prefix
+// that is shorter than a service's among them: such a request is asked
+// for no service, and is an admin's and a deployer's of every service. A
+// commit names an upload and no reference: the server answers it for the
+// endpoint that began the upload, and whoever deploys anything may ask.
+func operation(req jswire.Request) (op authz.Operation, service string, known bool) {
+	switch req.Op {
 	case jswire.OpPull:
-		return authz.OpStorePull, true
-	case jswire.OpPushStart, jswire.OpPushUpload, jswire.OpPushCommit, jswire.OpList, jswire.OpDelete:
-		return authz.OpStoreWrite, true
+		op, service = authz.OpStorePull, serviceOf(req.Name)
+	case jswire.OpPushStart, jswire.OpPushUpload:
+		op, service = authz.OpStorePush, serviceOf(req.Name)
+	case jswire.OpPushCommit:
+		op = authz.OpStoreCommit
+	case jswire.OpList:
+		op, service = authz.OpStoreList, serviceOf(req.Prefix)
+	case jswire.OpDelete:
+		op, service = authz.OpStoreDelete, serviceOf(req.Name)
 	default:
-		return "", false
+		return "", "", false
 	}
+	return op, service, true
+}
+
+// serviceOf returns the service a name of the store is of, and "" for
+// one that is of none.
+func serviceOf(name string) string {
+	service, _ := wire.ServiceOfStore(name)
+	return service
 }
 
 // answer authorizes a request and has the server answer it. A refusal is
 // an answer of jaccard-store's protocol, which has no code for one: a
-// bad_request whose message begins with "unauthorized".
+// bad_request whose message begins with "unauthorized", and goes on with
+// which role the request takes.
 func (s *Store) answer(peer wire.ID, req jswire.Request) jswire.Response {
-	op, known := operation(req.Op)
+	op, service, known := operation(req)
 	if !known {
 		return jswire.Errorf(jswire.CodeBadRequest, "the store answers no such request")
 	}
-	if err := s.cfg.Authz.Authorize(peer, op, ""); err != nil {
+	if err := s.cfg.Authz.Authorize(peer, op, service); err != nil {
 		// The line has the shape of draal's own for a refusal; the protocol says that it was the store.
-		s.log.Warn("refused", "peer", peer, "operation", string(req.Op), "protocol", ALPN)
-		return jswire.Errorf(jswire.CodeBadRequest, "unauthorized: %s is for operators", req.Op)
+		s.log.Warn("refused", "peer", peer, "operation", string(req.Op), "service", service, "protocol", ALPN)
+		message := err.Error()
+		var refusal *wire.Error
+		if errors.As(err, &refusal) {
+			message = refusal.Message
+		}
+		return jswire.Errorf(jswire.CodeBadRequest, "unauthorized: %s", message)
 	}
 	started := time.Now()
 	resp := s.server.Handle(s.requests, string(peer), req)
@@ -378,11 +409,73 @@ func (s *Store) answer(peer wire.ID, req jswire.Request) jswire.Response {
 	return resp
 }
 
-// Admin returns jaccard-store's admin page over the store's database: the
-// page, and under /api/ what it shows. It is read-only. It expects to be
-// asked with the path it is mounted under stripped.
-func (s *Store) Admin() http.Handler {
-	return admin.Handler(s.db)
+// maxPage is the most of an answer of the page of the store that Page
+// returns: it travels in a message of draal, which holds 4 MiB.
+const maxPage = 3 << 20
+
+// Page returns what jaccard-store's admin page over the store's database
+// answers a GET of path with, the query among it: the status, the content
+// type and the body. The page is read-only: /, and under /api/ what it
+// shows.
+// It is what draal answers an admin who asks for the page of the store,
+// which is served on the admin's own machine. A path that is none is
+// answered as a bad request, and an answer that is larger than a message
+// holds as an error of the server.
+func (s *Store) Page(path string) wire.StorePage {
+	plain := func(status int, text string) wire.StorePage {
+		return wire.StorePage{Status: status, Type: "text/plain; charset=utf-8", Body: []byte(text + "\n")}
+	}
+	u, err := url.ParseRequestURI(path)
+	if err != nil || !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || u.Host != "" || u.Scheme != "" {
+		return plain(http.StatusBadRequest, "that is no path of the page of the store")
+	}
+	req, err := http.NewRequestWithContext(s.requests, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return plain(http.StatusBadRequest, "that is no path of the page of the store")
+	}
+	rec := &recorder{header: make(http.Header), status: http.StatusOK}
+	admin.Handler(s.db).ServeHTTP(rec, req)
+	if rec.body.Len() > maxPage {
+		return plain(http.StatusInternalServerError, "the answer of the page of the store is larger than a message of draal holds")
+	}
+	return wire.StorePage{Status: rec.status, Type: rec.header.Get("Content-Type"), Body: rec.body.Bytes()}
+}
+
+// recorder keeps what a handler answers.
+type recorder struct {
+	header http.Header
+	status int
+	wrote  bool
+	body   bytes.Buffer
+}
+
+func (r *recorder) Header() http.Header { return r.header }
+
+func (r *recorder) WriteHeader(status int) {
+	if !r.wrote {
+		r.status, r.wrote = status, true
+	}
+}
+
+func (r *recorder) Write(p []byte) (int, error) {
+	r.wrote = true
+	return r.body.Write(p)
+}
+
+// Drop ends every connection the peer has to the store. It is what a
+// revocation does: the peer dials again, and is asked anew what it may.
+func (s *Store) Drop(peer wire.ID) {
+	s.mu.Lock()
+	var conns []node.Conn
+	for conn := range s.conns {
+		if conn.RemoteID() == peer {
+			conns = append(conns, conn)
+		}
+	}
+	s.mu.Unlock()
+	for _, conn := range conns {
+		conn.Close()
+	}
 }
 
 // Stop ends the answering: no new request is begun, the requests under way

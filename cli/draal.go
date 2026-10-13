@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/netip"
 	"net/url"
 	"os"
@@ -21,7 +20,6 @@ import (
 	"github.com/fables-for-robots/great-machine/draal"
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/storeserver"
-	"github.com/fables-for-robots/great-machine/web"
 	"github.com/fables-for-robots/great-machine/wire"
 	"github.com/urfave/cli/v2"
 )
@@ -36,7 +34,7 @@ const (
 func draalCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "draal",
-		Usage: "the controller: zathrases report to it, operators roll out through it",
+		Usage: "the controller: zathrases report to it, and who was granted a role rolls out through it",
 		Description: "The endpoint ID draal logs at its start is all that a zathras or an\n" +
 			"operator needs to reach it. draal is the store as well: closures are\n" +
 			"pushed to it and the pods fetch them from it, under the same endpoint\n" +
@@ -46,8 +44,11 @@ func draalCommand() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "data", EnvVars: []string{"GREAT_MACHINE_DATA"},
 				Usage: "`DIR`ectory of draal: its key (created on first run) and its database (required)"},
-			&cli.StringSliceFlag{Name: "operator", EnvVars: []string{"GREAT_MACHINE_OPERATORS"},
-				Usage: "endpoint `ID` that may act as an operator, as `great-machine id` prints it; may be repeated, and the variable takes several with commas between them"},
+			&cli.StringSliceFlag{Name: "admin", EnvVars: []string{"GREAT_MACHINE_ADMINS"},
+				Usage: "endpoint `ID` of an admin, as `great-machine id` prints it: an admin whatever was granted, whom no request revokes; may be repeated, and the variable takes several with commas between them. The flag was --operator and the variable GREAT_MACHINE_OPERATORS, and both are still taken"},
+			// The name the flag had up to v0.3.0: who was an operator is
+			// an admin.
+			&cli.StringSliceFlag{Name: "operator", EnvVars: []string{"GREAT_MACHINE_OPERATORS"}, Hidden: true},
 			&cli.StringFlag{Name: "s3-bucket", EnvVars: []string{"GREAT_MACHINE_S3_BUCKET"},
 				Usage: "`NAME` of the bucket the store keeps its packs in (required)"},
 			&cli.StringFlag{Name: "s3-prefix", EnvVars: []string{"GREAT_MACHINE_S3_PREFIX"},
@@ -66,8 +67,6 @@ func draalCommand() *cli.Command {
 				Usage: "largest uncompressed `SIZE` of a pack, in bytes or with KiB, MiB or GiB; the scratch space needed is this times --store-verify-jobs"},
 			&cli.BoolFlag{Name: "store-no-verify", EnvVars: []string{"GREAT_MACHINE_STORE_NO_VERIFY"},
 				Usage: "record a pack without reading its data: one that is incomplete or corrupt is then found by whoever pulls it"},
-			&cli.StringFlag{Name: "web-addr", EnvVars: []string{"GREAT_MACHINE_WEB_ADDR"}, Value: "127.0.0.1:8080",
-				Usage: "`ADDR`ess the web page listens on; empty for no web page"},
 			&cli.StringFlag{Name: "bind", EnvVars: []string{"GREAT_MACHINE_BIND"},
 				Usage: "UDP `IP:PORT` the iroh endpoint binds (default: every address, a port the system picks)"},
 		},
@@ -83,18 +82,14 @@ func draalCommand() *cli.Command {
 
 // draalConfig is what the command line of draal says.
 type draalConfig struct {
-	data      string
-	operators []wire.ID
-	store     storeConfig
-	webAddr   string         // "" for no web page
-	bind      netip.AddrPort // the zero value: every address, a port the system picks
+	data   string
+	admins []wire.ID // of the command line: --admin, and --operator as it was
+	store  storeConfig
+	bind   netip.AddrPort // the zero value: every address, a port the system picks
 	// local is for tests: the iroh endpoint uses no relay, announces
 	// nothing and is bound to 127.0.0.1 unless bind says otherwise. No
 	// flag sets it.
 	local bool
-	// listenWeb is for tests: what binds the address of the web page.
-	// Nil means net.Listen. No flag sets it.
-	listenWeb func(network, addr string) (net.Listener, error)
 	// objects is for tests: the bucket of the store itself. Nil means
 	// the bucket the flags name. No flag sets it.
 	objects jsserver.Bucket
@@ -125,23 +120,20 @@ func readDraal(c *cli.Context) (draalConfig, error) {
 	}
 	// The library has cut the values at their commas already. What is
 	// left empty by a comma too many, or by a space, is not an ID.
-	for _, text := range c.StringSlice("operator") {
-		if text = strings.TrimSpace(text); text == "" {
-			continue
+	for _, flag := range []string{"admin", "operator"} {
+		for _, text := range c.StringSlice(flag) {
+			if text = strings.TrimSpace(text); text == "" {
+				continue
+			}
+			id, err := node.ParseID(text)
+			if err != nil {
+				return draalConfig{}, usageError("--%s: %q is not an endpoint ID, as `great-machine id` prints one: %w", flag, text, err)
+			}
+			cfg.admins = append(cfg.admins, id)
 		}
-		id, err := node.ParseID(text)
-		if err != nil {
-			return draalConfig{}, usageError("--operator: %q is not an endpoint ID, as `great-machine id` prints one: %w", text, err)
-		}
-		cfg.operators = append(cfg.operators, id)
 	}
 	if cfg.store, err = readStore(c); err != nil {
 		return draalConfig{}, err
-	}
-	if cfg.webAddr = strings.TrimSpace(c.String("web-addr")); cfg.webAddr != "" {
-		if _, _, err := net.SplitHostPort(cfg.webAddr); err != nil {
-			return draalConfig{}, usageError("--web-addr: %q is not an address to listen on: want HOST:PORT, such as 127.0.0.1:8080, or nothing for no web page", cfg.webAddr)
-		}
 	}
 	if bind := c.String("bind"); bind != "" {
 		if cfg.bind, err = netip.ParseAddrPort(bind); err != nil {
@@ -218,10 +210,16 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 	// closed and Serve, which writes to the database, has returned.
 	defer func() { err = errors.Join(err, database.Close()) }()
 
-	if len(cfg.operators) == 0 {
-		log.Warn("no --operator was given: nobody can act as an operator over iroh, and nobody can push to the store")
+	// Who may do what: the admins of the command line, and the grants of
+	// the database, which draal decides by from a copy in memory.
+	grants, err := database.Grants(ctx)
+	if err != nil {
+		return fmt.Errorf("the grants: %w", err)
 	}
-	allow := authz.NewAllowlist(cfg.operators)
+	allow := authz.New(authz.Config{Admins: cfg.admins}, grants)
+	if !allow.Admins() {
+		log.Warn("no admin was given on the command line and the database holds none: nobody can grant anything, and so nobody can do anything")
+	}
 
 	// The store is opened before the endpoint is bound: one that cannot
 	// be opened ends the command before draal has announced itself.
@@ -269,63 +267,22 @@ func runDraal(ctx context.Context, cfg draalConfig, log *slog.Logger) (err error
 	// requests of the store that are under way have their grace while
 	// their connections are still there.
 	defer store.Stop()
-	log.Info("serving", "endpoint", string(listener.ID()), "addr", listener.LocalAddr().String(), "operators", len(cfg.operators), "bucket", cfg.store.bucket.Bucket)
-
-	// The web page listens before draal serves: an address that is taken
-	// ends the command here, with the endpoint and the database closed
-	// by what is deferred above.
-	var pageListener net.Listener
-	if cfg.webAddr != "" {
-		listen := cfg.listenWeb
-		if listen == nil {
-			listen = net.Listen
-		}
-		if pageListener, err = listen("tcp", cfg.webAddr); err != nil {
-			return fmt.Errorf("the web page: %w", err)
-		}
-	}
+	log.Info("serving", "endpoint", string(listener.ID()), "addr", listener.LocalAddr().String(), "admins", len(cfg.admins), "bucket", cfg.store.bucket.Bucket)
 
 	d := draal.New(draal.Config{
 		DB:    database,
 		Authz: allow,
+		Store: store,
 		ID:    listener.ID(),
 		Log:   log,
 	})
 
-	// The order of the end, once ctx is done: the web page is stopped
-	// first, its WebSockets with it, and only then does Serve get to
-	// know, through a context of its own. When Serve has returned the
-	// store is stopped, the endpoint is closed, and the two databases
-	// are closed, the store's first.
-	serving, stopServing := context.WithCancel(context.WithoutCancel(ctx))
-	defer stopServing()
-	pageFailed := make(chan error, 1)
-	if pageListener == nil {
-		defer context.AfterFunc(ctx, stopServing)()
-	} else {
-		page := startWeb(pageListener, web.New(web.Config{Controller: d, Store: store.Admin(), Log: log}), webStopWait, log)
-		// For the ways out of this function that are not the end of ctx.
-		defer page.Stop()
-		announceWeb(log, cfg.webAddr, pageListener.Addr(), web.IsLoopback(cfg.webAddr), web.Built())
-		go func() {
-			select {
-			case <-ctx.Done():
-			case err := <-page.Failed():
-				pageFailed <- err
-			case <-serving.Done():
-				return
-			}
-			page.Stop()
-			stopServing()
-		}()
-	}
-
-	err = d.Serve(serving, listener)
-	select {
-	case err := <-pageFailed:
-		return err
-	default:
-	}
+	// The order of the end, once ctx is done: Serve returns, the store is
+	// stopped, the endpoint is closed, and the two databases are closed,
+	// the store's first. draal serves no web page and binds no port but
+	// that of its endpoint: the page is `great-machine web`'s, on the
+	// machine of an operator.
+	err = d.Serve(ctx, listener)
 	if err != nil && ctx.Err() == nil {
 		return err
 	}

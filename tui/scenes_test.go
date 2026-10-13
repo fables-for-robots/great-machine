@@ -119,5 +119,70 @@ func scenes() []scene {
 			return m
 		}},
 		{"zathras-help", func(w, h int) *model { m, _ := onZathras(w, h, "web", 2); press(m, "?"); return m }},
+		{"access", func(w, h int) *model { m, _ := onAccess(w, h); return m }},
+		{"access-asking", func(w, h int) *model {
+			m := live(w, h, fixtureFleet())
+			m.update(meMsg{epoch: 1, n: m.meN, me: meAdmin})
+			press(m, "a")
+			return m
+		}},
+		{"access-no-admin", func(w, h int) *model {
+			m := live(w, h, fixtureFleet())
+			m.update(meMsg{epoch: 1, n: m.meN, me: wire.Identity{ID: idOf(0xc1), Grants: []wire.Grant{{ID: idOf(0xc1), Role: wire.RoleDeployer, Service: "web"}}}})
+			press(m, "a")
+			m.update(grantsMsg{epoch: 1, n: m.grantsN, err: fmt.Errorf("operator: grants: %w", wire.Errorf(wire.CodeUnauthorized, "%s is no admin and may not list the grants", idOf(0xc1)))})
+			return m
+		}},
+		{"access-refused", func(w, h int) *model {
+			m := live(w, h, fixtureFleet())
+			press(m, "a")
+			m.update(grantsMsg{epoch: 1, n: m.grantsN, err: wire.Errorf(wire.CodeInternal, "reading the grants: the database is locked")})
+			return m
+		}},
+		{"access-none", func(w, h int) *model {
+			m := live(w, h, fixtureFleet())
+			press(m, "a")
+			m.update(grantsMsg{epoch: 1, n: m.grantsN})
+			return m
+		}},
+		{"access-many", func(w, h int) *model {
+			m, _ := onAccess(w, h)
+			var many []wire.Grant
+			for i := range 300 {
+				many = append(many, wire.Grant{ID: idOf(i % 256), Role: wire.RoleDeployer, Service: fmt.Sprintf("service-%03d", i), Note: longName, By: idOf(0xee), At: t0.Add(-time.Duration(i) * time.Hour)})
+			}
+			m.update(grantsMsg{epoch: 1, n: m.grantsN, grants: many})
+			return m
+		}},
+		{"access-lost", func(w, h int) *model {
+			m, clock := onAccess(w, h)
+			m.update(lostMsg{epoch: 1})
+			clock.at = t0.Add(3 * time.Second)
+			m.update(tickMsg{})
+			return m
+		}},
+		{"access-form", func(w, h int) *model { m, _ := onAccess(w, h); press(m, "g"); return m }},
+		{"access-form-admin", func(w, h int) *model { m, _ := onAccess(w, h); press(m, "g", "left"); return m }},
+		{"access-form-asking", func(w, h int) *model {
+			m, _ := onAccess(w, h)
+			press(m, "g", "down")
+			typeText(m, string(idOf(0x77)))
+			press(m, "down")
+			typeText(m, "web")
+			press(m, "down")
+			typeText(m, longName)
+			press(m, "enter")
+			return m
+		}},
+		{"access-form-refused", func(w, h int) *model {
+			m, _ := onAccess(w, h)
+			press(m, "g", "down")
+			typeText(m, "zz")
+			press(m, "down", "down", "enter")
+			m.update(grantedMsg{epoch: 1, n: m.grantN, err: fmt.Errorf("operator: grant: %w", wire.Errorf(wire.CodeBadRequest, "%q is no endpoint ID", "zz"))})
+			return m
+		}},
+		{"access-question", func(w, h int) *model { m, _ := onAccess(w, h); press(m, "down", "down", "x"); return m }},
+		{"access-help", func(w, h int) *model { m, _ := onAccess(w, h); press(m, "?"); return m }},
 	}
 }

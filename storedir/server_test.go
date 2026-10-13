@@ -19,6 +19,7 @@ import (
 	jsnode "github.com/amber-store/jaccard-store/node"
 	jsserver "github.com/amber-store/jaccard-store/server"
 	jswire "github.com/amber-store/jaccard-store/wire"
+	irohkey "github.com/tmc/go-iroh/key"
 
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/push"
@@ -96,6 +97,25 @@ func (s *testServer) push(service string, storePaths ...string) {
 	cfg := push.Config{Key: k, Server: s.id, Addrs: s.addrs, Prefix: wire.StorePrefix(service), TempDir: s.t.TempDir()}
 	if _, err := push.Push(ctx, cfg, storePaths); err != nil {
 		s.t.Fatalf("pushing %v for %s: %v", storePaths, service, err)
+	}
+}
+
+// dialer returns what a store of a test is given to dial the server
+// with: a dial of jaccard-store's own, with a key of the test's. A
+// zathras is given one that dials from the endpoint of its connection to
+// draal.
+func (s *testServer) dialer() func(context.Context) (node.Opener, error) {
+	s.t.Helper()
+	k, err := node.NewKey()
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	server, err := irohkey.ParseEndpointID(string(s.id))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return func(ctx context.Context) (node.Opener, error) {
+		return jsnode.Dial(ctx, jsnode.DialConfig{Key: k.Iroh(), ALPN: jswire.ALPN, Server: server, Addrs: s.addrs, Log: quiet})
 	}
 }
 

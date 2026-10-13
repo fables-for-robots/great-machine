@@ -176,16 +176,60 @@ button {
   font-weight: 600;
 }
 
-/* The way to the page of the store, which is a page of its own. */
-.store {
+/* The far end of the header: the ways to what is not of the fleet, who
+   the key is, and the state of the connection. */
+.top-side {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--ffr-space-2) var(--ffr-space-4);
+  min-width: 0;
+}
+
+/* A way out of the fleet: to who may do what, and to the page of the
+   store, which is a page of its own. */
+.toplink {
   color: var(--ffr-ink-100);
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
 }
 
-.store:hover {
+.toplink:hover,
+.toplink[aria-current] {
   color: var(--ffr-white);
+}
+
+.toplink[aria-current] {
+  font-weight: 600;
+}
+
+/* Who the key is: the beginning of its ID, and its roles. */
+.who {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--ffr-space-2);
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ffr-ink-100);
+}
+
+.who .id,
+.who .id:hover {
+  color: var(--ffr-white);
+  border-bottom-color: var(--ffr-ink-300);
+}
+
+.who .id[data-said]::after {
+  color: var(--ffr-teal-300);
+}
+
+.who-roles {
+  max-width: 34ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .link {
@@ -388,6 +432,12 @@ h2 {
   margin-top: var(--ffr-space-3);
 }
 
+/* What the page says in the place of every view: that it is no longer
+   signed in, or that its key has no role. */
+.whole {
+  max-width: 86ch;
+}
+
 /* Why something failed, in the words of draal or of a zathras: in full,
    however long, and as it was written. */
 .reason {
@@ -421,6 +471,46 @@ h2 {
   content: " " attr(data-said);
   font-family: var(--ffr-font-body);
   color: var(--ok-text);
+}
+
+/* The button of the design system: blocky, black on white or white on
+   black, a pixel up when the pointer is on it. */
+.button {
+  font-family: var(--ffr-font-display);
+  font-weight: 700;
+  font-size: 13px;
+  padding: 8px 16px;
+  border-radius: var(--ffr-radius-sm);
+  border: 1.5px solid var(--fg);
+  background: var(--fg);
+  color: var(--bg);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform var(--ffr-duration-fast) var(--ffr-ease-standard);
+}
+
+.button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.button.quiet {
+  background: transparent;
+  color: var(--fg);
+  padding: 5px 12px;
+  font-size: 12px;
+}
+
+.button:disabled {
+  background: var(--surface-strong);
+  border-color: var(--border);
+  color: var(--fg-subtle);
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button {
+    transition: none;
+  }
 }
 
 /* A state as a word with its colour beside it. */
@@ -490,8 +580,12 @@ h2 {
     flex-basis: 100%;
   }
 
-  .store {
+  .top-side {
     margin-left: auto;
+  }
+
+  .who-roles {
+    max-width: 22ch;
   }
 
   .view {

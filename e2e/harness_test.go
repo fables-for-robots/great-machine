@@ -72,15 +72,26 @@ type harness struct {
 	data     string          // the directory of the store's database
 	bucket   jsserver.Bucket // the bucket of the store; nil without options.store
 	draalKey node.Key
-	opKey    node.Key
-	pods     []*pod
-	op       *operator.Client
+	opKey    node.Key // an admin of draal's command line
+	// roleKey signs for the zathrases of the harness, of whatever service:
+	// its grant is in the database, so that a draal that is started again
+	// has it.
+	roleKey node.Key
+	// authority is who the draal that runs now asks.
+	authority *authz.Authority
+	pods      []*pod
+	op        *operator.Client
 	// podStore and podStart are what a pod that is started from now on
 	// fetches a closure with and starts its processes with. nil: the pod
 	// itself, which fetches nothing, and a start as it is. A test whose
 	// pod has a real store sets them (storedir_test.go).
 	podStore zathras.Preloader
 	podStart func(cmd *exec.Cmd, start func() error) error
+	// podService and podRole are the service a pod that is started from
+	// now on registers for, and the role key that signs for it. "" and
+	// nil: the service of the harness, and its role key.
+	podService string
+	podRole    *node.Key
 
 	mu        sync.Mutex
 	addr      netip.AddrPort     // where draal listens now
@@ -143,6 +154,9 @@ func start(t *testing.T, opts options) *harness {
 	if h.opKey, err = node.NewKey(); err != nil {
 		t.Fatalf("NewKey: %v", err)
 	}
+	if h.roleKey, err = node.NewKey(); err != nil {
+		t.Fatalf("NewKey: %v", err)
+	}
 
 	h.startDraal()
 	t.Cleanup(func() { h.stopDraal() })
@@ -164,7 +178,18 @@ func (h *harness) startDraal() {
 	if err != nil {
 		h.t.Fatalf("db.Open: %v", err)
 	}
-	allow := authz.NewAllowlist([]wire.ID{h.opKey.ID()})
+	// The grants are the database's, as the command reads them: the role
+	// key of the harness is granted at the first start.
+	if err := database.PutGrant(context.Background(), wire.Grant{ID: h.roleKey.ID(), Role: wire.RoleZathras, Note: "the pods of the harness", By: h.opKey.ID(), At: time.Now().UTC()}); err != nil {
+		database.Close()
+		h.t.Fatalf("granting the role key: %v", err)
+	}
+	grants, err := database.Grants(context.Background())
+	if err != nil {
+		database.Close()
+		h.t.Fatalf("the grants: %v", err)
+	}
+	allow := authz.New(authz.Config{Admins: []wire.ID{h.opKey.ID()}}, grants)
 	// The store is draal's own, answered on draal's endpoint, as the
 	// command puts the two together.
 	var store *storeserver.Store
@@ -198,9 +223,16 @@ func (h *harness) startDraal() {
 		closeAll(nil)
 		h.t.Fatalf("node.Listen: %v", err)
 	}
+	var storeSide draal.StoreServer
+	if store != nil {
+		// Not assigned when there is none: an interface that holds a nil
+		// store would not be nil.
+		storeSide = store
+	}
 	d := draal.New(draal.Config{
 		DB:             database,
 		Authz:          allow,
+		Store:          storeSide,
 		ID:             h.draalKey.ID(),
 		StoreDir:       h.storeDir,
 		Settle:         h.opts.settle,
@@ -220,6 +252,7 @@ func (h *harness) startDraal() {
 	h.addr = l.LocalAddr()
 	h.draal = d
 	h.store = store
+	h.authority = allow
 	h.stopDraal = func() {
 		once.Do(func() {
 			cancel()
@@ -271,6 +304,17 @@ func (h *harness) operator(key node.Key) *operator.Client {
 	return c
 }
 
+// statement returns what the role key of the harness signed for a
+// zathras with the endpoint ID given, at the draal of the harness.
+func (h *harness) statement(zathras wire.ID) *wire.Statement {
+	return h.statementBy(h.roleKey, zathras)
+}
+
+// statementBy is statement with the role key given.
+func (h *harness) statementBy(role node.Key, zathras wire.ID) *wire.Statement {
+	return &wire.Statement{By: role.ID(), Signature: role.Sign(wire.StatementText(h.draalKey.ID(), zathras))}
+}
+
 // Preload is the pod as the store of its zathras: it fetches nothing, and
 // notes what it was asked to fetch. The store of the tests is a directory
 // that is there from the start.
@@ -290,6 +334,13 @@ func (h *harness) startPod(name string) *pod {
 		h.t.Fatalf("NewKey: %v", err)
 	}
 	p := &pod{name: name, id: key.ID(), ring: logring.New(400, 16<<10)}
+	statement, of := h.statement(key.ID()), service
+	if h.podRole != nil {
+		statement = h.statementBy(*h.podRole, key.ID())
+	}
+	if h.podService != "" {
+		of = h.podService
+	}
 	var store zathras.Preloader = p
 	if h.podStore != nil {
 		store = h.podStore
@@ -307,7 +358,7 @@ func (h *harness) startPod(name string) *pod {
 	})
 	p.health = httptest.NewServer(health.Handler(func() wire.Phase { return p.sup.State().Phase }))
 	p.agent = zathras.New(zathras.Config{
-		Service: service,
+		Service: of,
 		Name:    name,
 		Version: "e2e",
 		Dial: func(ctx context.Context) (node.Conn, error) {
@@ -325,6 +376,7 @@ func (h *harness) startPod(name string) *pod {
 			}
 			return conn, err
 		},
+		Statement:   statement,
 		Supervisor:  p.sup,
 		Ring:        p.ring,
 		Preload:     store,

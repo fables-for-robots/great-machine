@@ -12,7 +12,6 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/fables-for-robots/great-machine/draal"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
@@ -167,7 +166,7 @@ func (in *shellInput) take() ([]byte, *wire.WinSize) {
 //
 // Nobody waits for pump. A Write that waits is ended by the Close of the
 // shell, if the Shell keeps to that; if it does not, pump stays with it.
-func (in *shellInput) pump(sh draal.Shell, stop <-chan struct{}) {
+func (in *shellInput) pump(sh Shell, stop <-chan struct{}) {
 	for {
 		select {
 		case <-stop:
@@ -199,7 +198,7 @@ type shellOutput struct {
 // each when the one before was taken and written (next), until the
 // output ends or stop is closed. Nobody waits for it either: a Read
 // that waits is the Shell's to end at its Close.
-func readShell(sh draal.Shell, pieces chan<- shellOutput, next, stop <-chan struct{}) {
+func readShell(sh Shell, pieces chan<- shellOutput, next, stop <-chan struct{}) {
 	buf := make([]byte, shellChunk)
 	for {
 		n, err := sh.Read(buf)
@@ -290,7 +289,7 @@ func (h *handler) shell(w http.ResponseWriter, r *http.Request) {
 	// room for a shell that is not there yet.
 	starting, started := context.WithCancel(s.ctx)
 	stopFull := context.AfterFunc(in.full, started)
-	sh, err := h.cfg.Controller.Shell(starting, id, req)
+	sh, err := h.cfg.Client.Shell(starting, id, req)
 	stopFull()
 	started()
 	if err != nil {

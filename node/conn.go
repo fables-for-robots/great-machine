@@ -90,6 +90,10 @@ func (s *stream) Done() <-chan struct{} {
 type conn struct {
 	c       *iroh.Conn
 	release func() error
+	// again is what a connection that was dialed dials its peer again
+	// with, for another protocol and from its own endpoint. nil for one
+	// that was accepted.
+	again func(ctx context.Context, alpn string) (*iroh.Conn, error)
 
 	close    sync.Once
 	closeErr error

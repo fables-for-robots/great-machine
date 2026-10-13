@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fables-for-robots/great-machine/authz"
 	"github.com/fables-for-robots/great-machine/fleet"
 	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/wire"
@@ -48,6 +47,16 @@ func (d *Draal) Serve(ctx context.Context, l node.Listener) error {
 // peer opens are counted: those draal opens to a zathras are not served
 // here.
 func (d *Draal) serveConn(ctx context.Context, conn node.Conn) {
+	// Noted for as long as it is served: a revocation ends the
+	// connections of the key it is of.
+	d.mu.Lock()
+	d.conns[conn] = struct{}{}
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		delete(d.conns, conn)
+		d.mu.Unlock()
+	}()
 	var wg sync.WaitGroup
 	places := make(chan struct{}, d.cfg.MaxStreams) // one for every stream served
 	warned := false
@@ -103,7 +112,7 @@ func (d *Draal) serveStream(ctx context.Context, conn node.Conn, s node.Stream) 
 		d.register(ctx, conn, s, req.Register)
 		return
 	}
-	d.operate(ctx, conn.RemoteID(), s, &req)
+	d.operate(ctx, conn, s, &req)
 }
 
 // refuse answers a request with err, and waits for the peer to end the
@@ -117,16 +126,45 @@ func (d *Draal) refuse(s node.Stream, err error) {
 	io.Copy(io.Discard, s)
 }
 
+// signer returns the role key that signed for the zathras id to register
+// as reg says, or why the registration is refused, in this order: it has
+// no statement; its statement is not what the role key it names signed
+// for this zathras at this draal; that role key is no zathras of the
+// service. The refusal is read in the log of a pod, and says what is to
+// be done.
+func (d *Draal) signer(id wire.ID, reg *wire.Register) (wire.ID, error) {
+	st := reg.Statement
+	if st == nil {
+		return "", wire.Errorf(wire.CodeUnauthorized, "a zathras registers with the statement of the role key of its service, and this one has none: "+
+			"it is a zathras of before v0.4.0, or one that was started without --role-key")
+	}
+	by, err := node.ParseID(string(st.By))
+	if err != nil {
+		return "", wire.Errorf(wire.CodeUnauthorized, "the statement of this zathras names no role key: %q is no endpoint ID", clean(string(st.By), 80))
+	}
+	if err := node.Verify(by, wire.StatementText(d.cfg.ID, id), st.Signature); err != nil {
+		return "", wire.Errorf(wire.CodeUnauthorized, "the statement of this zathras is not what the role key %s signed for it at this draal: "+
+			"a statement is of one zathras and one draal", by)
+	}
+	if err := d.cfg.Authz.Signer(by, reg.Service); err != nil {
+		return "", err
+	}
+	return by, nil
+}
+
 // register is the session of a zathras: it joins the fleet, its reports
 // are taken until the stream or the connection ends, and then it leaves.
+// A registration that is not well-formed is a bad request; one that is,
+// and has no statement of a role key of its service, is refused.
 func (d *Draal) register(ctx context.Context, conn node.Conn, s node.Stream, reg *wire.Register) {
 	id := conn.RemoteID()
-	if err := d.cfg.Authz.Authorize(id, authz.OpRegister, reg.Service); err != nil {
-		d.log.Warn("refused", "peer", id, "operation", authz.OpRegister, "service", reg.Service)
+	if err := validRegister(reg); err != nil {
 		d.refuse(s, err)
 		return
 	}
-	if err := validRegister(reg); err != nil {
+	by, err := d.signer(id, reg)
+	if err != nil {
+		d.log.Warn("refused", "peer", id, "operation", "register", "service", reg.Service, "reason", said(err))
 		d.refuse(s, err)
 		return
 	}
@@ -144,10 +182,23 @@ func (d *Draal) register(ctx context.Context, conn node.Conn, s node.Stream, reg
 	}
 	state := bound(reg.State)
 	now := d.cfg.Now()
-	sess := &session{id: id, service: reg.Service, name: reg.Name, conn: conn}
+	sess := &session{id: id, service: reg.Service, name: reg.Name, conn: conn, by: by}
 	// The fleet and the sessions change together, so that whoever sees
 	// the member finds its connection.
+	//
+	// The role key is asked about once more, under the lock: a revocation
+	// replaces the grants and then, under this lock, ends the sessions it
+	// finds. A registration that was let through before the grants were
+	// replaced, and joined after the revocation had looked, would stay
+	// for as long as it kept its connection; asked here, it is either
+	// refused or found.
 	d.mu.Lock()
+	if err := d.cfg.Authz.Signer(by, reg.Service); err != nil {
+		d.mu.Unlock()
+		d.log.Warn("refused", "peer", id, "operation", "register", "service", reg.Service, "reason", said(err))
+		d.refuse(s, err)
+		return
+	}
 	epoch := d.fleet.Join(fleet.Member{
 		ID: id, Service: reg.Service, Name: reg.Name,
 		Connected: now, State: state, Reported: now,
@@ -159,7 +210,7 @@ func (d *Draal) register(ctx context.Context, conn node.Conn, s node.Stream, reg
 		d.log.Info("a zathras connected again: closing its connection of before", "zathras", id, "name", reg.Name)
 		replaced.conn.Close()
 	}
-	d.log.Info("zathras registered", "zathras", id, "service", reg.Service, "name", reg.Name, "version", reg.Version)
+	d.log.Info("zathras registered", "zathras", id, "service", reg.Service, "name", reg.Name, "version", reg.Version, "role-key", by)
 
 	// A connection that ends is to end the reading, whatever the stream does.
 	left := make(chan struct{})

@@ -33,6 +33,9 @@ type testDraal struct {
 	id   wire.ID
 	addr netip.AddrPort
 	op   *operator.Client
+	// roleKey is the file of a role key that signs for a zathras of any
+	// service at this draal.
+	roleKey string
 }
 
 // aDraal serves a draal on loopback, whose Nix store is storeDir, until
@@ -52,6 +55,11 @@ func aDraal(t *testing.T, storeDir string) *testDraal {
 	if err != nil {
 		t.Fatal(err)
 	}
+	roleKey := aRoleKey(t)
+	role, err := node.LoadKey(roleKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	l, err := node.Listen(ctx, node.ListenConfig{Key: draalKey, Local: true, Log: quiet})
 	if err != nil {
@@ -61,7 +69,7 @@ func aDraal(t *testing.T, storeDir string) *testDraal {
 	}
 	d := draal.New(draal.Config{
 		DB:          database,
-		Authz:       authz.NewAllowlist([]wire.ID{opKey.ID()}),
+		Authz:       authz.New(authz.Config{Admins: []wire.ID{opKey.ID()}}, []wire.Grant{{ID: role.ID(), Role: wire.RoleZathras}}),
 		ID:          draalKey.ID(),
 		StoreDir:    storeDir,
 		Settle:      10 * time.Millisecond,
@@ -86,7 +94,7 @@ func aDraal(t *testing.T, storeDir string) *testDraal {
 	}
 	op := operator.New(conn)
 	t.Cleanup(func() { op.Close() })
-	return &testDraal{id: draalKey.ID(), addr: l.LocalAddr(), op: op}
+	return &testDraal{id: draalKey.ID(), addr: l.LocalAddr(), op: op, roleKey: roleKey}
 }
 
 // zathras watches the fleet until its one zathras meets cond, and returns
@@ -209,6 +217,7 @@ func TestRunZathrasRunsItsServiceThroughItsLauncherAndClosesItsStoreAfterIt(t *t
 
 			cfg := aZathras(t)
 			cfg.draal, cfg.addrs = d.id, []netip.AddrPort{d.addr}
+			cfg.roleKey = d.roleKey
 			cfg.stopTimeout = time.Second
 			cfg.user = user
 			store := newFakeStore()

@@ -12,6 +12,15 @@ type Generation struct {
 	CreatedBy string
 }
 
+type Grant struct {
+	ID        string
+	Role      string
+	Service   string
+	Note      string
+	CreatedAt int64
+	CreatedBy string
+}
+
 type Rollout struct {
 	ID         int64
 	Service    string

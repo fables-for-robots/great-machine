@@ -1,7 +1,9 @@
 package node
 
 import (
+	"errors"
 	"fmt"
+	"os"
 
 	jnode "github.com/amber-store/jaccard-store/node"
 	"github.com/tmc/go-iroh/key"
@@ -38,6 +40,41 @@ func LoadOrCreateKey(path string) (Key, error) {
 		return Key{}, err
 	}
 	return Key{secret: secret}, nil
+}
+
+// LoadKey reads the key file at path, as LoadOrCreateKey does, and makes
+// none: a file that is not there is an error. It is for a key that
+// somebody was to put there, as the role key of a zathras is: a new one
+// would be a key nobody granted anything.
+func LoadKey(path string) (Key, error) {
+	if _, err := os.Stat(path); err != nil {
+		return Key{}, fmt.Errorf("the key file %s: %w", path, errors.Unwrap(err))
+	}
+	return LoadOrCreateKey(path)
+}
+
+// Sign returns the signature of the key over text: 64 bytes, of Ed25519,
+// as every key of iroh signs.
+func (k Key) Sign(text []byte) []byte {
+	sig := k.secret.Sign(text).Bytes()
+	return sig[:]
+}
+
+// Verify returns nil when signature is that of the key whose endpoint ID
+// is id, over text.
+func Verify(id wire.ID, text, signature []byte) error {
+	public, err := key.ParseEndpointID(string(id))
+	if err != nil {
+		return fmt.Errorf("%q is no endpoint ID: %w", string(id), err)
+	}
+	sig, err := key.SignatureFromSlice(signature)
+	if err != nil {
+		return fmt.Errorf("a signature has %d bytes, and this one %d", key.SignatureSize, len(signature))
+	}
+	if err := public.PublicKey().Verify(text, sig); err != nil {
+		return errors.New("the signature is not that of the key over this text")
+	}
+	return nil
 }
 
 // ID returns the endpoint ID of the key: its public half.

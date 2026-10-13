@@ -6,16 +6,18 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/fables-for-robots/great-machine/launcher"
+	"github.com/fables-for-robots/great-machine/node"
 	"github.com/fables-for-robots/great-machine/storedir"
+	"github.com/fables-for-robots/great-machine/storeserver"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
@@ -89,10 +91,24 @@ func TestARolloutIntoAStoreDirectory(t *testing.T) {
 		t.Fatalf("launcher.New: %v", err)
 	}
 
+	// The store of the pod is dialed from the endpoint of its connection
+	// to draal, as a zathras dials it: one key, and both protocols.
 	var pid int
+	var running atomic.Pointer[pod]
 	real, err := storedir.Open(storedir.Config{
-		Server:  h.draalKey.ID(),
-		Addrs:   []netip.AddrPort{h.addr},
+		Dial: func(ctx context.Context) (node.Opener, error) {
+			p := running.Load()
+			if p == nil {
+				return nil, errors.New("the pod is not there yet")
+			}
+			p.mu.Lock()
+			conn := p.conn
+			p.mu.Unlock()
+			if conn == nil {
+				return nil, errors.New("the pod has no connection to draal")
+			}
+			return node.Again(ctx, conn, storeserver.ALPN)
+		},
 		Service: service,
 		Cache:   t.TempDir(),
 		Dir:     h.storeDir,
@@ -117,6 +133,7 @@ func TestARolloutIntoAStoreDirectory(t *testing.T) {
 	store := &asked{Store: real}
 	h.podStore, h.podStart = store, l.Start
 	p := h.startPod("web-0")
+	running.Store(p)
 	h.pods = append(h.pods, p)
 	h.fleetWhere("the zathras to register", func(f wire.Fleet) bool { return len(zathrasesOf(f)) == 1 })
 
@@ -167,11 +184,29 @@ func TestARolloutIntoAStoreDirectory(t *testing.T) {
 	}
 
 	// Another service has a store of its own in draal's, in which the
-	// store path of this one is not: its pod is told so, by name.
+	// store path of this one is not: its pod is told so, by name. It is a
+	// zathras of api that is registered: nobody else pulls what is api's.
 	otherDir := filepath.Join(t.TempDir(), "store")
+	otherKey := newKey(t)
+	elsewhere, err := h.dial(ctx, otherKey)
+	if err != nil {
+		t.Fatalf("the connection of another pod to draal: %v", err)
+	}
+	defer elsewhere.Close()
+	reg, err := elsewhere.OpenStream(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reg.Close()
+	if resp, err := wire.Call(reg, &wire.Request{Register: &wire.Register{
+		Service: "api", Name: "api-0", Version: "e2e", State: wire.State{Phase: wire.PhaseIdle}, Statement: h.statement(otherKey.ID()),
+	}}); err != nil || resp.Registered == nil {
+		t.Fatalf("registering the pod of another service: %+v, %v", resp, err)
+	}
 	other, err := storedir.Open(storedir.Config{
-		Server:  h.draalKey.ID(),
-		Addrs:   []netip.AddrPort{h.addr},
+		Dial: func(ctx context.Context) (node.Opener, error) {
+			return node.Again(ctx, elsewhere, storeserver.ALPN)
+		},
 		Service: "api",
 		Cache:   t.TempDir(),
 		Dir:     otherDir,

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -26,8 +25,8 @@ const (
 	webStopWait = 5 * time.Second
 )
 
-// webServer is the HTTP server of the web page, beside the iroh endpoint
-// of draal.
+// webServer is the HTTP server of the web page, which `great-machine web`
+// runs on the machine of an operator.
 type webServer struct {
 	server *http.Server
 	end    context.CancelFunc // ends the context of every request
@@ -83,7 +82,7 @@ func (w *webServer) counted(handler http.Handler) http.Handler {
 			// that its connection ends; Close ends it.
 			w.mu.Unlock()
 			rw.Header().Set("Connection", "close")
-			http.Error(rw, "great-machine: draal is stopping", http.StatusServiceUnavailable)
+			http.Error(rw, "great-machine: the web page is ending", http.StatusServiceUnavailable)
 			return
 		}
 		w.handlers.Add(1)
@@ -126,32 +125,4 @@ func (w *webServer) Stop() {
 			w.log.Warn("the web page was stopped while requests were still being answered")
 		}
 	})
-}
-
-// announceWeb logs where the web page is, and warns about a page that
-// was not built into the program and about an address that is not
-// loopback.
-func announceWeb(log *slog.Logger, addr string, bound net.Addr, loopback, built bool) {
-	log.Info("web page", "addr", bound.String(), "url", webURL(addr, bound))
-	if !built {
-		log.Warn("the web page was not built into this program: it answers every request with a line that says so")
-	}
-	if !loopback {
-		log.Warn("the web page listens on an address that is not loopback: it has no authentication, and whoever reaches it has a shell in every container", "addr", addr)
-	}
-}
-
-// webURL returns the URL of the web page for a person on this machine:
-// the host of addr, as --web-addr has it, with the port that was bound.
-// For an address that is every address, the host is localhost.
-func webURL(addr string, bound net.Addr) string {
-	host, _, _ := net.SplitHostPort(addr)
-	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
-		host = "localhost"
-	}
-	port := 0
-	if tcp, ok := bound.(*net.TCPAddr); ok {
-		port = tcp.Port
-	}
-	return "http://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/"
 }

@@ -50,7 +50,8 @@ func TestTheFirstFleetMakesTheConnectionLive(t *testing.T) {
 	if m.conn != connConnecting || m.have {
 		t.Errorf("before draal answered the connection is %v, and a fleet is there: %v", m.conn, m.have)
 	}
-	wantEffects(t, "dialed", m.update(dialedMsg{epoch: 1}))
+	// Dialed: the key is asked who it is to this draal.
+	wantEffects(t, "dialed", m.update(dialedMsg{epoch: 1}), effMe{epoch: 1, n: 1})
 	if m.conn != connConnecting {
 		t.Errorf("dialed, and before the first fleet, the connection is %v", m.conn)
 	}
@@ -624,7 +625,8 @@ func TestConnectionLostAndBack(t *testing.T) {
 		// live, on the view it was on, and what the view holds is asked
 		// for again of the new connection.
 		clock.at = clock.at.Add(time.Second)
-		wantEffects(t, tt.on+": dialed", m.update(dialedMsg{epoch: m.epoch}))
+		meN := m.meN
+		wantEffects(t, tt.on+": dialed", m.update(dialedMsg{epoch: m.epoch}), effMe{epoch: m.epoch, n: meN + 1})
 		if m.conn != connLost {
 			t.Errorf("%s: dialed, and before a fleet came, the connection is %v", tt.on, m.conn)
 		}
@@ -953,10 +955,11 @@ func TestEverySizeOfTerminal(t *testing.T) {
 		}
 	}
 	// Every size from 1×1 to 100×40, in a terminal that is resized from
-	// one to the next: each of the three views, and the states that
-	// draw the most.
+	// one to the next: each of the views, and the states that draw the
+	// most.
 	swept := []string{"services", "services-none", "services-lost", "service-rollout-under-way", "service-halted", "service-no-rollout",
-		"zathras", "zathras-long-name", "zathras-gone", "zathras-help"}
+		"zathras", "zathras-long-name", "zathras-gone", "zathras-help",
+		"access", "access-many", "access-no-admin", "access-form-refused", "access-question"}
 	for _, sc := range scenes() {
 		if !slices.Contains(swept, sc.name) {
 			continue

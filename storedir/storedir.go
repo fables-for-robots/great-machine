@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,11 +54,12 @@ const (
 // Config is what a Store is made of. The zero value of a number or of a
 // time stands for its default.
 type Config struct {
-	// Server is the endpoint ID of draal, which is the store's. Required.
-	Server wire.ID
-	// Addrs is for tests: where the server is. It is then dialed there,
-	// and looked up nowhere.
-	Addrs []netip.AddrPort
+	// Dial dials the store, which is draal, for jaccard-store's protocol.
+	// A zathras dials it from the endpoint of its connection to draal
+	// (node.Again): it has one key, and draal lets a zathras pull that is
+	// registered. It is called when a pull needs a connection and there
+	// is none; its context bounds the dial alone. Required.
+	Dial func(ctx context.Context) (node.Opener, error)
 	// Service is the service of the zathras: its prefix in the store is
 	// where its store paths are pulled from. Required.
 	Service string
@@ -123,11 +123,8 @@ func (cfg Config) withDefaults() Config {
 
 // check returns why a store cannot be made of cfg, or nil.
 func (cfg Config) check() error {
-	if cfg.Server == "" {
-		return errors.New("storedir: no server: the endpoint ID of draal is needed")
-	}
-	if _, err := node.ParseID(string(cfg.Server)); err != nil {
-		return fmt.Errorf("storedir: the server is no endpoint ID: %w", err)
+	if cfg.Dial == nil {
+		return errors.New("storedir: nothing to dial the store with")
 	}
 	if cfg.Service == "" {
 		return errors.New("storedir: no service")
@@ -205,10 +202,6 @@ func Open(cfg Config) (*Store, error) {
 		return nil, err
 	}
 	cfg = cfg.withDefaults()
-	key, err := node.NewKey()
-	if err != nil {
-		return nil, fmt.Errorf("storedir: making a key: %w", err)
-	}
 	for _, dir := range []string{cfg.Dir, cfg.Cache} {
 		if err := own(dir); err != nil {
 			return nil, fmt.Errorf("storedir: %s has to be the zathras's alone to write to, and cannot be made so: %w", dir, err)
@@ -230,13 +223,12 @@ func Open(cfg Config) (*Store, error) {
 		jobs:    make(chan struct{}, cfg.Jobs),
 		fetches: make(map[string]*fetch),
 	}
-	s.dial = dialer(cfg, key)
+	s.dial = dialer(cfg)
 	if cfg.wrapDial != nil {
 		s.dial = cfg.wrapDial(s.dial)
 	}
 	s.ctx, s.stop = context.WithCancel(context.Background())
-	s.log.Info("the store of the zathras", "directory", cfg.Dir, "cache", cfg.Cache,
-		"service", cfg.Service, "server", string(cfg.Server), "client", string(key.ID()))
+	s.log.Info("the store of the zathras", "directory", cfg.Dir, "cache", cfg.Cache, "service", cfg.Service)
 	return s, nil
 }
 

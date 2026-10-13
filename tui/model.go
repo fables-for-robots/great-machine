@@ -12,7 +12,7 @@ import (
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
-// screen is one of the three views.
+// screen is one of the views.
 type screen int
 
 const (
@@ -22,6 +22,8 @@ const (
 	screenService
 	// screenZathras is one zathras: its state, its figures and its log.
 	screenZathras
+	// screenAccess is who may do what: the grants (access.go).
+	screenAccess
 )
 
 // connState is the state of the connection to draal.
@@ -261,6 +263,29 @@ type model struct {
 	follow    bool // the end of the log is kept in sight
 	logTop    int  // the first row in sight, when follow is not set
 
+	// Who the key is to draal, as draal said last: access.go.
+	me     wire.Identity
+	haveMe bool // draal has said, over the connection there is or the one before
+	meN    int  // the number of the question whose answer counts: the newest
+
+	// screenAccess: the grants as draal listed them, and of them what is
+	// chosen, by what it is.
+	grants     []wire.Grant
+	grantsOf   int // how many draal listed: more than are kept, of a list beyond grantsKept
+	grantsAre  asked
+	grantsErr  string // draal's refusal; clean
+	notAdmin   bool   // draal refused the list as an admin's
+	grantsN    int    // the number of the request whose answer counts: the newest
+	gKey       grantKey
+	gIdx       int
+	gTop       int
+	form       *grantForm  // the form that grants, while it is open
+	grantN     int         // the number of the grant whose answer counts
+	asked      *wire.Grant // the grant of which it is asked whether to revoke it
+	revoking   bool        // draal was asked to revoke, and has not answered
+	revokingOf wire.Grant  // what it was asked to revoke
+	revokeN    int         // the number of the revocation whose answer counts
+
 	// shared is how the rows of the view that is open are shared out
 	// among its parts. It is worked out once for a message, by whoever
 	// asks first, and thrown away with the next.
@@ -387,14 +412,34 @@ func (m *model) update(msg tea.Msg) []effect {
 func (m *model) take(msg tea.Msg) []effect {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		// While the form is open every key is the form's: a letter is a
+		// letter there, also the ones that are keys of a view. No shell
+		// is asked for from the view the form is in.
+		if m.form != nil && m.sh.stage == shellNone {
+			return m.formKey(msg)
+		}
 		return m.key(msg.String())
+	case tea.PasteMsg:
+		if f := m.form; f != nil && !f.asking && m.sh.stage == shellNone {
+			f.put(msg.Content)
+		}
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(msg.Width, 0), max(msg.Height, 0)
 		m.buildRows()
 	case dialedMsg:
 		if msg.epoch == m.epoch {
 			m.everDialed = true
+			// The key is asked who it is to the draal it has reached.
+			return []effect{m.askMe()}
 		}
+	case meMsg:
+		m.newMe(msg)
+	case grantsMsg:
+		m.newGrants(msg)
+	case grantedMsg:
+		return m.newGranted(msg)
+	case revokedMsg:
+		return m.newRevoked(msg)
 	case dialFailedMsg:
 		return m.dialFailed(msg)
 	case fleetMsg:
@@ -469,6 +514,7 @@ func (m *model) lost(msg lostMsg) []effect {
 		m.log.say("The connection to draal was lost.")
 		m.buildRows()
 	}
+	m.accessLost()
 	m.epoch++ // nothing of the old connection is read from here on
 	m.pause = m.cfg.RetryFirst
 	// A shell that draal was asked for over it is not waited for.
@@ -490,6 +536,9 @@ func (m *model) newFleet(msg fleetMsg) []effect {
 	m.choose()
 
 	effs := m.rolloutsDue(first)
+	if first {
+		effs = append(effs, m.accessDue()...)
+	}
 	if m.screen == screenZathras {
 		z, in, ok := m.find(m.zathras)
 		switch {
@@ -577,6 +626,8 @@ func (m *model) again() []effect {
 		if m.present {
 			return m.askZathras()
 		}
+	case screenAccess:
+		return m.accessDue()
 	}
 	return nil
 }
@@ -674,13 +725,27 @@ func (m *model) key(name string) []effect {
 		effs = append(effs, m.dial())
 	}
 	m.notice = ""
+	if m.asked != nil {
+		// The key answers whether a grant is to be revoked, and does
+		// nothing else.
+		return append(effs, m.answerQuestion(name)...)
+	}
 	if m.help {
 		m.help = false
 		return effs
 	}
+	if m.screen == screenAccess {
+		if more, taken := m.accessKey(name); taken {
+			return append(effs, more...)
+		}
+	}
 	switch name {
 	case "?":
 		m.help = true
+	case "a":
+		if m.screen == screenServices {
+			effs = append(effs, m.openAccess()...)
+		}
 	case "up", "k":
 		m.move(-1)
 	case "down", "j":
@@ -734,6 +799,9 @@ func (m *model) page() int {
 	if m.screen == screenService {
 		return max(m.zathrasesHeight()-1, 1)
 	}
+	if m.screen == screenAccess {
+		return max(m.accessHeight()-1, 1)
+	}
 	return max(m.servicesHeight()-1, 1)
 }
 
@@ -760,6 +828,8 @@ func (m *model) move(delta int) {
 		}
 		top = min(max(top+delta, 0), last)
 		m.logTop, m.follow = top, top >= last
+	case screenAccess:
+		m.moveGrant(delta)
 	}
 }
 
@@ -835,6 +905,9 @@ func (m *model) back() []effect {
 			m.svcName = m.service
 		}
 		m.choose()
+	case screenAccess:
+		m.screen = screenServices
+		m.choose()
 	}
 	return nil
 }
@@ -851,6 +924,8 @@ func (m *model) keepInSight() {
 		if last := max(len(m.rows)-m.logHeight(), 0); m.logTop > last {
 			m.logTop = last
 		}
+	case screenAccess:
+		m.gTop = inSight(m.gTop, m.gIdx, len(m.grants), max(m.accessHeight(), 1))
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -142,13 +141,11 @@ type storeFigures struct {
 func (h *harness) storeFigures() storeFigures {
 	h.t.Helper()
 	h.mu.Lock()
-	page := h.store.Admin()
+	page := h.store.Page("/api/stats")
 	h.mu.Unlock()
-	rec := httptest.NewRecorder()
-	page.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stats", nil))
 	var f storeFigures
-	if err := json.Unmarshal(rec.Body.Bytes(), &f); err != nil || rec.Code != http.StatusOK {
-		h.t.Fatalf("the figures of the store: %d %s (%v)", rec.Code, rec.Body, err)
+	if err := json.Unmarshal(page.Body, &f); err != nil || page.Status != http.StatusOK {
+		h.t.Fatalf("the figures of the store: %d %s (%v)", page.Status, page.Body, err)
 	}
 	return f
 }
@@ -210,27 +207,30 @@ func TestTheStoreThroughDraal(t *testing.T) {
 		t.Errorf("the second push of api's closure = %+v, %v; want both store paths there already", res, err)
 	}
 
-	// Whoever knows draal's ID pulls, as the mount of a zathras does with
-	// a key that draal has never seen; and what comes back is what was
-	// pushed.
+	// Who may pull does, and what comes back is what was pushed. A key
+	// that was granted nothing pulls nothing: knowing draal's ID is not
+	// enough.
 	stranger := newKey(t)
+	if _, err := h.pullAs(ctx, stranger, prefix["web"]+filepath.Base(web)); err == nil || !strings.Contains(err.Error(), "unauthorized") {
+		t.Errorf("the pull of a stranger: %v, want it refused as unauthorized", err)
+	}
 	pulls := func() {
 		t.Helper()
 		for service, paths := range map[string][]string{"web": {glibc, web}, "api": {glibc, api}} {
 			for _, path := range paths {
 				name := prefix[service] + filepath.Base(path)
-				got, err := h.pullAs(ctx, stranger, name)
+				got, err := h.pullAs(ctx, h.opKey, name)
 				if err != nil {
-					t.Errorf("pulling %s as a stranger: %v", name, err)
+					t.Errorf("pulling %s as an admin: %v", name, err)
 				} else if want := rootOf(t, path); got != want {
 					t.Errorf("%s has the root %s, and what was pushed has %s", name, got, want)
 				}
 			}
 		}
 		// A store path is a reference of the services it was pushed for
-		// and of no other: the mount of a pod of api does not find the
-		// program of web.
-		if _, err := h.pullAs(ctx, stranger, prefix["api"]+"bbb-web"); !errors.Is(err, client.ErrNotFound) {
+		// and of no other: under the prefix of api there is no program
+		// of web.
+		if _, err := h.pullAs(ctx, h.opKey, prefix["api"]+"bbb-web"); !errors.Is(err, client.ErrNotFound) {
 			t.Errorf("pulling the program of web under the prefix of api: %v, want no such reference", err)
 		}
 	}

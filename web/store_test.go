@@ -1,42 +1,35 @@
 package web
 
 import (
-	"fmt"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
-// echo is a store's page for the tests: it answers with the method and
-// the path it was asked with, under a policy of its own, as the page of
-// jaccard-store has one.
-var echo = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Security-Policy", echoPolicy)
-	fmt.Fprintf(w, "%s %s", r.Method, r.URL.Path)
-})
+// echo is the page of a store for the tests: it answers with the path it
+// was asked for.
+func echo(path string) (wire.StorePage, error) {
+	return wire.StorePage{Status: http.StatusOK, Type: "text/plain; charset=utf-8", Body: []byte("GET " + path)}, nil
+}
 
-const echoPolicy = "default-src 'none'"
-
-// The store's page is the handler it is given, under /store/, asked with
-// that part of the path taken off: jaccard-store's admin page asks for
-// what it shows by paths beside its own.
-func TestTheStoresPageIsServedUnderStore(t *testing.T) {
-	srv := serve(t, Config{Store: echo})
+// The store's page is what draal answers for it, under /store/, asked
+// with that part of the path taken off and with its query:
+// jaccard-store's admin page asks for what it shows by paths beside its
+// own.
+func TestTheStoresPageIsAskedOfDraal(t *testing.T) {
+	srv := serve(t, Config{Client: &fake{storePage: echo}})
 	for path, want := range map[string]string{
-		"/store/":             "GET /",
-		"/store/app.js":       "GET /app.js",
-		"/store/api/stats":    "GET /api/stats",
-		"/store/api/packs/ab": "GET /api/packs/ab",
+		"/store/":                           "GET /",
+		"/store/app.js":                     "GET /app.js",
+		"/store/api/stats":                  "GET /api/stats",
+		"/store/api/packs/ab":               "GET /api/packs/ab",
+		"/store/api/refs?prefix=%2Fs&limit": "GET /api/refs?prefix=%2Fs&limit",
 	} {
-		if a := ask(t, srv, http.MethodGet, path, ""); a.status != http.StatusOK || a.body != want {
-			t.Errorf("GET %s = %d %q, want what the store's page answers to %q", path, a.status, a.body, want)
+		a := ask(t, srv, http.MethodGet, path, "")
+		if a.status != http.StatusOK || a.body != want || a.header.Get("Content-Type") != "text/plain; charset=utf-8" {
+			t.Errorf("GET %s = %d %q as %q, want what the store's page answers to %q", path, a.status, a.body, a.header.Get("Content-Type"), want)
 		}
-	}
-	// What the page makes of a method is its own business.
-	if a := ask(t, srv, http.MethodPost, "/store/api/stats", ""); a.body != "POST /api/stats" {
-		t.Errorf("POST /store/api/stats = %d %q, want it handed to the store's page", a.status, a.body)
 	}
 	// Without the slash the paths beside the page would be beside /store.
 	a := ask(t, srv, http.MethodGet, "/store", "")
@@ -49,47 +42,89 @@ func TestTheStoresPageIsServedUnderStore(t *testing.T) {
 	}
 }
 
-// The answers of the store's page have the headers every answer has.
+// The page of the store is read-only, and draal is asked for a GET of
+// it and nothing else.
+func TestTheStoresPageIsAskedForWithGET(t *testing.T) {
+	c := &fake{storePage: func(path string) (wire.StorePage, error) {
+		t.Errorf("draal was asked for %s", path)
+		return echo(path)
+	}}
+	srv := serve(t, Config{Client: c})
+	for _, method := range []string{http.MethodPost, http.MethodDelete, http.MethodPut} {
+		a := ask(t, srv, method, "/store/api/stats", "")
+		wantRefusal(t, a, http.StatusMethodNotAllowed, wire.CodeBadRequest)
+	}
+}
+
+// What the store's page answers is passed on with its status and its
+// type, an answer that is no 200 too; one with no type is not left for
+// the browser to guess.
+func TestWhatTheStoresPageAnswersIsPassedOn(t *testing.T) {
+	c := &fake{storePage: func(path string) (wire.StorePage, error) {
+		switch path {
+		case "/api/nothing":
+			return wire.StorePage{Status: http.StatusNotFound, Type: "application/json", Body: []byte(`{"error":"no such resource"}`)}, nil
+		case "/blob":
+			return wire.StorePage{Status: http.StatusOK, Body: []byte("<script>")}, nil
+		case "/empty":
+			return wire.StorePage{Status: http.StatusOK, Type: "text/css; charset=utf-8"}, nil
+		}
+		return wire.StorePage{}, nil // a status that is none
+	}}
+	srv := serve(t, Config{Client: c})
+	a := ask(t, srv, http.MethodGet, "/store/api/nothing", "")
+	if a.status != http.StatusNotFound || a.body != `{"error":"no such resource"}` || a.header.Get("Content-Type") != "application/json" {
+		t.Errorf("an answer of the store's page that is 404 came as %d %q as %q", a.status, a.body, a.header.Get("Content-Type"))
+	}
+	if a = ask(t, srv, http.MethodGet, "/store/blob", ""); a.status != http.StatusOK || a.header.Get("Content-Type") != "application/octet-stream" {
+		t.Errorf("an answer with no type came as %d as %q, want application/octet-stream", a.status, a.header.Get("Content-Type"))
+	}
+	if a = ask(t, srv, http.MethodGet, "/store/empty", ""); a.status != http.StatusOK || a.body != "" {
+		t.Errorf("an answer with no body came as %d %q", a.status, a.body)
+	}
+	// An answer with a status that is none is draal's failure, and not
+	// passed on as it is.
+	a = ask(t, srv, http.MethodGet, "/store/whatever", "")
+	wantRefusal(t, a, http.StatusInternalServerError, wire.CodeInternal)
+}
+
+// The answers of the store's page have the headers every answer has,
+// the policy of this page among them: of the store's page itself the
+// handler has the status, the type and the body alone.
 func TestTheStoresPageHasTheSecurityHeaders(t *testing.T) {
-	srv := serve(t, Config{Store: echo})
+	srv := serve(t, Config{Client: &fake{storePage: echo}})
 	for _, path := range []string{"/store/", "/store/api/stats", "/store"} {
 		a := ask(t, srv, http.MethodGet, path, "")
 		for header, want := range map[string]string{
-			"X-Content-Type-Options": "nosniff",
-			"X-Frame-Options":        "DENY",
-			"Referrer-Policy":        "no-referrer",
+			"Content-Security-Policy": contentSecurityPolicy,
+			"X-Content-Type-Options":  "nosniff",
+			"X-Frame-Options":         "DENY",
+			"Referrer-Policy":         "no-referrer",
 		} {
 			if got := a.header.Values(header); len(got) != 1 || got[0] != want {
 				t.Errorf("GET %s: %s is %q, want %q once", path, header, got, want)
 			}
 		}
-		// The answer is the store's page's, not that of the page of
-		// the fleet, which has these headers too; and it has one
-		// policy, the store's own. The redirect is draal's.
-		got := a.header.Values("Content-Security-Policy")
-		if path == "/store" {
-			if len(got) != 1 {
-				t.Errorf("GET %s: there are %d policies, want one: %q", path, len(got), got)
-			}
-			continue
-		}
-		if !strings.HasPrefix(a.body, "GET /") {
-			t.Errorf("GET %s = %d %q, want the answer of the store's page", path, a.status, a.body)
-		}
-		if len(got) != 1 || got[0] != echoPolicy {
-			t.Errorf("GET %s: the policies are %q, want the store's own, %q, alone", path, got, echoPolicy)
-		}
+	}
+	// What the store holds changes: nothing of its page is kept.
+	if a := ask(t, srv, http.MethodGet, "/store/api/stats", ""); a.header.Get("Cache-Control") != "no-store" {
+		t.Errorf("Cache-Control of the store's page is %q, want no-store", a.header.Get("Cache-Control"))
 	}
 }
 
-// A draal without a store's page has nothing under /store: not the page
-// of the fleet either, which answers every other path.
-func TestWithoutAStoreThereIsNoStoresPage(t *testing.T) {
-	srv := serve(t, Config{})
-	for _, path := range []string{"/store/", "/store", "/store/api/stats"} {
-		a := ask(t, srv, http.MethodGet, path, "")
-		if msg := wantRefusal(t, a, http.StatusNotFound, wire.CodeNotFound); msg == "" {
-			t.Errorf("GET %s: the refusal says nothing", path)
+// What draal refuses of the store's page is the refusal: the page is an
+// admin's, and a draal that cannot be reached answers nothing.
+func TestWhatDraalRefusesOfTheStoresPage(t *testing.T) {
+	for code, status := range map[wire.Code]int{
+		wire.CodeUnauthorized: http.StatusForbidden,
+		wire.CodeUnavailable:  http.StatusServiceUnavailable,
+		wire.CodeNotFound:     http.StatusNotFound,
+	} {
+		refusal := wire.Errorf(code, "draal says %s", code)
+		srv := serve(t, Config{Client: &fake{storePage: func(string) (wire.StorePage, error) { return wire.StorePage{}, refusal }}})
+		a := ask(t, srv, http.MethodGet, "/store/", "")
+		if msg := wantRefusal(t, a, status, code); msg != refusal.Message {
+			t.Errorf("the refusal says %q, want what draal said, %q", msg, refusal.Message)
 		}
 	}
 }

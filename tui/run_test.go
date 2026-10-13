@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +40,10 @@ type fakeOperator struct {
 	watch   func() error                                                                     // what Watch answers; nil for the fleets
 	answer  chan struct{}                                                                    // closed when Watch may answer; nil for at once
 	shell   func(ctx context.Context, zathras wire.ID, req wire.ShellRequest) (Shell, error) // what Shell answers; nil for a refusal
+	me      func() (wire.Identity, error)                                                    // what Me answers; nil for a draal that knows no such request
+	grants  func() ([]wire.Grant, error)                                                     // what Grants answers; nil for a key that is no admin
+	grant   func(req wire.GrantRequest) error                                                // what Grant answers; nil for granted
+	revoke  func(req wire.RevokeRequest) error                                               // what Revoke answers; nil for revoked
 	done    map[string]context.Context                                                       // the contexts of what was asked
 	closed  chan struct{}                                                                    // closed by Close
 	once    sync.Once
@@ -175,6 +180,42 @@ func (f *fakeOperator) Shell(ctx context.Context, zathras wire.ID, req wire.Shel
 		return f.shell(ctx, zathras, req)
 	}
 	return nil, wire.Errorf(wire.CodeUnavailable, "the fake has no shell")
+}
+
+// Me answers as the test has it, and otherwise as a draal of before
+// does, which knows no such request.
+func (f *fakeOperator) Me(ctx context.Context) (wire.Identity, error) {
+	f.note(ctx, "me")
+	if f.me != nil {
+		return f.me()
+	}
+	return wire.Identity{}, wire.Errorf(wire.CodeBadRequest, "draal answers no such request")
+}
+
+// Grants answers with the grants of the test, and otherwise that the
+// key is no admin.
+func (f *fakeOperator) Grants(ctx context.Context) ([]wire.Grant, error) {
+	f.note(ctx, "grants")
+	if f.grants != nil {
+		return f.grants()
+	}
+	return nil, wire.Errorf(wire.CodeUnauthorized, "the key of the fake is no admin")
+}
+
+func (f *fakeOperator) Grant(ctx context.Context, req wire.GrantRequest) error {
+	f.note(ctx, fmt.Sprintf("grant %s %s %q %q", req.Role, req.ID[:min(len(req.ID), 2)], req.Service, req.Note))
+	if f.grant != nil {
+		return f.grant(req)
+	}
+	return nil
+}
+
+func (f *fakeOperator) Revoke(ctx context.Context, req wire.RevokeRequest) error {
+	f.note(ctx, fmt.Sprintf("revoke %s %s %q", req.Role, req.ID[:min(len(req.ID), 2)], req.Service))
+	if f.revoke != nil {
+		return f.revoke(req)
+	}
+	return nil
 }
 
 func (f *fakeOperator) Close() error {
@@ -1263,6 +1304,169 @@ func TestRunConnectionLostAndBack(t *testing.T) {
 	case <-second.closed:
 	case <-time.After(deadline):
 		t.Error("the second connection was not closed")
+	}
+}
+
+// The key is asked who it is, and the header says it. a opens the
+// grants; g grants what is typed into the form, and a refusal of draal
+// is said in the form, which stays as it was filled; x and then y
+// revoke; and after each the list is asked for again.
+func TestRunGrantsAndRevokes(t *testing.T) {
+	op := newFakeOperator()
+	var mu sync.Mutex
+	list := fixtureGrants()
+	op.me = func() (wire.Identity, error) { return meAdmin, nil }
+	op.grants = func() ([]wire.Grant, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(list), nil
+	}
+	op.grant = func(req wire.GrantRequest) error {
+		if req.Service == "nowhere" {
+			return wire.Errorf(wire.CodeBadRequest, "no service is named nowhere")
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		list = append(list, wire.Grant{ID: req.ID, Role: req.Role, Service: req.Service, Note: req.Note, By: meAdmin.ID, At: t0})
+		return nil
+	}
+	op.revoke = func(req wire.RevokeRequest) error {
+		mu.Lock()
+		defer mu.Unlock()
+		list = slices.DeleteFunc(list, func(g wire.Grant) bool { return g.ID == req.ID && g.Role == req.Role && g.Service == req.Service })
+		return nil
+	}
+	listsAsked := func() int {
+		op.mu.Lock()
+		defer op.mu.Unlock()
+		n := 0
+		for _, what := range op.asked {
+			if what == "grants" {
+				n++
+			}
+		}
+		return n
+	}
+	term := startRun(t, oneOperator(op), nil)
+	op.fleets <- fixtureFleet()
+	term.wait("4 services", "eeab12cd admin · draal 3f9a2c1b · ● live", "a access")
+	term.typeKeys("a")
+	term.wait("great-machine › access", "7 grants", "the laptop of a colleague", "g grant")
+	// The admin of the command line is the first, and no key revokes it:
+	// the keys name no x, and x asks nothing.
+	if shown := term.shown(); strings.Contains(shown, "x revoke") {
+		t.Errorf("the keys of an admin of the command line name x:\n%s", shown)
+	}
+	term.typeKeys("x")
+	term.wait("This is an admin of draal's command line: no request revokes it.")
+	term.typeKeys("j")
+	term.wait("x revoke")
+
+	// The form: a deployer unless the role is changed, the ID, the
+	// service and the note; Enter on the note asks draal.
+	term.typeKeys("g")
+	term.wait("Grant a role", "‹ deployer ›")
+	term.typeKeys("\r" + string(idOf(0x77)) + "\rnowhere\rthe build machine\r")
+	term.wait("draal refuses: bad-request: no service is named nowhere", string(idOf(0x77)), "the build machine")
+	if n := listsAsked(); n != 1 {
+		t.Errorf("after a grant that was refused the list was asked for %d times, want once: %v", n, op.asked)
+	}
+	// Back to the service, which is typed anew, and asked again.
+	term.typeKeys("\x1b[Z" + strings.Repeat("\x7f", len("nowhere")) + "api\r\r")
+	term.wait("Granted: deployer of api to 77ab12cd.", "8 grants")
+	if _, ok := op.was(`grant deployer 77 "api" "the build machine"`); !ok {
+		t.Errorf("the grant was not asked for as it was typed: %v", op.asked)
+	}
+
+	// The grant that was granted is the last: n leaves it, y revokes it.
+	term.typeKeys("Gx")
+	term.wait("Revoke deployer of api from 77ab12cd? y revokes it; any other key leaves it.", "y revoke")
+	term.typeKeys("n")
+	term.wait("x revoke")
+	term.typeKeys("xy")
+	term.wait("Revoked: deployer of api from 77ab12cd.", "7 grants")
+	if _, ok := op.was(`revoke deployer 77 "api"`); !ok {
+		t.Errorf("the revocation was not asked for: %v", op.asked)
+	}
+	if n := listsAsked(); n != 3 {
+		t.Errorf("the list was asked for %d times, want 3: when the view was opened, after the grant and after the revocation: %v", n, op.asked)
+	}
+	// Esc leaves the view.
+	term.typeKeys("\x1b")
+	term.wait("4 services", "a access")
+	term.typeKeys("q")
+	if err := term.end(); err != nil {
+		t.Errorf("Run = %v, want nil", err)
+	}
+}
+
+// A draal that does not say who the key is costs the header that part,
+// and a key that is no admin is told whose the view is.
+func TestRunAccessOfAKeyThatIsNoAdmin(t *testing.T) {
+	op := newFakeOperator()
+	term := startRun(t, oneOperator(op), nil)
+	op.fleets <- fixtureFleet()
+	term.wait("4 services", "● live")
+	await(t, "draal to be asked who the key is", func() bool { _, ok := op.was("me"); return ok })
+	if header := strings.Join(strings.Fields(strings.Split(term.shown(), "\n")[0]), " "); header != "great-machine draal 3f9a2c1b · ● live" {
+		t.Errorf("of a draal that does not say who the key is, the header is %q", header)
+	}
+	term.typeKeys("a")
+	term.wait("This view is an admin's.", "great-machine id")
+	term.typeKeys("gx")
+	term.wait("This view is an admin's.", "esc back")
+	if shown := term.shown(); strings.Contains(shown, "Grant a role") || strings.Contains(shown, "Revoke") {
+		t.Errorf("a key that is no admin has a form or a question:\n%s", shown)
+	}
+	term.typeKeys("\x1b")
+	term.wait("4 services", "a access")
+	term.typeKeys("q")
+	if err := term.end(); err != nil {
+		t.Errorf("Run = %v, want nil", err)
+	}
+}
+
+// The connection is lost while the form is open: what was typed stays,
+// and the new connection is asked who the key is and for the grants.
+func TestRunAccessWhileTheConnectionIsLostAndBack(t *testing.T) {
+	first, second := newFakeOperator(), newFakeOperator()
+	first.me = func() (wire.Identity, error) { return meAdmin, nil }
+	first.grants = func() ([]wire.Grant, error) { return fixtureGrants(), nil }
+	second.me = func() (wire.Identity, error) {
+		return wire.Identity{ID: idOf(0xee), Grants: []wire.Grant{{ID: idOf(0xee), Role: wire.RoleDeployer, Service: "web"}, {ID: idOf(0xee), Role: wire.RoleAdmin}}}, nil
+	}
+	second.grants = func() ([]wire.Grant, error) { return fixtureGrants()[:3], nil }
+	var mu sync.Mutex
+	dials := 0
+	term := startRun(t, func(ctx context.Context) (Operator, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		dials++
+		if dials == 1 {
+			return first, nil
+		}
+		return second, nil
+	}, nil)
+	first.fleets <- fixtureFleet()
+	term.wait("eeab12cd admin · draal 3f9a2c1b · ● live")
+	term.typeKeys("a")
+	term.wait("7 grants")
+	term.typeKeys("g\r77ab")
+	term.wait("Grant a role", "77ab_")
+
+	close(first.fleets)
+	second.fleets <- fixtureFleet()
+	await(t, "the new connection to be asked who the key is and for the grants", func() bool {
+		_, me := second.was("me")
+		_, grants := second.was("grants")
+		return me && grants
+	})
+	term.wait("Grant a role", "77ab_", "● live")
+	term.typeKeys("\x1b")
+	term.wait("3 grants", "g grant")
+	term.typeKeys("q")
+	if err := term.end(); err != nil {
+		t.Errorf("Run = %v, want nil", err)
 	}
 }
 

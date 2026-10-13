@@ -1,0 +1,236 @@
+/* View 4: who may do what. The table is the one of service.css. */
+
+.access-h {
+  margin-bottom: var(--ffr-space-3);
+}
+
+/* ---- The form that grants --------------------------------------- */
+
+.grant-form {
+  padding: var(--ffr-space-4) var(--ffr-space-5) var(--ffr-space-5);
+  display: grid;
+  gap: var(--ffr-space-4);
+  max-width: 96ch;
+}
+
+/* The role, as a choice of three: each with what it is. */
+.roles {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--ffr-space-2);
+}
+
+.roles legend {
+  padding: 0;
+  margin-bottom: var(--ffr-space-2);
+}
+
+.role-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px var(--ffr-space-2);
+  align-items: baseline;
+  padding: var(--ffr-space-2) var(--ffr-space-3);
+  border: 1.5px solid var(--border);
+  border-radius: var(--ffr-radius-sm);
+  cursor: pointer;
+}
+
+.role-choice[data-chosen] {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+
+.role-choice input {
+  margin: 0;
+  accent-color: var(--fg);
+}
+
+.role-choice .role-name {
+  font-family: var(--ffr-font-display);
+  font-weight: 700;
+}
+
+.role-choice .muted {
+  grid-column: 2;
+  font-size: 12.5px;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ffr-space-3) var(--ffr-space-4);
+}
+
+.field {
+  display: grid;
+  gap: var(--ffr-space-1);
+  min-width: 0;
+}
+
+.field.wide {
+  grid-column: 1 / -1;
+}
+
+.input {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  border-radius: var(--ffr-radius-sm);
+  padding: 7px 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.input.mono {
+  font-family: var(--ffr-font-mono);
+  font-size: 13px;
+}
+
+.input::placeholder {
+  color: var(--fg-subtle);
+  font-family: var(--ffr-font-body);
+}
+
+.input:hover {
+  border-color: var(--fg-muted);
+}
+
+.input:focus-visible {
+  border-color: var(--focus);
+}
+
+.grant-act {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--ffr-space-2) var(--ffr-space-4);
+}
+
+.grant-act .muted {
+  font-size: 13px;
+}
+
+/* What the form says when draal has granted. */
+.granted {
+  color: var(--ok-text);
+  font-weight: 500;
+}
+
+/* ---- The grants -------------------------------------------------- */
+
+/* A role as a word in a box: an admin's filled, a deployer's drawn, and
+   a role key's, which does nothing by itself, drawn lightly. The
+   colours of state are not a role's. */
+.role {
+  display: inline-block;
+  font-family: var(--ffr-font-display);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding: 3px 9px;
+  border-radius: var(--ffr-radius-sm);
+  border: 1.5px solid var(--fg);
+  color: var(--fg);
+}
+
+.role[data-role="admin"] {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.role[data-role="zathras"] {
+  border-color: var(--border);
+  color: var(--fg-muted);
+}
+
+.grants .tag {
+  color: var(--fg-muted);
+}
+
+/* An admin of the command line is no grant of the table. */
+.grants tr[data-fixed] td {
+  background: var(--surface);
+}
+
+.grants .act {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.grants .act .reason {
+  margin-top: var(--ffr-space-2);
+  text-align: left;
+  white-space: pre-wrap;
+  max-width: 44ch;
+  margin-left: auto;
+}
+
+/* The question before a revocation, in the place of its button. */
+.confirm {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--ffr-space-2);
+  white-space: normal;
+}
+
+.confirm > span {
+  font-weight: 500;
+}
+
+/* The button that takes something away says so by its colour. */
+.button.danger {
+  border-color: var(--bad);
+  color: var(--bad-text);
+}
+
+.button.danger:disabled {
+  border-color: var(--border);
+  color: var(--fg-subtle);
+}
+
+.access-key {
+  margin-top: var(--ffr-space-3);
+  max-width: 96ch;
+  font-size: 13px;
+}
+
+/* What is there for a reader of the screen alone. */
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 860px) {
+  .roles,
+  .fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .grant-form {
+    padding: var(--ffr-space-4);
+  }
+
+  .grants .act,
+  .grants .act .reason {
+    text-align: left;
+    margin-left: 0;
+  }
+
+  .confirm {
+    justify-content: flex-start;
+  }
+}

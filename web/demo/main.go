@@ -7,13 +7,16 @@
 //	go run ./web/demo [--addr 127.0.0.1:8080] [--dist DIR] [--empty]
 //
 // With --empty there is no service at all, as draal has none when it was
-// started for the first time. There is no store either: where a draal
-// serves the page of its store, the demo serves a line that says so.
+// started for the first time. There is no store either: where the page
+// of a draal's store is, the demo serves a line that says so. Who looks
+// at the demo is an admin of made-up grants, which can be granted and
+// revoked and are gone with the demo.
 //
 // Everything it shows is made up but the shell: THE SHELL OF THE PAGE IS A
 // REAL SHELL ON THE MACHINE THAT RUNS THE DEMO, as the user who runs it.
-// The page has no authentication and answers under every host name.
-// Leave the demo on a loopback address.
+// The demo has no ticket, as `great-machine web` has one: it asks nobody
+// who is looking, and answers under every host name. Leave the demo on a
+// loopback address.
 //
 // It is not part of the program, and nothing of great-machine uses it.
 package main
@@ -33,6 +36,7 @@ import (
 
 	"github.com/fables-for-robots/great-machine/demo"
 	"github.com/fables-for-robots/great-machine/web"
+	"github.com/fables-for-robots/great-machine/wire"
 )
 
 func main() {
@@ -50,6 +54,36 @@ func main() {
 		fmt.Fprintln(os.Stderr, "demo:", err)
 		os.Exit(1)
 	}
+}
+
+// client is the made-up fleet as the handler of the page asks for one.
+// The two differ in the type of a shell, which the handler asks for as
+// its own interface, and in the page of the store.
+type client struct{ *demo.Demo }
+
+// A client is a web.Client.
+var _ web.Client = client{}
+
+// Shell starts a shell on this machine. A shell that was refused is no
+// session at all: not one that holds a nil pointer.
+func (c client) Shell(ctx context.Context, zathras wire.ID, req wire.ShellRequest) (web.Shell, error) {
+	sh, err := c.Demo.Shell(ctx, zathras, req)
+	if err != nil {
+		return nil, err
+	}
+	return sh, nil
+}
+
+// StorePage answers every path of the page of the store with a line
+// that says the demo has none: the header of the page has a link to it,
+// which is not to lead to an error.
+func (c client) StorePage(ctx context.Context, path string) (wire.StorePage, error) {
+	return wire.StorePage{
+		Status: http.StatusOK,
+		Type:   "text/plain; charset=utf-8",
+		Body: []byte("great-machine: the demo has a made-up fleet and no store. " +
+			"Here is the page of the store of a draal: what was pushed, and what sharing and compression save.\n"),
+	}, nil
 }
 
 // run serves the demo on addr until ctx is done: the made-up fleet, or
@@ -73,13 +107,7 @@ func run(ctx context.Context, addr, dist string, empty bool, out io.Writer, read
 	moving, stopMoving := context.WithCancel(context.Background())
 	defer stopMoving()
 	go fleet.Run(moving)
-	cfg.Controller = fleet
-	// The header of the page has a link to the page of the store, which
-	// a draal has from jaccard-store, over the database of its store.
-	cfg.Store = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		fmt.Fprintln(w, "great-machine: the demo has a made-up fleet and no store. A draal serves the page of its store here: what was pushed, and what sharing and compression save.")
-	})
+	cfg.Client = client{fleet}
 
 	// The context of every request. A socket lives on when a server is
 	// shut down, and ends when this is cancelled.

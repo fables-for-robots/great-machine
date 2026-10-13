@@ -103,6 +103,7 @@ func TestARegistrationThatIsNotValidIsRefused(t *testing.T) {
 		conn := w.dial(nodetest.ID(100 + i))
 		_, _, err := ask(t, conn, &wire.Request{Register: &wire.Register{
 			Service: "web", Name: tc.zathras, Version: tc.version, State: wire.State{Phase: tc.phase},
+			Statement: statementOf(theRole(), w.cfg.ID, nodetest.ID(100+i)),
 		}})
 		if wire.CodeOf(err) != wire.CodeBadRequest {
 			t.Errorf("register with %s = %v, want a bad-request", tc.name, err)
@@ -118,6 +119,7 @@ func TestARegistrationThatIsNotValidIsRefused(t *testing.T) {
 		conn := w.dial(nodetest.ID(200 + i))
 		_, resp, err := ask(t, conn, &wire.Request{Register: &wire.Register{
 			Service: "web", Name: name, Version: strings.Repeat("~", 64), State: idle(),
+			Statement: statementOf(theRole(), w.cfg.ID, nodetest.ID(200+i)),
 		}})
 		if err != nil || resp.Registered == nil {
 			t.Errorf("register as %.20q = %+v, %v; want it registered", name, resp, err)

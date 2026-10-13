@@ -218,6 +218,7 @@ func (f *fake) connect() {
 	f.mu.Unlock()
 	reg, resp, err := ask(f.t, conn, &wire.Request{Register: &wire.Register{
 		Service: f.service, Name: f.name, Version: "test", State: st,
+		Statement: statementOf(theRole(), f.w.cfg.ID, f.id),
 	}})
 	if err != nil || resp.Registered == nil {
 		f.t.Fatalf("register %s: %+v, %v", f.name, resp, err)
@@ -563,10 +564,9 @@ func TestAPeerThatIsNoOperatorIsRefused(t *testing.T) {
 	if list, err := w.d.Rollouts(context.Background(), "web"); err != nil || len(list) != 0 {
 		t.Errorf("a refused rollout was recorded: %v, %v", list, err)
 	}
-	// It may register all the same.
-	_, resp, err := ask(t, stranger, &wire.Request{Register: &wire.Register{Service: "web", Name: "me", State: idle()}})
-	if err != nil || resp.Registered == nil {
-		t.Errorf("register as a stranger = %+v, %v", resp, err)
+	// And it may not register: nothing is open.
+	if _, _, err := ask(t, stranger, &wire.Request{Register: &wire.Register{Service: "web", Name: "me", State: idle()}}); wire.CodeOf(err) != wire.CodeUnauthorized {
+		t.Errorf("register as a stranger = %v, want unauthorized", err)
 	}
 }
 
@@ -610,7 +610,7 @@ func TestProtocolStore(t *testing.T) {
 	}
 	// It is authorized for the service it names.
 	_, _, err = ask(t, w.dial(strangerID), &wire.Request{Store: &wire.StoreRequest{Service: "web"}})
-	if wire.CodeOf(err) != wire.CodeUnauthorized || !strings.Contains(err.Error(), "on service web") {
+	if wire.CodeOf(err) != wire.CodeUnauthorized || !strings.Contains(err.Error(), "is no deployer of web") {
 		t.Errorf("store of web as a stranger = %v, want unauthorized, naming the service", err)
 	}
 }

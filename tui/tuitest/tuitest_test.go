@@ -36,6 +36,22 @@ func (emptyDraal) Shell(context.Context, wire.ID, wire.ShellRequest) (tui.Shell,
 	return nil, wire.Errorf(wire.CodeUnavailable, "there is no zathras")
 }
 
+func (emptyDraal) Me(context.Context) (wire.Identity, error) {
+	return wire.Identity{}, wire.Errorf(wire.CodeBadRequest, "draal answers no such request")
+}
+
+func (emptyDraal) Grants(context.Context) ([]wire.Grant, error) {
+	return nil, wire.Errorf(wire.CodeUnauthorized, "nobody is an admin of this draal")
+}
+
+func (emptyDraal) Grant(context.Context, wire.GrantRequest) error {
+	return wire.Errorf(wire.CodeUnauthorized, "nobody is an admin of this draal")
+}
+
+func (emptyDraal) Revoke(context.Context, wire.RevokeRequest) error {
+	return wire.Errorf(wire.CodeUnauthorized, "nobody is an admin of this draal")
+}
+
 func (emptyDraal) Close() error { return nil }
 
 // A terminal UI runs in a Terminal: what it draws is the screen, keys

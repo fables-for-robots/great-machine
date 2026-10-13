@@ -45,7 +45,7 @@ func (h *handler) writeJSON(w http.ResponseWriter, status int, v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		h.log.Error("encoding an answer", "error", err)
-		status, data = http.StatusInternalServerError, []byte(`{"error":{"code":"internal","message":"draal could not encode its answer"}}`)
+		status, data = http.StatusInternalServerError, []byte(`{"error":{"code":"internal","message":"the answer could not be encoded"}}`)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
@@ -53,14 +53,15 @@ func (h *handler) writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Write(append(data, '\n'))
 }
 
-// refusalOf makes of an error of the controller what the browser is told.
-// A refusal is passed on as it is when its code is one that has an HTTP
-// status of its own (statusOf). An internal one, one with a code draal
-// does not know, and every other error is logged, and the page is told
-// that draal failed and no more: draal makes such errors of what its
-// database said, a zathras can answer one with any text, and neither is
-// the business of a page. A code draal does not know can only have come
-// from a zathras.
+// refusalOf makes of an error of the client what the browser is told. A
+// refusal of draal is passed on as it is when its code is one that has
+// an HTTP status of its own (statusOf). An internal one, one with a code
+// draal does not know, and every other error is logged, and the page is
+// told that the request failed and no more: draal makes such errors of
+// what its database said, a zathras can answer one with any text, and
+// neither is the business of a page. A code draal does not know can only
+// have come from a zathras. The log is the one of the command that
+// serves the page.
 func (h *handler) refusalOf(r *http.Request, err error) *wire.Error {
 	var e *wire.Error
 	if errors.As(err, &e) && statusOf(e.Code) != http.StatusInternalServerError {
@@ -72,7 +73,7 @@ func (h *handler) refusalOf(r *http.Request, err error) *wire.Error {
 	} else {
 		h.log.Error("a request failed", "path", r.URL.Path, "error", err)
 	}
-	return wire.Errorf(wire.CodeInternal, "draal failed to answer; its log says why")
+	return wire.Errorf(wire.CodeInternal, "the request failed; what `great-machine web` logged says why")
 }
 
 // refuse answers with err as a refusal.
@@ -125,7 +126,7 @@ func (h *handler) rollouts(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, err)
 		return
 	}
-	list, err := h.cfg.Controller.Rollouts(r.Context(), service)
+	list, err := h.cfg.Client.Rollouts(r.Context(), service)
 	if err != nil {
 		h.refuse(w, r, err)
 		return
@@ -143,7 +144,7 @@ func (h *handler) history(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, err)
 		return
 	}
-	samples, err := h.cfg.Controller.History(r.Context(), id)
+	samples, err := h.cfg.Client.History(r.Context(), id)
 	if err != nil {
 		h.refuse(w, r, err)
 		return

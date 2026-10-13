@@ -15,7 +15,6 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/fables-for-robots/great-machine/draal"
 	"github.com/fables-for-robots/great-machine/wire"
 )
 
@@ -31,33 +30,60 @@ const (
 	zathrasB = wire.ID("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 )
 
-// fake is a draal.Controller that answers with what a test put into its
-// fields. A field that is nil answers unavailable. Store, Rollout and
-// Rollback panic: the API calls them nowhere.
+// fake is a Client that answers with what a test put into its fields. A
+// field that is nil answers unavailable.
 type fake struct {
-	rollouts func(service string) ([]wire.RolloutInfo, error)
-	history  func(zathras wire.ID) ([]wire.Sample, error)
-	watch    func(ctx context.Context) (<-chan wire.Fleet, error)
-	logs     func(ctx context.Context, zathras wire.ID, follow bool) (<-chan wire.LogLine, error)
-	shell    func(ctx context.Context, zathras wire.ID, req wire.ShellRequest) (draal.Shell, error)
+	rollouts  func(service string) ([]wire.RolloutInfo, error)
+	history   func(zathras wire.ID) ([]wire.Sample, error)
+	watch     func(ctx context.Context) (<-chan wire.Fleet, error)
+	logs      func(ctx context.Context, zathras wire.ID, follow bool) (<-chan wire.LogLine, error)
+	shell     func(ctx context.Context, zathras wire.ID, req wire.ShellRequest) (Shell, error)
+	me        func() (wire.Identity, error)
+	grants    func() ([]wire.Grant, error)
+	grant     func(req wire.GrantRequest) error
+	revoke    func(req wire.RevokeRequest) error
+	storePage func(path string) (wire.StorePage, error)
 }
 
-// A fake is a Controller.
-var _ draal.Controller = (*fake)(nil)
+// A fake is a Client.
+var _ Client = (*fake)(nil)
 
 // unset is what a fake answers when the test gave it nothing to answer.
 var unset = wire.Errorf(wire.CodeUnavailable, "the fake has no answer")
 
-func (f *fake) Store(ctx context.Context, service string) (wire.StoreInfo, error) {
-	panic("the API asked for the store")
+func (f *fake) Me(ctx context.Context) (wire.Identity, error) {
+	if f.me == nil {
+		return wire.Identity{}, unset
+	}
+	return f.me()
 }
 
-func (f *fake) Rollout(ctx context.Context, by wire.ID, req wire.RolloutRequest) (wire.RolloutInfo, error) {
-	panic("the API rolled out")
+func (f *fake) Grants(ctx context.Context) ([]wire.Grant, error) {
+	if f.grants == nil {
+		return nil, unset
+	}
+	return f.grants()
 }
 
-func (f *fake) Rollback(ctx context.Context, by wire.ID, req wire.RollbackRequest) (wire.RolloutInfo, error) {
-	panic("the API rolled back")
+func (f *fake) Grant(ctx context.Context, req wire.GrantRequest) error {
+	if f.grant == nil {
+		return unset
+	}
+	return f.grant(req)
+}
+
+func (f *fake) Revoke(ctx context.Context, req wire.RevokeRequest) error {
+	if f.revoke == nil {
+		return unset
+	}
+	return f.revoke(req)
+}
+
+func (f *fake) StorePage(ctx context.Context, path string) (wire.StorePage, error) {
+	if f.storePage == nil {
+		return wire.StorePage{}, unset
+	}
+	return f.storePage(path)
 }
 
 func (f *fake) Watch(ctx context.Context) (<-chan wire.Fleet, error) {
@@ -88,15 +114,11 @@ func (f *fake) Logs(ctx context.Context, zathras wire.ID, follow bool) (<-chan w
 	return f.logs(ctx, zathras, follow)
 }
 
-func (f *fake) Shell(ctx context.Context, zathras wire.ID, req wire.ShellRequest) (draal.Shell, error) {
+func (f *fake) Shell(ctx context.Context, zathras wire.ID, req wire.ShellRequest) (Shell, error) {
 	if f.shell == nil {
 		return nil, unset
 	}
 	return f.shell(ctx, zathras, req)
-}
-
-func (f *fake) ServiceOf(zathras wire.ID) (string, bool) {
-	return "web", true
 }
 
 // testDist is a build of the page, as small as one can be.
@@ -129,8 +151,8 @@ func serveUnder(t *testing.T, base context.Context, cfg Config) *httptest.Server
 	if cfg.Log == nil {
 		cfg.Log = quiet
 	}
-	if cfg.Controller == nil {
-		cfg.Controller = &fake{}
+	if cfg.Client == nil {
+		cfg.Client = &fake{}
 	}
 	return serveHandler(t, base, New(cfg))
 }

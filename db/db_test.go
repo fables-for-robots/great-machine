@@ -39,10 +39,10 @@ func TestOpenCreatesTheFile(t *testing.T) {
 	if err := d.writer.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 1 {
-		t.Errorf("user_version = %d, want 1: one migration", version)
+	if version != 2 {
+		t.Errorf("user_version = %d, want 2: two migrations", version)
 	}
-	for _, table := range []string{"services", "generations", "rollouts"} {
+	for _, table := range []string{"services", "generations", "rollouts", "grants"} {
 		var n int
 		if err := d.readers.QueryRowContext(ctx, "SELECT count(*) FROM "+table).Scan(&n); err != nil {
 			t.Errorf("table %s: %v", table, err)

@@ -18,8 +18,16 @@ import (
 // Config is what a Draal is made of. The zero value of a duration stands
 // for the value of the spec.
 type Config struct {
-	DB    *db.DB
-	Authz authz.Authorizer
+	DB *db.DB
+	// Authz decides who may do what, by the grants. draal tells it who
+	// is registered as a zathras, and puts the grants of the database in
+	// the place of those it has whenever one was granted or revoked. nil:
+	// nobody may do anything.
+	Authz *authz.Authority
+	// Store is the store that is answered beside draal, under its
+	// endpoint ID. draal asks it for its page and has it end the
+	// connections of a key whose grant was revoked. nil: there is none.
+	Store StoreServer
 	// ID is the endpoint ID of draal. It is that of the store as well,
 	// which draal answers on the same endpoint: what the store request
 	// of an operator is answered with.
@@ -97,7 +105,19 @@ func (cfg Config) withDefaults() Config {
 	if cfg.Log == nil {
 		cfg.Log = slog.Default()
 	}
+	if cfg.Authz == nil {
+		cfg.Authz = authz.New(authz.Config{}, nil)
+	}
 	return cfg
+}
+
+// StoreServer is what draal asks of the store that is answered under its
+// endpoint ID: *storeserver.Store.
+type StoreServer interface {
+	// Drop ends every connection the peer has to the store.
+	Drop(peer wire.ID)
+	// Page returns what the page of the store answers a GET of path with.
+	Page(path string) wire.StorePage
 }
 
 // Shell is a shell session as an operator has it.
@@ -116,8 +136,8 @@ type Shell interface {
 	Close() error
 }
 
-// Controller is what an operator can do. The handler of the protocol and,
-// in stage 2, the HTTP API are written against it.
+// Controller is what an operator can do. The handler of the protocol is
+// written against it, and the made-up fleet of the demos is one.
 type Controller interface {
 	// Store returns where the closures of a service are pushed to:
 	// draal's own endpoint ID, on which it answers jaccard-store's
@@ -151,7 +171,12 @@ type Draal struct {
 	log   *slog.Logger
 	fleet *fleet.Registry
 
+	// access is held while a grant is put or removed: the database is
+	// written and the authority given its grants as one step.
+	access sync.Mutex
+
 	mu       sync.Mutex
+	conns    map[node.Conn]struct{}     // the connections that are served
 	sessions map[wire.ID]*session       // the zathrases that are connected
 	left     []leave                    // who left since the reconciler last looked, in order
 	tallies  map[string]tally           // by service: the counts of the last decision
@@ -165,6 +190,7 @@ type session struct {
 	service string
 	name    string
 	conn    node.Conn
+	by      wire.ID // the role key that signed for the zathras
 }
 
 // leave is a zathras that left the fleet: its last report, and when draal
@@ -186,14 +212,19 @@ type tally struct {
 // are connected, and rollouts carried out, while Serve runs.
 func New(cfg Config) *Draal {
 	cfg = cfg.withDefaults()
-	return &Draal{
+	d := &Draal{
 		cfg:      cfg,
 		log:      cfg.Log,
 		fleet:    fleet.New(cfg.History),
+		conns:    map[node.Conn]struct{}{},
 		sessions: map[wire.ID]*session{},
 		tallies:  map[string]tally{},
 		subs:     map[chan struct{}]struct{}{},
 	}
+	// Who is registered is the fleet's to say: a zathras pulls the store
+	// paths of the service it is registered for.
+	d.cfg.Authz.SetRegistered(d.ServiceOf)
+	return d
 }
 
 // subscribe returns a channel with room for one value that gets one

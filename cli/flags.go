@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -80,7 +81,11 @@ func parallel(c *cli.Context) (int, error) {
 // at the first argument, so a flag behind it would be taken for one: that
 // is refused here, with what to do about it.
 func arguments(c *cli.Context, min int, names ...string) ([]string, error) {
-	args := c.Args().Slice()
+	return argumentsOf(c, c.Args().Slice(), min, names...)
+}
+
+// argumentsOf is arguments for what behind left of them.
+func argumentsOf(c *cli.Context, args []string, min int, names ...string) ([]string, error) {
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "-") && arg != "-" {
 			return nil, usageError("%s: the flag %s has to come before %s", c.Command.Name, arg, names[0])
@@ -90,9 +95,51 @@ func arguments(c *cli.Context, min int, names ...string) ([]string, error) {
 		return nil, usageError("%s: unexpected argument %q", c.Command.Name, args[len(names)])
 	}
 	if len(args) < min {
-		return nil, usageError("%s: %s is missing; usage: great-machine %s %s", c.Command.Name, names[len(args)], c.Command.Name, c.Command.ArgsUsage)
+		return nil, usageError("%s: %s is missing; usage: %s %s", c.Command.Name, names[len(args)], commandPath(c), c.Command.ArgsUsage)
 	}
 	return args, nil
+}
+
+// behind takes the flags named out of the arguments of a command, with
+// their values: the library stops reading flags at the first argument,
+// and a grant is written with its service behind its role and its ID. It
+// returns the arguments that are left and the value of every flag that
+// was there, the last of them when one was there twice. Any other flag
+// stays among the arguments, where argumentsOf refuses it.
+func behind(c *cli.Context, flags ...string) ([]string, map[string]string, error) {
+	var args []string
+	values := make(map[string]string)
+	all := c.Args().Slice()
+	for i := 0; i < len(all); i++ {
+		name, value, has := strings.Cut(strings.TrimLeft(all[i], "-"), "=")
+		if !strings.HasPrefix(all[i], "-") || !slices.Contains(flags, name) {
+			args = append(args, all[i])
+			continue
+		}
+		if !has {
+			if i+1 == len(all) {
+				return nil, nil, usageError("%s: the flag --%s takes a value", c.Command.Name, name)
+			}
+			i++
+			value = all[i]
+		}
+		values[name] = value
+	}
+	return args, values, nil
+}
+
+// commandPath returns the command of c as it is typed, with the name of
+// the program before it: "great-machine access grant" for the grant of
+// access.
+func commandPath(c *cli.Context) string {
+	var names []string
+	for _, ctx := range c.Lineage() {
+		if ctx.Command != nil && ctx.Command.Name != "" {
+			names = append(names, ctx.Command.Name)
+		}
+	}
+	slices.Reverse(names)
+	return strings.Join(names, " ")
 }
 
 // noArguments refuses any argument, for a command that takes none.

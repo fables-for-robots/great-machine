@@ -61,6 +61,7 @@ type Demo struct {
 	todo     []task
 	dirty    bool                       // the fleet has changed since the watchers were told
 	subs     map[chan struct{}]struct{} // who is told that the fleet changed
+	grants   []wire.Grant               // who may do what, made up: access.go
 }
 
 // A Demo is a Controller.
@@ -142,6 +143,7 @@ func newDemo(start time.Time, empty bool) *Demo {
 	if !empty {
 		d.seed()
 	}
+	d.seedGrants()
 	return d
 }
 
